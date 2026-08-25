@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>CF Platform · Flow 工作台</title>
+    <style>
+      :root {
+        --ink: #17201c; --ink-soft: #223027; --ink-line: #3a4a3f;
+        --paper: #f3efe3; --paper-deep: #e8e3d5; --surface: #fbfaf5; --white: #fff;
+        --text: #202822; --muted: #667067; --faint: #8c938b;
+        --border: #d5d0c3; --border-strong: #bdb7a8;
+        --orange: #ce6f32; --orange-deep: #a44e20; --green: #2f7254;
+        --green-soft: #dcebe2; --red: #a74636; --red-soft: #f1ded9;
+        --amber: #a06a22; --amber-soft: #f2e7cc; --blue: #315f78;
+        --ease: cubic-bezier(.16,1,.3,1); --left: 252px; --right: 336px;
+        font-family: Aptos, "Noto Sans CJK SC", "Source Han Sans SC", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        color: var(--text); background: var(--paper);
+      }
+      * { box-sizing: border-box; }
+      html, body { width: 100%; min-width: 320px; height: 100%; margin: 0; overflow: hidden; }
+      body { font-size: 14px; line-height: 1.5; }
+      button, input, select, textarea { font: inherit; }
+      button { color: inherit; -webkit-tap-highlight-color: transparent; }
+      ::selection { color: #fff; background: var(--orange-deep); }
+      :focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
+      ::-webkit-scrollbar { width: 10px; height: 10px; }
+      ::-webkit-scrollbar-thumb { background: #b8b3a7; border: 3px solid transparent; border-radius: 8px; background-clip: padding-box; }
+      ::-webkit-scrollbar-track { background: transparent; }
+      .icon { width: 18px; height: 18px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+      .app { display: grid; grid-template-columns: var(--left) minmax(520px,1fr) var(--right); width: 100%; height: 100%; }
+
+      .flow-sidebar { position: relative; z-index: 4; display: flex; min-width: 0; flex-direction: column; color: #f4f0e5; background: var(--ink); border-right: 1px solid #0e1511; }
+      .brand-row { display: flex; height: 64px; align-items: center; gap: 11px; padding: 0 18px; border-bottom: 1px solid var(--ink-line); }
+      .brand-mark { position: relative; display: grid; width: 30px; height: 30px; place-items: center; color: var(--ink); background: #e6ddc6; border-radius: 50%; font-size: 11px; font-weight: 850; letter-spacing: -.02em; }
+      .brand-mark::after { position: absolute; right: -4px; bottom: 3px; width: 8px; height: 8px; content: ""; background: var(--orange); border: 2px solid var(--ink); border-radius: 50%; }
+      .brand-copy { min-width: 0; }
+      .brand-copy strong, .brand-copy span { display: block; }
+      .brand-copy strong { font-size: 14px; letter-spacing: -.01em; }
+      .brand-copy span { color: #aeb9b0; font-size: 11px; }
+      .icon-button, .sidebar-icon-button { display: inline-grid; width: 34px; height: 34px; padding: 0; place-items: center; color: inherit; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+      .icon-button:hover { background: rgba(28,36,30,.07); }
+      .sidebar-icon-button { margin-left: auto; color: #bfc8c0; }
+      .sidebar-icon-button:hover { color: #fff; background: rgba(255,255,255,.08); }
+      .sidebar-actions { display: grid; gap: 10px; padding: 16px 14px 12px; }
+      .new-flow { display: flex; width: 100%; height: 38px; align-items: center; justify-content: center; gap: 8px; color: #fff9ee; background: var(--orange); border: 1px solid #e48d53; border-radius: 8px; font-weight: 720; cursor: pointer; transition: background 160ms ease, transform 240ms var(--ease); }
+      .new-flow:hover { background: #da7b3d; transform: translateY(-1px); }
+      .sidebar-search { position: relative; }
+      .sidebar-search .icon { position: absolute; top: 9px; left: 10px; width: 16px; color: #849187; pointer-events: none; }
+      .sidebar-search input { width: 100%; height: 34px; padding: 0 10px 0 34px; color: #ecf0eb; background: #111914; border: 1px solid #35443a; border-radius: 7px; }
+      .sidebar-search input::placeholder { color: #8f9a92; }
+      .flow-list { min-height: 0; flex: 1; padding: 2px 10px 18px; overflow-y: auto; }
+      .flow-group-label { display: flex; align-items: center; justify-content: space-between; margin: 14px 8px 6px; color: #89968c; font-size: 11px; font-weight: 760; letter-spacing: .08em; text-transform: uppercase; }
+      .flow-count { font-variant-numeric: tabular-nums; }
+      .flow-item { position: relative; display: grid; width: 100%; grid-template-columns: 12px minmax(0,1fr); gap: 10px; padding: 10px 9px; color: #d8ded8; text-align: left; background: transparent; border: 0; border-radius: 8px; cursor: pointer; }
+      .flow-item:hover { background: rgba(255,255,255,.055); }
+      .flow-item[aria-current="page"] { color: #fff; background: #2a382e; }
+      .flow-item[aria-current="page"]::before { position: absolute; top: 10px; bottom: 10px; left: -10px; width: 3px; content: ""; background: var(--orange); border-radius: 0 3px 3px 0; }
+      .route-lamp { width: 8px; height: 8px; margin-top: 5px; background: #78827a; border: 1px solid rgba(255,255,255,.42); border-radius: 50%; box-shadow: inset 0 1px 1px rgba(255,255,255,.55),0 2px 4px rgba(0,0,0,.3); }
+      .route-lamp.draft { background: #bd7a3c; } .route-lamp.published { background: #61a27d; }
+      .flow-name { display: block; overflow: hidden; font-size: 13px; font-weight: 680; text-overflow: ellipsis; white-space: nowrap; }
+      .flow-meta { display: flex; min-width: 0; align-items: center; gap: 5px; margin-top: 3px; color: #9aa69c; font-size: 11px; }
+      .flow-meta span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .sidebar-footer { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 8px; padding: 12px 14px; color: #aab5ac; border-top: 1px solid var(--ink-line); }
+      .workspace-health { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+      .workspace-health::before { width: 7px; height: 7px; flex: 0 0 auto; content: ""; background: #68a883; border-radius: 50%; }
+
+      .workspace { position: relative; display: flex; min-width: 0; flex-direction: column; background: var(--paper); }
+      .workspace-header { display: grid; height: 64px; flex: 0 0 auto; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 16px; padding: 0 18px 0 20px; background: rgba(243,239,227,.96); border-bottom: 1px solid var(--border-strong); }
+      .mobile-menu { display: none; }
+      .workspace-title { display: flex; min-width: 0; align-items: center; gap: 12px; }
+      .workspace-title-copy { min-width: 0; }
+      .breadcrumb { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+      .breadcrumb .route-code { color: var(--orange-deep); font-weight: 800; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+      .workspace-title h1 { max-width: min(42vw,620px); margin: 1px 0 0; overflow: hidden; font-size: 17px; font-weight: 760; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
+      .draft-state { display: inline-flex; height: 24px; align-items: center; gap: 6px; padding: 0 8px; color: #735227; background: var(--amber-soft); border: 1px solid #ddc996; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+      .draft-state::before { width: 6px; height: 6px; content: ""; background: var(--amber); border-radius: 50%; }
+      .draft-state.passed { color: #285f46; background: var(--green-soft); border-color: #b6d2c1; }
+      .draft-state.passed::before { background: var(--green); }
+      .workspace-actions { display: flex; align-items: center; gap: 8px; }
+      .segmented { display: inline-flex; height: 34px; padding: 3px; background: #ded9cc; border-radius: 8px; }
+      .segmented button { min-width: 58px; padding: 0 10px; color: var(--muted); background: transparent; border: 0; border-radius: 6px; font-size: 12px; font-weight: 680; cursor: pointer; }
+      .segmented button[aria-selected="true"] { color: var(--text); background: var(--surface); box-shadow: 0 2px 5px rgba(38,44,38,.1); }
+      .button { display: inline-flex; height: 34px; align-items: center; justify-content: center; gap: 7px; padding: 0 12px; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 7px; font-size: 12px; font-weight: 720; cursor: pointer; transition: border-color 140ms ease, background 140ms ease, transform 220ms var(--ease); }
+      .button:hover:not(:disabled) { background: #fff; border-color: #a9a292; transform: translateY(-1px); }
+      .button.primary { color: #fff; background: var(--green); border-color: #255d44; }
+      .button.primary:hover:not(:disabled) { background: #367f5e; }
+      .button.signal { color: #fff; background: var(--orange); border-color: var(--orange-deep); }
+      .button.signal:hover:not(:disabled) { background: #d9793c; }
+      .button.danger { color: var(--red); border-color: #d8b6ae; }
+      .button:disabled { cursor: not-allowed; opacity: .46; }
+      .button[aria-busy="true"] .icon { animation: spin 900ms linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .stage-strip { display: grid; height: 38px; flex: 0 0 auto; grid-template-columns: repeat(4,minmax(0,1fr)); align-items: stretch; background: #e5e0d3; border-bottom: 1px solid var(--border); }
+      .stage { position: relative; display: flex; align-items: center; justify-content: center; gap: 7px; color: #7a8078; font-size: 11px; font-weight: 720; }
+      .stage:not(:last-child)::after { position: absolute; top: 10px; right: 0; width: 1px; height: 18px; content: ""; background: #cbc5b7; }
+      .stage-index { display: grid; width: 18px; height: 18px; place-items: center; background: #d3cec1; border-radius: 50%; font-size: 10px; font-variant-numeric: tabular-nums; }
+      .stage.active { color: var(--text); background: rgba(255,255,255,.42); }
+      .stage.active .stage-index { color: #fff; background: var(--orange); }
+      .stage.complete .stage-index { color: #fff; background: var(--green); }
+      .operation-notice { display: grid; flex: 0 0 auto; grid-template-columns: 8px minmax(0,1fr) auto; align-items: center; gap: 10px; padding: 9px 14px; color: #60451e; background: var(--amber-soft); border-bottom: 1px solid #ddc996; }
+      .operation-notice[hidden] { display: none; }
+      .operation-notice::before { width: 8px; height: 8px; content: ""; background: var(--amber); border-radius: 50%; }
+      .operation-notice.error { color: #783428; background: var(--red-soft); border-color: #dab5ad; }
+      .operation-notice.error::before { background: var(--red); }
+      .operation-notice.success { color: #285f46; background: var(--green-soft); border-color: #b6d2c1; }
+      .operation-notice.success::before { background: var(--green); }
+      .operation-notice-copy { min-width: 0; font-size: 11px; }
+      .operation-notice-copy strong { margin-right: 6px; }
+      .operation-notice .icon-button { width: 28px; height: 28px; }
+      .workspace-body { position: relative; min-height: 0; flex: 1; overflow: hidden; }
+
+      .conversation-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: linear-gradient(90deg,transparent calc(50% - .5px),rgba(85,96,85,.08) 50%,transparent calc(50% + .5px)),var(--paper); }
+      .conversation-view[hidden], .canvas-view[hidden], .settings-view[hidden], .library-tray[hidden], .inspector-panel[hidden] { display: none; }
+      .conversation-scroll { min-height: 0; flex: 1; padding: 34px max(24px,calc((100% - 760px)/2)) 20px; overflow-y: auto; }
+      .conversation-intro { max-width: 680px; margin: 4vh auto 32px; text-align: center; animation: reveal 560ms var(--ease) both; }
+      @keyframes reveal { from { opacity: 0; filter: blur(5px); transform: translateY(8px); } to { opacity: 1; filter: blur(0); transform: translateY(0); } }
+      .signal-emblem { position: relative; width: 66px; height: 66px; margin: 0 auto 20px; background: var(--ink); border: 1px solid #0c110e; border-radius: 14px; box-shadow: 0 9px 22px rgba(35,40,34,.17); }
+      .signal-emblem::before, .signal-emblem::after { position: absolute; content: ""; }
+      .signal-emblem::before { top: 31px; right: 10px; left: 10px; height: 2px; background: #d8d0bb; }
+      .signal-emblem::after { top: 24px; right: 14px; width: 14px; height: 14px; background: var(--orange); border: 3px solid var(--ink); border-radius: 50%; box-shadow: -28px 0 0 -3px #7b9080; }
+      .conversation-intro h2 { max-width: 620px; margin: 0 auto 10px; font-size: clamp(24px,3vw,34px); line-height: 1.18; letter-spacing: -.035em; }
+      .conversation-intro p { max-width: 62ch; margin: 0 auto; color: var(--muted); font-size: 14px; }
+      .starter-grid { display: grid; max-width: 680px; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; margin: 24px auto 0; }
+      .starter { min-height: 66px; padding: 12px 14px; color: var(--text); text-align: left; background: rgba(251,250,245,.72); border: 1px solid var(--border); border-radius: 10px; cursor: pointer; }
+      .starter:hover { background: var(--surface); border-color: var(--border-strong); }
+      .starter strong, .starter span { display: block; }
+      .starter strong { margin-bottom: 3px; font-size: 12px; }
+      .starter span { color: var(--muted); font-size: 11px; }
+      .messages { display: grid; max-width: 760px; gap: 18px; margin: 0 auto; }
+      .message { display: grid; grid-template-columns: 30px minmax(0,1fr); gap: 12px; }
+      .message-avatar { display: grid; width: 30px; height: 30px; place-items: center; color: #f4f0e5; background: var(--ink); border-radius: 7px; font-size: 10px; font-weight: 800; }
+      .message.user .message-avatar { color: #fff; background: var(--orange); }
+      .message-content { padding-top: 4px; }
+      .message-label { margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 760; }
+      .message-content p { max-width: 70ch; margin: 0; white-space: pre-wrap; }
+      .proposal-summary { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+      .proposal-summary span { padding: 3px 8px; color: #354239; background: #e4e0d4; border: 1px solid #cec8bb; border-radius: 11px; font-size: 10px; }
+      .composer-wrap { flex: 0 0 auto; padding: 16px max(18px,calc((100% - 790px)/2)) 20px; background: linear-gradient(to top,var(--paper) 72%,rgba(243,239,227,0)); }
+      .composer { background: var(--white); border: 1px solid var(--border-strong); border-radius: 12px; box-shadow: 0 9px 26px rgba(53,58,49,.11); }
+      .composer textarea { display: block; width: 100%; min-height: 72px; max-height: 160px; padding: 14px 16px 6px; resize: none; color: var(--text); background: transparent; border: 0; outline: 0; }
+      .composer textarea::placeholder { color: #747e76; }
+      .composer-footer { display: flex; align-items: center; gap: 8px; padding: 7px 8px 8px 12px; }
+      .runtime-select { position: relative; display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+      .runtime-select::before { width: 7px; height: 7px; content: ""; background: var(--green); border-radius: 50%; }
+      .runtime-select select { padding: 3px 22px 3px 2px; color: var(--text); background: transparent; border: 0; font-size: 12px; font-weight: 700; cursor: pointer; }
+      .runtime-note { color: var(--faint); font-size: 10px; }
+      .composer-spacer { flex: 1; }
+      .send-button { display: inline-grid; width: 34px; height: 34px; padding: 0; place-items: center; color: #fff; background: var(--orange); border: 1px solid var(--orange-deep); border-radius: 8px; cursor: pointer; }
+      .send-button:disabled { cursor: not-allowed; opacity: .45; }
+
+      .canvas-view { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--paper); }
+      .canvas-toolbar { display: flex; min-height: 46px; flex: 0 0 auto; align-items: center; gap: 7px; padding: 6px 12px; overflow-x: auto; background: #eeeadd; border-bottom: 1px solid var(--border); }
+      .canvas-toolbar .button { height: 32px; flex: 0 0 auto; white-space: nowrap; }
+      .toolbar-divider { width: 1px; height: 22px; margin: 0 3px; background: var(--border); }
+      .zoom-label { min-width: 42px; color: var(--muted); text-align: center; font-size: 11px; font-variant-numeric: tabular-nums; }
+      .toolbar-spacer { flex: 1; }
+      .canvas-note { color: var(--muted); font-size: 11px; }
+      .library-tray { display: flex; min-height: 0; flex: 0 0 auto; gap: 8px; padding: 9px 12px; overflow-x: auto; background: #e4dfd2; border-bottom: 1px solid var(--border-strong); }
+      .library-item { display: grid; min-width: 170px; grid-template-columns: 28px minmax(0,1fr); gap: 9px; padding: 9px 10px; text-align: left; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 8px; cursor: grab; }
+      .library-item:active { cursor: grabbing; }
+      .library-icon { display: grid; width: 28px; height: 28px; place-items: center; color: #fff; background: var(--blue); border-radius: 6px; font-size: 9px; font-weight: 850; }
+      .library-item strong, .library-item span { display: block; }
+      .library-item strong { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .library-item span { margin-top: 1px; color: var(--muted); font-size: 10px; }
+      .flow-canvas-wrap { position: relative; min-height: 0; flex: 1; overflow: auto; background-color: var(--paper); background-image: linear-gradient(rgba(71,79,70,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(71,79,70,.055) 1px,transparent 1px); background-size: 28px 28px; }
+      .flow-canvas-wrap.drag-over { background-color: #ede7d6; }
+      .flow-canvas { position: relative; width: 1200px; height: 680px; transform-origin: 0 0; }
+      .route-map { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+      .route-edge-under { fill: none; stroke: #f8f5eb; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
+      .route-edge { fill: none; stroke: #69756c; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .route-edge.active { stroke: var(--orange); stroke-dasharray: 9 7; animation: routeMove 600ms linear infinite; }
+      .route-edge.passed { stroke: var(--green); }
+      @keyframes routeMove { to { stroke-dashoffset: -16; } }
+      .entry-marker { position: absolute; left: 54px; top: 287px; display: grid; width: 54px; height: 54px; place-items: center; color: #eee8d9; background: var(--ink); border: 4px solid #d7d0bf; border-radius: 50%; box-shadow: 0 5px 16px rgba(33,38,33,.17); font-size: 9px; font-weight: 800; letter-spacing: .04em; }
+      .flow-node { position: absolute; display: grid; width: 184px; min-height: 112px; grid-template-rows: auto 1fr auto; padding: 0; color: var(--text); text-align: left; background: var(--white); border: 1px solid #bcb5a5; border-radius: 11px; box-shadow: 0 5px 14px rgba(46,52,45,.11); cursor: grab; user-select: none; transition: box-shadow 160ms ease,border-color 160ms ease; }
+      .flow-node:active { cursor: grabbing; }
+      .flow-node:hover { border-color: #938b7b; box-shadow: 0 7px 18px rgba(46,52,45,.15); }
+      .flow-node.selected { border-color: var(--orange); box-shadow: 0 7px 18px rgba(46,52,45,.15),0 0 0 2px rgba(206,111,50,.2); }
+      .flow-node.running { border-color: var(--orange); } .flow-node.passed { border-color: var(--green); } .flow-node.failed { border-color: var(--red); }
+      .node-head { display: flex; align-items: center; gap: 8px; padding: 9px 10px 7px; color: var(--muted); border-bottom: 1px solid #e3dfd5; font-size: calc(11px * var(--inverse-zoom, 1)); font-weight: 760; text-transform: uppercase; }
+      .node-kind { display: grid; width: 22px; height: 22px; place-items: center; color: #fff; background: var(--blue); border-radius: 5px; font-size: calc(8.5px * var(--inverse-zoom, 1)); letter-spacing: 0; }
+      .node-kind.output { background: var(--ink-soft); } .node-kind.approval { background: var(--amber); }
+      .node-order { margin-left: auto; color: var(--faint); font-size: calc(9px * var(--inverse-zoom, 1)); font-variant-numeric: tabular-nums; }
+      .node-body { min-width: 0; padding: 10px 11px 8px; }
+      .node-title { display: -webkit-box; overflow: hidden; font-size: calc(15px * var(--inverse-zoom, 1)); font-weight: 750; letter-spacing: -.01em; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+      .node-subtitle { display: block; margin-top: 4px; overflow: hidden; color: var(--muted); font-size: calc(11px * var(--inverse-zoom, 1)); text-overflow: ellipsis; white-space: nowrap; }
+      .node-foot { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--muted); background: #f1eee5; border-radius: 0 0 10px 10px; font-size: calc(11px * var(--inverse-zoom, 1)); }
+      .node-status-lamp { width: 8px; height: 8px; background: #959b95; border: 1px solid rgba(255,255,255,.72); border-radius: 50%; box-shadow: inset 0 1px 1px rgba(255,255,255,.65),0 2px 4px rgba(30,40,32,.24); }
+      .flow-node.running .node-status-lamp { background: var(--orange); } .flow-node.passed .node-status-lamp { background: var(--green); } .flow-node.failed .node-status-lamp { background: var(--red); }
+      .flow-node.blocked { border-color: var(--amber); }
+      .flow-node.blocked .node-status-lamp { background: var(--amber); }
+      .port { position: absolute; top: 50%; width: 12px; height: 12px; margin-top: -6px; background: #f7f4ea; border: 3px solid #6c786f; border-radius: 50%; }
+      .port.in { left: -7px; } .port.out { right: -7px; }
+      .canvas-empty { position: absolute; top: 50%; left: 50%; width: min(420px,calc(100% - 40px)); padding: 24px; text-align: center; transform: translate(-50%,-50%); }
+      .canvas-empty h3 { margin: 0 0 6px; font-size: 18px; } .canvas-empty p { margin: 0 0 15px; color: var(--muted); }
+
+      .inspector { position: relative; z-index: 5; display: flex; min-width: 0; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border-strong); }
+      .inspector-header { display: flex; height: 64px; flex: 0 0 auto; align-items: center; gap: 10px; padding: 0 15px 0 18px; border-bottom: 1px solid var(--border); }
+      .inspector-header-copy { min-width: 0; flex: 1; }
+      .inspector-header h2 { margin: 0; overflow: hidden; font-size: 14px; font-weight: 760; text-overflow: ellipsis; white-space: nowrap; }
+      .inspector-header p { margin: 1px 0 0; color: var(--muted); font-size: 10px; }
+      .close-inspector { display: none; }
+      .inspector-tabs { display: grid; height: 40px; flex: 0 0 auto; grid-template-columns: repeat(3,1fr); border-bottom: 1px solid var(--border); }
+      .inspector-tab { position: relative; padding: 0; color: var(--muted); background: transparent; border: 0; font-size: 11px; font-weight: 720; cursor: pointer; }
+      .inspector-tab[aria-selected="true"] { color: var(--text); }
+      .inspector-tab[aria-selected="true"]::after { position: absolute; right: 16px; bottom: -1px; left: 16px; height: 2px; content: ""; background: var(--orange); }
+      .inspector-body { min-height: 0; flex: 1; overflow-y: auto; }
+      .inspector-panel { padding: 18px; }
+      .inspector-section { padding: 0 0 20px; }
+      .inspector-section + .inspector-section { padding-top: 18px; border-top: 1px solid var(--border); }
+      .section-title { display: flex; align-items: center; justify-content: space-between; margin: 0 0 12px; font-size: 11px; font-weight: 800; letter-spacing: .02em; }
+      .field { display: grid; gap: 5px; margin-top: 12px; } .field:first-child { margin-top: 0; }
+      .field label { color: #59635b; font-size: 11px; font-weight: 720; }
+      .field input, .field select, .field textarea { width: 100%; color: var(--text); background: #fff; border: 1px solid var(--border); border-radius: 7px; }
+      .field input, .field select { height: 34px; padding: 0 10px; }
+      .field textarea { min-height: 82px; padding: 8px 10px; resize: vertical; line-height: 1.45; }
+      .field input:focus, .field select:focus, .field textarea:focus { border-color: var(--orange); outline: 0; box-shadow: 0 0 0 2px rgba(206,111,50,.14); }
+      .field-help { color: var(--faint); font-size: 10px; }
+      .inline-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .property-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; color: var(--muted); border-bottom: 1px solid #e8e4da; font-size: 11px; }
+      .property-row strong, .property-row code { color: var(--text); font-size: 11px; font-weight: 720; text-align: right; }
+      code, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+      .inspector-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+      .version-list, .activity-list { display: grid; gap: 0; }
+      .version-item, .activity-item { position: relative; display: grid; gap: 2px; padding: 12px 0 12px 20px; border-bottom: 1px solid #e5e1d7; }
+      .version-item::before, .activity-item::before { position: absolute; top: 17px; left: 2px; width: 7px; height: 7px; content: ""; background: #99a099; border-radius: 50%; }
+      .version-item.current::before, .activity-item.success::before { background: var(--green); }
+      .activity-item.running::before { background: var(--orange); } .activity-item.error::before { background: var(--red); } .activity-item.warning::before { background: var(--amber); }
+      .version-item strong, .activity-item strong { font-size: 12px; }
+      .version-item span, .activity-item span { color: var(--muted); font-size: 10px; }
+      .activity-button { width: 100%; color: inherit; text-align: left; background: transparent; border: 0; cursor: pointer; }
+      .activity-button:hover { background: rgba(255,255,255,.45); }
+      .activity-button[aria-expanded="true"] { background: #ece8dc; }
+      .run-ledger { margin-top: 12px; padding: 12px; background: #ece8dc; border: 1px solid var(--border); border-radius: 8px; }
+      .run-ledger-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+      .run-ledger-head strong, .run-ledger-head span { display: block; }
+      .run-ledger-head strong { font-size: 11px; }
+      .run-ledger-head span { margin-top: 2px; color: var(--muted); font-size: 10px; overflow-wrap: anywhere; }
+      .ledger-events { display: grid; gap: 0; margin-top: 10px; }
+      .ledger-event { display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 8px; padding: 8px 0; border-top: 1px solid #d9d3c6; }
+      .ledger-event > span { color: var(--muted); font-family: "SFMono-Regular",Consolas,monospace; font-size: 9px; }
+      .ledger-event strong, .ledger-event small, .ledger-event code { display: block; min-width: 0; }
+      .ledger-event strong { font-size: 10px; }
+      .ledger-event small { color: var(--muted); font-size: 9px; }
+      .ledger-event code { margin-top: 3px; overflow-wrap: anywhere; color: #4d574f; font-size: 9px; white-space: pre-wrap; }
+      .issue-list { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+      .issue-list li { position: relative; padding-left: 15px; color: var(--muted); font-size: 10px; }
+      .issue-list li::before { position: absolute; top: 5px; left: 0; width: 7px; height: 7px; content: ""; background: var(--red); border-radius: 50%; }
+      .empty-list { padding: 26px 12px; color: var(--muted); text-align: center; font-size: 11px; }
+      .test-gate { padding: 12px; background: #ece8dc; border: 1px solid #d2ccbd; border-radius: 8px; }
+      .test-gate-head { display: flex; align-items: center; gap: 9px; }
+      .test-lamp { width: 12px; height: 12px; flex: 0 0 auto; background: #949b94; border: 1px solid rgba(255,255,255,.8); border-radius: 50%; box-shadow: inset 0 1px 1px rgba(255,255,255,.65),0 2px 5px rgba(35,45,37,.28); }
+      .test-gate.running .test-lamp { background: var(--orange); } .test-gate.passed .test-lamp { background: var(--green); } .test-gate.failed .test-lamp { background: var(--red); }
+      .test-gate strong { display: block; font-size: 11px; } .test-gate p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+      .settings-view { position: absolute; inset: 0; display: flex; min-width: 0; flex-direction: column; background: var(--paper); }
+      .settings-heading { display: flex; min-height: 58px; flex: 0 0 auto; align-items: center; gap: 12px; padding: 10px 18px; background: #eeeadd; border-bottom: 1px solid var(--border-strong); }
+      .settings-heading-copy { min-width: 0; flex: 1; }
+      .settings-heading h2 { margin: 0; font-size: 15px; letter-spacing: -.01em; }
+      .settings-heading p { margin: 2px 0 0; color: var(--muted); font-size: 11px; }
+      .settings-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 252px minmax(0,1fr); }
+      .settings-register { min-height: 0; padding: 16px 12px; overflow-y: auto; background: var(--paper-deep); border-right: 1px solid var(--border-strong); }
+      .settings-register-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 4px 10px; }
+      .settings-register-head strong { font-size: 12px; }
+      .runtime-list { display: grid; gap: 5px; }
+      .runtime-row { display: grid; width: 100%; grid-template-columns: 10px minmax(0,1fr) auto; align-items: center; gap: 9px; padding: 10px; color: var(--text); text-align: left; background: transparent; border: 1px solid transparent; border-radius: 8px; cursor: pointer; }
+      .runtime-row:hover { background: rgba(255,255,255,.48); }
+      .runtime-row[aria-current="true"] { background: var(--surface); border-color: var(--border-strong); }
+      .runtime-lamp { width: 8px; height: 8px; background: var(--faint); border: 1px solid rgba(255,255,255,.8); border-radius: 50%; box-shadow: inset 0 1px 1px rgba(255,255,255,.65),0 2px 4px rgba(35,45,37,.18); }
+      .runtime-lamp.available { background: var(--green); } .runtime-lamp.unavailable { background: var(--red); } .runtime-lamp.disabled { background: var(--amber); }
+      .runtime-row strong, .runtime-row span { display: block; min-width: 0; }
+      .runtime-row strong { overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+      .runtime-row span { margin-top: 2px; color: var(--muted); font-size: 10px; }
+      .runtime-row code { color: var(--muted); font-size: 10px; }
+      .settings-content { min-width: 0; overflow-y: auto; }
+      .settings-content-inner { width: min(760px,100%); padding: 22px 24px 40px; }
+      .settings-section { padding: 0 0 26px; }
+      .settings-section + .settings-section { padding-top: 24px; border-top: 1px solid var(--border); }
+      .settings-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+      .settings-section-head h3 { margin: 0; font-size: 14px; }
+      .settings-section-head p { max-width: 62ch; margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+      .settings-form { display: grid; gap: 13px; }
+      .settings-form-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; }
+      .settings-form .field textarea { min-height: 92px; font-family: "SFMono-Regular",Consolas,"Liberation Mono",monospace; font-size: 11px; }
+      .check-field { display: flex; min-height: 34px; align-items: center; gap: 8px; color: var(--text); font-size: 12px; }
+      .check-field input { width: 16px; height: 16px; accent-color: var(--green); }
+      .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+      .runtime-evidence { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+      .runtime-evidence div { min-width: 0; padding: 10px 12px; }
+      .runtime-evidence div + div { border-left: 1px solid var(--border); }
+      .runtime-evidence span, .runtime-evidence strong { display: block; }
+      .runtime-evidence span { color: var(--muted); font-size: 10px; }
+      .runtime-evidence strong { margin-top: 3px; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+      .runtime-select.unavailable::before { background: var(--red); } .runtime-select.disabled::before { background: var(--amber); }
+      .resource-profile-toolbar { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; margin-bottom: 14px; }
+      .resource-profile-toolbar select { width: 100%; height: 34px; padding: 0 9px; color: var(--text); background: var(--white); border: 1px solid var(--border-strong); border-radius: 7px; }
+      .binding-editor { display: grid; gap: 7px; }
+      .binding-editor-row { display: grid; grid-template-columns: minmax(110px,.8fr) minmax(150px,1.4fr) minmax(100px,.8fr) 34px; gap: 7px; align-items: center; }
+      .binding-editor-row input { width: 100%; height: 34px; min-width: 0; padding: 0 9px; color: var(--text); background: var(--white); border: 1px solid var(--border); border-radius: 7px; }
+      .binding-editor-row select { width: 100%; height: 34px; min-width: 0; padding: 0 7px; color: var(--text); background: var(--white); border: 1px solid var(--border); border-radius: 7px; }
+      .flow-binding-row { display: grid; grid-template-columns: minmax(0,1fr) 18px minmax(0,1fr) 34px; gap: 6px; align-items: center; margin-bottom: 7px; }
+      .flow-binding-row select, .edge-editor-row select, .edge-editor-row input { width: 100%; min-width: 0; height: 34px; padding: 0 7px; color: var(--text); background: var(--white); border: 1px solid var(--border); border-radius: 7px; font-size: 11px; }
+      .binding-arrow { color: var(--muted); text-align: center; }
+      .advanced-editor { margin-top: 16px; border-top: 1px solid var(--border); }
+      .advanced-editor summary { padding: 14px 0 8px; color: var(--text); font-size: 11px; font-weight: 800; cursor: pointer; }
+      .edge-editor-row { display: grid; grid-template-columns: minmax(0,.8fr) 18px minmax(0,.8fr) minmax(0,.9fr) minmax(0,.7fr) 34px; gap: 6px; align-items: center; margin-bottom: 7px; }
+      .edge-case-input[hidden] { display: none; }
+      .resource-requirement-row { display: grid; grid-template-columns: minmax(90px,1fr) minmax(90px,1fr) 78px 70px 34px; gap: 6px; align-items: center; margin-bottom: 7px; }
+      .resource-requirement-row input, .resource-requirement-row select { width: 100%; min-width: 0; height: 34px; padding: 0 7px; color: var(--text); background: var(--white); border: 1px solid var(--border); border-radius: 7px; font-size: 11px; }
+      .flow-item-wrap { display: grid; grid-template-columns: minmax(0,1fr) 34px; align-items: center; }
+      .flow-item-wrap .flow-item { min-width: 0; }
+      .flow-item-delete { width: 30px; height: 30px; color: #c9a79f; }
+      .flow-item-delete:hover { color: #fff; background: rgba(167,70,54,.28); }
+      .binding-empty { padding: 18px; color: var(--muted); text-align: center; background: #ece8dc; border: 1px dashed var(--border-strong); border-radius: 8px; font-size: 11px; }
+      .toast-region { position: fixed; z-index: 20; right: 18px; bottom: 18px; display: grid; width: min(360px,calc(100vw - 36px)); gap: 8px; pointer-events: none; }
+      .toast { display: grid; grid-template-columns: 8px minmax(0,1fr); gap: 10px; padding: 12px 13px; color: #f5f2e9; background: var(--ink); border: 1px solid #344239; border-radius: 9px; box-shadow: 0 10px 28px rgba(22,28,23,.24); animation: toastIn 300ms var(--ease) both; }
+      .toast::before { width: 8px; height: 8px; margin-top: 5px; content: ""; background: #91a096; border-radius: 50%; }
+      .toast.success::before { background: #68a883; } .toast.error::before { background: #d36a55; } .toast.warning::before { background: #d89a4f; }
+      .toast strong, .toast span { display: block; } .toast strong { font-size: 11px; } .toast span { margin-top: 2px; color: #bac4bc; font-size: 10px; }
+      @keyframes toastIn { from { opacity: 0; transform: translateY(10px); } }
+      .mobile-scrim { display: none; }
+      .operation-dialog { width: min(520px,calc(100vw - 32px)); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--border-strong); border-radius: 10px; box-shadow: 0 18px 54px rgba(22,28,23,.24); }
+      .operation-dialog::backdrop { background: rgba(17,25,20,.42); }
+      .operation-dialog header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 20px 14px; border-bottom: 1px solid var(--border); }
+      .operation-dialog h2 { margin: 0; font-size: 16px; letter-spacing: -.02em; }
+      .operation-dialog header p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+      .operation-dialog-body { max-height: min(55vh,460px); padding: 16px 20px; overflow-y: auto; }
+      .operation-summary { display: grid; gap: 8px; }
+      .operation-summary-row { display: grid; grid-template-columns: 104px minmax(0,1fr); gap: 12px; padding: 8px 0; border-bottom: 1px solid #e5e1d7; }
+      .operation-summary-row span { color: var(--muted); font-size: 11px; }
+      .operation-summary-row strong { min-width: 0; overflow-wrap: anywhere; font-size: 11px; font-weight: 720; }
+      .operation-dialog footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 18px; }
+
+      @media (max-width: 1180px) {
+        :root { --left: 224px; --right: 310px; }
+        .workspace-actions .button span { display: none; }
+        .workspace-actions .button { width: 34px; padding: 0; }
+      }
+      @media (max-width: 980px) {
+        .app { grid-template-columns: 224px minmax(0,1fr); }
+        .inspector { position: fixed; top: 0; right: 0; bottom: 0; width: min(360px,calc(100vw - 48px)); transform: translateX(105%); box-shadow: -12px 0 32px rgba(35,40,34,.12); transition: transform 300ms var(--ease); }
+        .inspector.open { transform: translateX(0); } .close-inspector { display: inline-grid; }
+        .mobile-scrim { position: fixed; z-index: 3; inset: 0; display: block; visibility: hidden; background: rgba(17,25,20,.34); opacity: 0; transition: opacity 220ms ease,visibility 220ms; }
+        .mobile-scrim.show { visibility: visible; opacity: 1; }
+      }
+      @media (max-width: 720px) {
+        .app { display: block; }
+        .flow-sidebar { position: fixed; z-index: 8; top: 0; bottom: 0; left: 0; width: min(288px,calc(100vw - 48px)); transform: translateX(-105%); box-shadow: 12px 0 32px rgba(20,27,21,.22); transition: transform 300ms var(--ease); }
+        .flow-sidebar.open { transform: translateX(0); }
+        .workspace { width: 100%; height: 100%; }
+        .workspace-header { height: 58px; padding: 0 10px; } .mobile-menu { display: inline-grid; }
+        .workspace-title { gap: 6px; } .breadcrumb, .draft-state, .workspace-actions .segmented { display: none; }
+        .workspace-title h1 { max-width: 42vw; font-size: 14px; } .workspace-actions { gap: 5px; }
+        .stage { font-size: 0; } .stage-index { font-size: 9px; }
+        .conversation-scroll { padding: 22px 16px 12px; } .conversation-intro { margin-top: 1vh; }
+        .conversation-intro h2 { font-size: 24px; } .starter-grid { grid-template-columns: 1fr; }
+        .composer-wrap { padding: 10px 10px 12px; } .runtime-note, .canvas-note { display: none; }
+        .settings-layout { display: block; overflow-y: auto; }
+        .settings-register { overflow: visible; border-right: 0; border-bottom: 1px solid var(--border-strong); }
+        .runtime-list { grid-template-columns: repeat(2,minmax(0,1fr)); }
+        .settings-content { overflow: visible; }
+        .settings-content-inner { padding: 18px 14px 32px; }
+        .settings-form-grid, .runtime-evidence { grid-template-columns: 1fr; }
+        .settings-view button, .settings-view select, .settings-view input:not([type="checkbox"]) { min-height: 44px; }
+        .settings-view input, .settings-view select, .settings-view textarea { font-size: 16px; }
+        .settings-view .icon-button { width: 44px; height: 44px; }
+        .binding-editor-row { grid-template-columns: 1fr 34px; }
+        .binding-editor-row input { grid-column: 1; }
+        .binding-editor-row .icon-button { grid-column: 2; grid-row: 1 / span 3; }
+        .resource-requirement-row { grid-template-columns: 1fr 1fr 44px; }
+        .resource-requirement-row [data-resource-key="id"], .resource-requirement-row [data-resource-key="type"] { grid-column: auto; }
+        .resource-requirement-row [data-resource-key="access"], .resource-requirement-row [data-resource-key="required"] { grid-column: auto; }
+        .flow-binding-row { grid-template-columns: minmax(0,1fr) 18px 44px; }
+        .flow-binding-row select { grid-column: 1; }
+        .flow-binding-row .binding-arrow { grid-column: 2; grid-row: 1 / span 2; }
+        .flow-binding-row .icon-button { grid-column: 3; grid-row: 1 / span 2; }
+        .edge-editor-row { grid-template-columns: minmax(0,1fr) 18px 44px; }
+        .edge-editor-row select, .edge-editor-row input { grid-column: 1; }
+        .edge-editor-row .binding-arrow { grid-column: 2; grid-row: 1 / span 4; }
+        .edge-editor-row .icon-button { grid-column: 3; grid-row: 1 / span 4; }
+        .runtime-evidence div + div { border-top: 1px solid var(--border); border-left: 0; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      THESIS: Flow 是一条必须审阅、测试、放行和留档的运行线路，拒绝普通聊天页或通用节点后台。
+      OWN-WORLD: 深墨绿路签栏、矿物纸画布、搪瓷状态灯、精密线路与白色检修抽屉。
+      STORY: 用户描述目标，审阅 agent 提案，人工编排，测试清线，最后发布不可变版本。
+      FIRST VIEWPORT: 左侧 Flow 路签，中间对话或宽幅线路画布，右侧详情检修栏；目标输入与测试/发布是主要动作。
+      FORM: 联锁信号台，七个 grounded 方向中的第 3 个；direction seed d9607fcf。
+      FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance
+    -->
+    <svg class="sr-only" aria-hidden="true">
+      <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" /></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4 4" /></symbol>
+      <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M19 13.5v-3l-2.1-.7-.5-1.2 1-2-2.1-2.1-2 1-1.2-.5-.7-2.1h-3L7.8 5l-1.2.5-2-1-2.1 2.1 1 2-.5 1.2-2.1.7v3l2.1.7.5 1.2-1 2 2.1 2.1 2-1 1.2.5.7 2.1h3l.7-2.1 1.2-.5 2 1 2.1-2.1-1-2 .5-1.2 2.1-.7Z" /></symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" /></symbol>
+      <symbol id="i-play" viewBox="0 0 24 24"><path d="m9 6 9 6-9 6Z" /></symbol>
+      <symbol id="i-publish" viewBox="0 0 24 24"><path d="M12 16V4m0 0L7 9m5-5 5 5M5 14v5h14v-5" /></symbol>
+      <symbol id="i-send" viewBox="0 0 24 24"><path d="m4 5 16 7-16 7 3-7-3-7Z" /><path d="M7 12h13" /></symbol>
+      <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5" /></symbol>
+      <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14" /></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" /></symbol>
+      <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" /></symbol>
+      <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5" /><path d="M18.5 9A7 7 0 0 0 6 6.5L4 9m16 6-2 2.5A7 7 0 0 1 5.5 15" /></symbol>
+      <symbol id="i-inspector" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16M7 8h4M7 12h4" /></symbol>
+    </svg>
+
+    <div class="app">
+      <aside class="flow-sidebar" id="flowSidebar" aria-label="Flow 导航">
+        <div class="brand-row">
+          <div class="brand-mark" aria-hidden="true">CF</div>
+          <div class="brand-copy"><strong>CF Platform</strong><span>Flow Control Desk</span></div>
+          <button class="sidebar-icon-button" id="settingsButton" type="button" aria-label="工作台设置"><svg class="icon"><use href="#i-settings"></use></svg></button>
+        </div>
+        <div class="sidebar-actions">
+          <button class="new-flow" id="newFlowButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>新建 Flow</span></button>
+          <label class="sidebar-search"><span class="sr-only">搜索 Flow</span><svg class="icon"><use href="#i-search"></use></svg><input id="flowSearch" type="search" placeholder="搜索 Flow" autocomplete="off" /></label>
+        </div>
+        <nav class="flow-list" id="flowList" aria-label="Flow 列表"></nav>
+        <footer class="sidebar-footer">
+          <div class="workspace-health"><span>本地服务已连接</span></div>
+          <button class="sidebar-icon-button" id="refreshButton" type="button" aria-label="刷新工作台"><svg class="icon"><use href="#i-refresh"></use></svg></button>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <header class="workspace-header">
+          <div class="workspace-title">
+            <button class="icon-button mobile-menu" id="mobileMenuButton" type="button" aria-label="打开 Flow 导航"><svg class="icon"><use href="#i-menu"></use></svg></button>
+            <div class="workspace-title-copy">
+              <div class="breadcrumb"><span>Flows</span><span>/</span><span class="route-code" id="routeCode">NEW</span></div>
+              <h1 id="flowTitle">未命名 Flow</h1>
+            </div>
+            <span class="draft-state" id="draftState">等待目标</span>
+          </div>
+          <div class="workspace-actions">
+            <div class="segmented" role="tablist" aria-label="工作区视图">
+              <button id="chatTab" type="button" role="tab" aria-selected="true" aria-controls="conversationView">对话</button>
+              <button id="canvasTab" type="button" role="tab" aria-selected="false" aria-controls="canvasView" tabindex="-1">编排</button>
+            </div>
+            <button class="button" id="runButton" type="button" disabled><svg class="icon"><use href="#i-play"></use></svg><span>运行版本</span></button>
+            <button class="button" id="testButton" type="button" disabled><svg class="icon"><use href="#i-play"></use></svg><span>测试 Flow</span></button>
+            <button class="button primary" id="publishButton" type="button" disabled><svg class="icon"><use href="#i-publish"></use></svg><span>发布版本</span></button>
+            <button class="icon-button" id="inspectorButton" type="button" aria-label="打开功能面板"><svg class="icon"><use href="#i-inspector"></use></svg></button>
+          </div>
+        </header>
+        <div class="stage-strip" id="stageStrip" aria-label="Flow 生命周期">
+          <div class="stage active" data-stage="goal"><span class="stage-index">1</span><span>定义目标</span></div>
+          <div class="stage" data-stage="compose"><span class="stage-index">2</span><span>人工编排</span></div>
+          <div class="stage" data-stage="test"><span class="stage-index">3</span><span>测试放行</span></div>
+          <div class="stage" data-stage="publish"><span class="stage-index">4</span><span>发布版本</span></div>
+        </div>
+        <div class="operation-notice" id="operationNotice" role="status" aria-live="polite" hidden><div class="operation-notice-copy"><strong id="operationNoticeTitle"></strong><span id="operationNoticeDetail"></span></div><button class="icon-button" id="operationNoticeClose" type="button" aria-label="关闭状态提示"><svg class="icon"><use href="#i-close"></use></svg></button></div>
+        <div class="workspace-body">
+          <section class="conversation-view" id="conversationView" role="tabpanel" aria-labelledby="chatTab" aria-label="Agent 对话">
+            <div class="conversation-scroll" id="conversationScroll">
+              <div class="conversation-intro" id="conversationIntro">
+                <div class="signal-emblem" aria-hidden="true"></div>
+                <h2>描述目标，让 agent 设计一条可运行的 Flow</h2>
+                <p>先选择底层 agent，再说清楚结果、输入与约束。系统只会生成可审阅的 CF 节点和 Flow 草案，不会自动执行或发布。</p>
+                <div class="starter-grid">
+                  <button class="starter" type="button" data-prompt="读取客户邮件与 CRM 记录，识别本周风险并生成一份客户周报"><strong>客户周报</strong><span>读取邮件、归纳风险、生成报告</span></button>
+                  <button class="starter" type="button" data-prompt="审核代码变更，运行测试，整理风险并在合并前请求人工批准"><strong>代码变更审核</strong><span>分析变更、执行测试、人工门禁</span></button>
+                  <button class="starter" type="button" data-prompt="收集产品反馈，聚类问题，生成优先级建议并输出到报告"><strong>反馈洞察</strong><span>收集、聚类、排序、输出</span></button>
+                  <button class="starter" type="button" data-prompt="读取合同文本，识别关键风险条款并生成结构化审阅意见"><strong>合同审阅</strong><span>提取条款、识别风险、形成意见</span></button>
+                </div>
+              </div>
+              <div class="messages" id="messages" aria-live="polite"></div>
+            </div>
+            <div class="composer-wrap">
+              <form class="composer" id="composer">
+                <label class="sr-only" for="goalInput">Flow 初始目标</label>
+                <textarea id="goalInput" rows="2" placeholder="描述你希望这条 Flow 完成的目标…"></textarea>
+                <div class="composer-footer">
+                  <label class="runtime-select" id="runtimeSelectWrap"><span class="sr-only">底层 Agent Runtime</span><select id="runtimeSelect"><option value="echo">Local Echo</option></select></label>
+                  <span class="runtime-note" id="runtimeNote">正在读取 Runtime 状态…</span><span class="composer-spacer"></span>
+                  <button class="send-button" id="sendButton" type="submit" aria-label="发送目标"><svg class="icon"><use href="#i-send"></use></svg></button>
+                </div>
+              </form>
+            </div>
+          </section>
+          <section class="canvas-view" id="canvasView" role="tabpanel" aria-labelledby="canvasTab" aria-label="Flow 编排画布" hidden>
+            <div class="canvas-toolbar">
+              <button class="button" id="toggleLibraryButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>添加 CF</span></button>
+              <button class="button" id="addApprovalButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>人工门禁</span></button>
+              <button class="button" id="addBranchButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>条件分支</span></button>
+              <button class="button" id="addJoinButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>汇合</span></button>
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <button class="icon-button" id="zoomOutButton" type="button" aria-label="缩小画布"><svg class="icon"><use href="#i-minus"></use></svg></button>
+              <span class="zoom-label" id="zoomLabel">100%</span>
+              <button class="icon-button" id="zoomInButton" type="button" aria-label="放大画布"><svg class="icon"><use href="#i-plus"></use></svg></button>
+              <button class="icon-button" id="fitButton" type="button" aria-label="适配画布"><svg class="icon"><use href="#i-fit"></use></svg></button>
+              <span class="toolbar-spacer"></span><span class="canvas-note" id="canvasNote">拖动节点调整位置；横向顺序会重建执行线路</span>
+            </div>
+            <div class="library-tray" id="libraryTray" hidden aria-label="CF Library"></div>
+            <div class="flow-canvas-wrap" id="canvasWrap">
+              <div class="flow-canvas" id="flowCanvas">
+                <svg class="route-map" id="routeMap" aria-hidden="true"></svg>
+                <div class="entry-marker" id="entryMarker">ENTRY</div>
+                <div id="nodesLayer"></div>
+                <div class="canvas-empty" id="canvasEmpty" hidden><h3>线路上还没有节点</h3><p>返回对话生成草案，或从 CF Library 拖入第一个能力节点。</p><button class="button signal" id="emptyAddButton" type="button">打开 CF Library</button></div>
+              </div>
+            </div>
+          </section>
+          <section class="settings-view" id="settingsView" aria-label="工作台设置" hidden>
+            <header class="settings-heading">
+              <button class="icon-button" id="closeSettingsButton" type="button" aria-label="返回 Flow 工作台"><svg class="icon"><use href="#i-close"></use></svg></button>
+              <div class="settings-heading-copy"><h2>Runtime 与工作区设置</h2><p>配置 Agent 执行后端、边界和本地工作目录。每次保存 Runtime 都会生成不可变 Profile 版本。</p></div>
+            </header>
+            <div class="settings-layout">
+              <nav class="settings-register" aria-label="Runtime Profiles">
+                <div class="settings-register-head"><strong>Runtime Registry</strong><button class="icon-button" id="addRuntimeButton" type="button" aria-label="添加自定义 Runtime"><svg class="icon"><use href="#i-plus"></use></svg></button></div>
+                <div class="runtime-list" id="runtimeList"></div>
+              </nav>
+              <div class="settings-content">
+                <div class="settings-content-inner">
+                  <section class="settings-section">
+                    <div class="settings-section-head"><div><h3>工作区默认值</h3><p>这些设置保存在本地服务端，浏览器刷新或更换设备后仍然有效。</p></div></div>
+                    <form class="settings-form" id="workspaceSettingsForm">
+                      <div class="settings-form-grid">
+                        <div class="field"><label for="defaultRuntimeInput">默认 Runtime</label><select id="defaultRuntimeInput"></select></div>
+                        <div class="field"><label for="testTimeoutInput">测试超时（毫秒）</label><input id="testTimeoutInput" type="number" min="1000" max="3600000" step="1000" /></div>
+                      </div>
+                      <div class="field"><label for="workspaceRootInput">本地工作目录</label><input id="workspaceRootInput" type="text" autocomplete="off" /><span class="field-help">必须是服务端可访问的绝对目录；Process Runtime 只在此目录内启动。</span></div>
+                      <div class="field"><label for="defaultResourceInput">默认 Resource Profile</label><select id="defaultResourceInput"><option value="">不自动绑定</option></select><span class="field-help">测试和运行有资源要求的 Flow 时使用；仍会按每条 requirement 校验类型与访问范围。</span></div>
+                      <label class="check-field"><input id="autoSaveDraftsInput" type="checkbox" />自动把 Flow 草稿保存到本地服务端</label>
+                      <div class="settings-actions"><button class="button signal" id="saveWorkspaceSettingsButton" type="submit">保存工作区设置</button></div>
+                    </form>
+                  </section>
+                  <section class="settings-section">
+                    <div class="settings-section-head"><div><h3>Resource Profiles</h3><p>把 Flow 的资源 requirement 映射到本机仓库、目录、邮箱或其他受控资源。Profile 不拥有 Flow。</p></div></div>
+                    <div class="resource-profile-toolbar"><select id="resourceProfileSelect" aria-label="选择 Resource Profile"><option value="">还没有 Resource Profile</option></select><button class="button" id="addResourceProfileButton" type="button"><svg class="icon"><use href="#i-plus"></use></svg><span>新建</span></button></div>
+                    <div id="resourceProfileEditor"></div>
+                  </section>
+                  <section class="settings-section">
+                    <div class="settings-section-head"><div><h3 id="runtimeEditorTitle">Runtime Profile</h3><p id="runtimeEditorDescription">选择 Runtime 查看健康状态、执行命令和可强制的安全边界。</p></div></div>
+                    <div id="runtimeEditor"></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <aside class="inspector" id="inspector" aria-label="功能面板">
+        <header class="inspector-header">
+          <div class="inspector-header-copy"><h2 id="inspectorTitle">Flow 详情</h2><p id="inspectorSubtitle">草案配置与运行门禁</p></div>
+          <button class="icon-button close-inspector" id="closeInspectorButton" type="button" aria-label="关闭功能面板"><svg class="icon"><use href="#i-close"></use></svg></button>
+        </header>
+        <div class="inspector-tabs" role="tablist" aria-label="功能面板">
+          <button class="inspector-tab" id="detailsTab" type="button" role="tab" aria-selected="true" aria-controls="detailsPanel" data-panel="details">详情</button>
+          <button class="inspector-tab" id="versionsTab" type="button" role="tab" aria-selected="false" aria-controls="versionsPanel" data-panel="versions" tabindex="-1">版本</button>
+          <button class="inspector-tab" id="activityTab" type="button" role="tab" aria-selected="false" aria-controls="activityPanel" data-panel="activity" tabindex="-1">运行</button>
+        </div>
+        <div class="inspector-body"><div class="inspector-panel" id="detailsPanel" role="tabpanel" aria-labelledby="detailsTab"></div><div class="inspector-panel" id="versionsPanel" role="tabpanel" aria-labelledby="versionsTab" hidden></div><div class="inspector-panel" id="activityPanel" role="tabpanel" aria-labelledby="activityTab" hidden></div></div>
+      </aside>
+    </div>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="关闭侧栏"></button>
+    <dialog class="operation-dialog" id="operationDialog" aria-labelledby="operationDialogTitle">
+      <header><div><h2 id="operationDialogTitle">确认操作</h2><p id="operationDialogSubtitle"></p></div><button class="icon-button" id="operationDialogClose" type="button" aria-label="关闭"><svg class="icon"><use href="#i-close"></use></svg></button></header>
+      <div class="operation-dialog-body" id="operationDialogBody"></div>
+      <footer><button class="button" id="operationDialogCancel" type="button">返回修改</button><button class="button signal" id="operationDialogConfirm" type="button">确认</button></footer>
+    </dialog>
+    <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+
+    <script>
+      (function () {
+        "use strict";
+        var state = {
+          view: "chat", runtime: "codex", draft: null, plans: [], cfs: [], runs: [], resources: [], runtimes: [], settings: null, serverDrafts: [], serverCfDrafts: [],
+          messages: [], generatedCfDrafts: {}, selectedNodeId: null, positions: {}, zoom: 1,
+          dirty: false, testState: "idle", lastTestRunId: null, nodeStatuses: {},
+          activePanel: "details", drag: null, blockedNodes: [], returnFocus: null, settingsRuntimeId: null, previousView: "chat", resourceProfileId: null, resourceDraft: null, liveRunId: null, liveRunStatus: null, waitingApprovalNode: null, runDetail: null, runDetailLoading: null
+        };
+        var els = {};
+        var workspaceKey = "cf-platform-workbench-v2";
+        var draftSaveTimer = null;
+        var operationResolve = null;
+        function icon(id) { return '<svg class="icon" aria-hidden="true"><use href="#' + id + '"></use></svg>'; }
+        function escapeHtml(value) {
+          return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;")
+            .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+        }
+        function slug(value) {
+          var normalized = String(value || "flow").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g,"-").replace(/^-|-$/g,"");
+          return (normalized || "flow").slice(0,32);
+        }
+        function request(url, options) {
+          return fetch(url,options).then(function(response) {
+            return response.json().catch(function(){return {};}).then(function(body) {
+              if (!response.ok) throw new Error(body.error || "请求失败（" + response.status + "）");
+              return body;
+            });
+          });
+        }
+        function post(url, body) { return request(url,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); }
+        function put(url, body) { return request(url,{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify(body)}); }
+        function toast(title, detail, tone) {
+          var item = document.createElement("div"); item.className = "toast " + (tone || "");
+          item.innerHTML = "<div><strong>" + escapeHtml(title) + "</strong><span>" + escapeHtml(detail || "") + "</span></div>";
+          els.toastRegion.appendChild(item);
+          window.setTimeout(function(){ item.style.opacity="0"; item.style.transform="translateY(8px)"; window.setTimeout(function(){item.remove();},220); },3800);
+        }
+        function setNotice(title,detail,tone){els.operationNoticeTitle.textContent=title||"";els.operationNoticeDetail.textContent=detail||"";els.operationNotice.className="operation-notice "+(tone||"");els.operationNotice.hidden=false;}
+        function clearNotice(){els.operationNotice.hidden=true;els.operationNoticeTitle.textContent="";els.operationNoticeDetail.textContent="";}
+        function operationRow(label,value){return'<div class="operation-summary-row"><span>'+escapeHtml(label)+'</span><strong>'+escapeHtml(value)+'</strong></div>';}
+        function closeOperation(result){if(!els.operationDialog.open)return;els.operationDialog.close();var resolve=operationResolve;operationResolve=null;if(resolve)resolve(Boolean(result));}
+        function confirmOperation(options){if(operationResolve)closeOperation(false);els.operationDialogTitle.textContent=options.title;els.operationDialogSubtitle.textContent=options.subtitle||"";els.operationDialogBody.innerHTML='<div class="operation-summary">'+options.rows.map(function(row){return operationRow(row[0],row[1]);}).join("")+'</div>';els.operationDialogConfirm.textContent=options.confirmLabel||"确认";els.operationDialogConfirm.className="button "+(options.tone==="publish"?"primary":"signal");els.operationDialog.showModal();els.operationDialogConfirm.focus();return new Promise(function(resolve){operationResolve=resolve;});}
+        function flowRuntimeSummary(){var ids=[];(state.draft&&state.draft.nodes||[]).forEach(function(node){if(node.kind==="cf-call"&&ids.indexOf(node.executor||state.runtime)<0)ids.push(node.executor||state.runtime);});return ids.map(function(id){var runtime=state.runtimes.find(function(item){return item.id===id;});return runtime?(runtime.name+" · Profile v"+runtime.profileVersion):id;}).join("；")||"无 CF Runtime";}
+        function flowRouteSummary(){return(state.draft&&state.draft.nodes||[]).map(nodeName).join(" → ");}
+        function readableError(error) {
+          var raw = error && error.message ? error.message : String(error);
+          var map = { OBJECTIVE_REQUIRED:"请先输入一个明确的目标。", FLOW_EMPTY:"Flow 至少需要一个节点。", FLOW_NO_ENTRY:"Flow 缺少入口线路。",
+            FLOW_NO_OUTPUT:"Flow 缺少输出节点。", CF_VERSION_NOT_FOUND:"测试找不到对应的 CF 版本。", UNKNOWN_EXECUTOR:"当前执行器未接入服务端，请改用可用执行器。",
+            RUNTIME_NOT_FOUND:"Runtime 不存在，请在设置中重新选择。",RUNTIME_UNAVAILABLE:"Runtime 当前不可用，请检查命令、登录状态和工作目录。",RUNTIME_DISABLED:"Runtime 已停用，请在设置中启用。",RUNTIME_TIMEOUT:"Runtime 执行超时，请调整超时或缩小任务。",RUNTIME_JSON_INVALID:"Runtime 没有返回有效 JSON；已拒绝把非结构化内容当作执行结果。",RUNTIME_ENV_NAME_INVALID:"环境变量白名单只能填写变量名，例如 PATH 或 OPENAI_API_KEY。",RUNTIME_PROPOSAL_INVALID:"Runtime 返回的 Flow 提案格式无效，请重试或更换 Runtime。",RUNTIME_CWD_OUTSIDE_WORKSPACE:"Runtime 专用目录必须位于工作区根目录内。",WORKSPACE_ROOT_RUNTIME_CONFLICT:"新的工作区根目录不包含某个 Runtime 的专用目录，请先调整对应 Profile。",WORKSPACE_ROOT_INVALID:"工作目录必须是服务端可访问的绝对目录。",DEFAULT_RUNTIME_NOT_FOUND:"默认 Runtime 不存在。",DEFAULT_RUNTIME_DISABLED:"默认 Runtime 已停用，请先启用或选择其他 Runtime。",
+            NON_TERMINATING_PATH:"线路中存在循环，当前版本只允许有终点的 DAG。", UNREACHABLE_NODE:"有节点没有接入主线路。",BRANCH_CASES_INCOMPLETE:"条件分支的每个结果都必须连接到一条明确线路。",BINDING_CONTROL_UNREACHABLE:"Binding 的来源必须能沿控制线路到达目标节点。" };
+          var key = Object.keys(map).find(function(item){return raw.indexOf(item)>=0;});
+          return key ? map[key] : raw;
+        }
+        function cacheElements() {
+          ["flowSidebar","flowList","flowSearch","newFlowButton","refreshButton","settingsButton","mobileMenuButton","flowTitle","routeCode","draftState","stageStrip",
+            "chatTab","canvasTab","runButton","testButton","publishButton","inspectorButton","conversationView","canvasView","conversationScroll",
+            "conversationIntro","messages","composer","goalInput","runtimeSelect","runtimeSelectWrap","runtimeNote","sendButton","toggleLibraryButton","addApprovalButton","addBranchButton","addJoinButton","libraryTray",
+            "canvasWrap","flowCanvas","routeMap","nodesLayer","canvasEmpty","entryMarker","zoomOutButton","zoomInButton","fitButton","canvasNote",
+            "zoomLabel","emptyAddButton","inspector","inspectorTitle","inspectorSubtitle","closeInspectorButton","detailsPanel",
+            "versionsPanel","activityPanel","mobileScrim","toastRegion","settingsView","closeSettingsButton","addRuntimeButton","runtimeList",
+            "workspaceSettingsForm","defaultRuntimeInput","defaultResourceInput","testTimeoutInput","workspaceRootInput","autoSaveDraftsInput","saveWorkspaceSettingsButton","runtimeEditor","runtimeEditorTitle","runtimeEditorDescription",
+            "resourceProfileSelect","addResourceProfileButton","resourceProfileEditor","operationDialog","operationDialogTitle","operationDialogSubtitle","operationDialogBody","operationDialogClose","operationDialogCancel","operationDialogConfirm","operationNotice","operationNoticeTitle","operationNoticeDetail","operationNoticeClose"].forEach(function(id){els[id]=document.getElementById(id);});
+        }
+        function defaultPositions(draft) {
+          var positions={}; if(!draft) return positions;
+          draft.nodes.forEach(function(node,index){positions[node.id]={x:150+index*210,y:258+(index%2?24:0)};});
+          return positions;
+        }
+        function canvasPlaneWidth(){var max=0;Object.keys(state.positions||{}).forEach(function(id){max=Math.max(max,(state.positions[id]||{x:0}).x);});return Math.max(1200,max+230);}
+        function saveWorkspace() {
+          try { localStorage.setItem(workspaceKey,JSON.stringify({runtime:state.runtime,draft:state.draft,messages:state.messages,
+            generatedCfDrafts:state.generatedCfDrafts,positions:state.positions,dirty:state.dirty,testState:state.testState})); } catch(_){}
+          scheduleDraftSave();
+        }
+        function scheduleDraftSave(){if(!state.draft||!state.settings||!state.settings.autoSaveDrafts)return;var draft=JSON.parse(JSON.stringify(state.draft)),generated=JSON.parse(JSON.stringify(state.generatedCfDrafts));window.clearTimeout(draftSaveTimer);draftSaveTimer=window.setTimeout(function(){var flowSave=put("/api/flow-drafts/"+encodeURIComponent(draft.flowId),draft),cfSaves=Object.keys(generated).map(function(id){return put("/api/cf-drafts/"+encodeURIComponent(id),generated[id]);});Promise.all([flowSave].concat(cfSaves)).then(function(results){var saved=results[0],index=state.serverDrafts.findIndex(function(item){return item.flowId===saved.flowId;});if(index>=0)state.serverDrafts[index]=saved;else state.serverDrafts.push(saved);state.serverCfDrafts=state.serverCfDrafts.filter(function(item){return!generated[item.cfId];}).concat(Object.keys(generated).map(function(id){return generated[id];}));renderFlowList();}).catch(function(error){var detail=readableError(error);setNotice("草稿自动保存失败",detail,"error");toast("草稿自动保存失败",detail,"error");});},550);}
+        function restoreWorkspace() {
+          try { var saved=JSON.parse(localStorage.getItem(workspaceKey)||"null"); if(!saved)return;
+            state.runtime=saved.runtime||state.runtime; state.draft=saved.draft||null; state.messages=Array.isArray(saved.messages)?saved.messages:[];
+            state.generatedCfDrafts=saved.generatedCfDrafts||{}; state.positions=saved.positions||defaultPositions(state.draft);
+            state.dirty=Boolean(saved.dirty); state.testState=saved.testState==="passed"?"stale":(saved.testState||"idle"); } catch(_){}
+        }
+        function setBusy(button,busy){button.disabled=busy;button.setAttribute("aria-busy",String(busy));}
+        function markDirty(){state.dirty=true;state.testState=state.testState==="idle"?"idle":"stale";state.nodeStatuses={};state.blockedNodes=[];saveWorkspace();renderStatus();renderInspector();}
+        function currentStage(){if(!state.draft)return"goal";if(state.testState==="running")return"test";if(state.testState==="passed"||state.testState==="published")return"publish";return"compose";}
+        function renderStatus() {
+          if(state.view==="settings"){
+            els.flowTitle.textContent="工作台设置";els.routeCode.textContent="SETTINGS";els.draftState.textContent="本机配置";els.draftState.classList.remove("passed");
+            els.stageStrip.hidden=true;els.chatTab.parentElement.hidden=true;els.runButton.hidden=true;els.testButton.hidden=true;els.publishButton.hidden=true;els.inspectorButton.hidden=true;return;
+          }
+          els.stageStrip.hidden=false;els.chatTab.parentElement.hidden=false;els.runButton.hidden=false;els.testButton.hidden=false;els.publishButton.hidden=false;els.inspectorButton.hidden=false;
+          var stage=currentStage(), order=["goal","compose","test","publish"];
+          document.querySelectorAll(".stage").forEach(function(item){var s=item.getAttribute("data-stage");item.classList.toggle("active",s===stage);item.classList.toggle("complete",order.indexOf(s)<order.indexOf(stage));});
+          var name=state.draft?(state.draft.name||state.draft.objective||"未命名 Flow"):"未命名 Flow";
+          els.flowTitle.textContent=name; els.routeCode.textContent=state.draft?String(state.draft.flowId).slice(0,12).toUpperCase():"NEW";
+          els.testButton.disabled=!state.draft||state.testState==="running"||state.liveRunStatus==="running"||state.liveRunStatus==="waiting-approval";els.runButton.disabled=!latestPublishedPlan()||state.testState==="running"||state.liveRunStatus==="running"||state.liveRunStatus==="waiting-approval";els.publishButton.disabled=!state.draft||state.testState!=="passed";
+          var labels={idle:state.draft?"草案待测试":"等待目标",stale:"变更待重测",running:"线路测试中",passed:"测试已放行",published:"版本已发布",failed:"测试未通过"};
+          els.draftState.textContent=labels[state.testState]||labels.idle; els.draftState.classList.toggle("passed",state.testState==="passed"||state.testState==="published");
+        }
+        function latestPublishedPlan(){if(!state.draft)return null;return state.plans.filter(function(plan){return plan.flowId===state.draft.flowId;}).sort(function(a,b){return parseInt(b.flowVersion,10)-parseInt(a.flowVersion,10);})[0]||null;}
+        function setView(view) {
+          state.view=view; var chat=view==="chat",canvas=view==="canvas",settings=view==="settings";els.conversationView.hidden=!chat;els.canvasView.hidden=!canvas;els.settingsView.hidden=!settings;
+          els.chatTab.setAttribute("aria-selected",String(chat));els.chatTab.tabIndex=chat?0:-1;els.canvasTab.setAttribute("aria-selected",String(canvas));els.canvasTab.tabIndex=canvas?0:-1;renderStatus();
+          if(canvas)window.requestAnimationFrame(function(){renderCanvas();drawEdges();});if(settings)renderSettings();
+        }
+        function addMessage(role,text,meta){state.messages.push({role:role,text:text,meta:meta||null,at:new Date().toISOString()});saveWorkspace();renderMessages();window.requestAnimationFrame(function(){els.conversationScroll.scrollTop=els.conversationScroll.scrollHeight;});}
+        function renderMessages() {
+          els.conversationIntro.hidden=state.messages.length>0;
+          els.messages.innerHTML=state.messages.map(function(message){
+            var user=message.role==="user", meta="";
+            if(message.meta&&message.meta.nodes) meta='<div class="proposal-summary"><span>'+message.meta.nodes+' 个节点</span><span>'+message.meta.edges+' 条线路</span><span>目标 Runtime: '+escapeHtml(message.meta.runtime)+"</span></div>";
+            return '<article class="message '+(user?"user":"agent")+'"><div class="message-avatar">'+(user?"YOU":"CF")+'</div><div class="message-content"><div class="message-label">'+(user?"你":"Flow 设计 Agent")+"</div><p>"+escapeHtml(message.text)+"</p>"+meta+"</div></article>";
+          }).join("");
+        }
+        function currentRuntime(){return state.runtimes.find(function(runtime){return runtime.id===state.runtime;});}
+        function runtimeState(runtime){return runtime&&runtime.health?runtime.health.status:(runtime&&runtime.enabled?"checking":"disabled");}
+        function runtimeOptionMarkup(selected){return state.runtimes.map(function(runtime){var health=runtimeState(runtime),disabled=!runtime.enabled||health==="unavailable";return'<option value="'+escapeHtml(runtime.id)+'"'+(runtime.id===selected?' selected':'')+(disabled?' disabled':'')+'>'+escapeHtml(runtime.name)+' · '+escapeHtml(health==="available"?"可用":health==="disabled"?"已停用":health==="unavailable"?"不可用":"检查中")+'</option>';}).join("");}
+        function renderRuntimeOptions(){
+          if(!state.runtimes.length)return;var available=state.runtimes.find(function(runtime){return runtime.id===state.runtime&&!(!runtime.enabled||runtimeState(runtime)==="unavailable");});
+          if(!available){var preferred=state.settings&&state.runtimes.find(function(runtime){return runtime.id===state.settings.defaultRuntimeId&&runtime.enabled&&runtimeState(runtime)==="available";});available=preferred||state.runtimes.find(function(runtime){return runtime.enabled&&runtimeState(runtime)==="available";});if(available)state.runtime=available.id;}
+          els.runtimeSelect.innerHTML=runtimeOptionMarkup(state.runtime);if(els.defaultRuntimeInput)els.defaultRuntimeInput.innerHTML=runtimeOptionMarkup(state.settings?state.settings.defaultRuntimeId:state.runtime);
+          var runtime=currentRuntime(),health=runtimeState(runtime);els.runtimeSelectWrap.classList.toggle("unavailable",health==="unavailable");els.runtimeSelectWrap.classList.toggle("disabled",health==="disabled");
+          els.runtimeNote.textContent=!runtime?"Runtime 未配置":health==="available"?("已连接 · Profile v"+runtime.profileVersion+(runtime.health.version?" · "+runtime.health.version:"")):health==="disabled"?"已停用 · 在设置中启用":"不可用 · 打开设置检查";
+        }
+        function executorOptions(selected){var options=state.runtimes.length?state.runtimes:[{id:"echo",name:"Local Echo",enabled:true,health:{status:"available"}}];return options.map(function(runtime){var unavailable=!runtime.enabled||runtimeState(runtime)==="unavailable";return'<option value="'+escapeHtml(runtime.id)+'"'+(runtime.id===selected?' selected':'')+(unavailable?' disabled':'')+'>'+escapeHtml(runtime.name||runtime.id)+' · '+escapeHtml(unavailable?'不可用':'可用')+'</option>';}).join("");}
+        function nodeName(node) {
+          if(node.kind==="output")return"Flow 输出"; if(node.kind==="approval")return"人工批准"; if(node.kind==="branch")return"条件分支"; if(node.kind==="join")return"合并线路";
+          var local=state.generatedCfDrafts[node.cfRef&&node.cfRef.cfId], published=state.cfs.find(function(cf){return cf.cfId===node.cfRef.cfId&&cf.version===node.cfRef.version;});
+          return local?local.name:(published&&published.draft?published.draft.name:node.cfRef.cfId);
+        }
+        function nodeDescription(node) {
+          if(node.kind==="output")return node.outputId||"result"; if(node.kind==="approval")return node.policyRef||"manual";
+          if(node.kind==="branch")return"按条件选择下一条线路"; if(node.kind==="join")return node.mode==="all"?"等待全部上游":"任一上游完成";
+          var local=state.generatedCfDrafts[node.cfRef&&node.cfRef.cfId], published=state.cfs.find(function(cf){return cf.cfId===node.cfRef.cfId&&cf.version===node.cfRef.version;});
+          return local?local.does:(published&&published.draft?published.draft.does:node.cfRef.version);
+        }
+        function createCandidateDrafts(objective) {
+          var lower=objective.toLowerCase(),specs;
+          if(/代码|code|合并|测试/.test(lower)) specs=[["读取代码变更","读取变更范围与相关上下文"],["分析变更风险","分析实现、依赖与潜在回归风险"],["执行验证测试","运行适用测试并归纳结果"],["形成审核结论","整理风险、证据与建议"]];
+          else if(/邮件|客户|周报|crm/.test(lower)) specs=[["收集客户信号","读取本周邮件与客户记录"],["归纳进展风险","提取进展、阻塞与风险信号"],["生成周报草案","把事实组织为结构化客户周报"]];
+          else if(/合同|条款|法务/.test(lower)) specs=[["提取关键条款","读取合同并提取关键义务与期限"],["识别合同风险","对照审阅规则识别风险条款"],["生成审阅意见","输出结构化风险与修改建议"]];
+          else specs=[["理解输入资料","读取输入并提取完成目标所需的事实"],["分析与规划","分析约束并形成可执行方案"],["执行核心任务",objective],["检查并输出","检查结果完整性并生成最终输出"]];
+          var token=Date.now().toString(36), drafts={};
+          var nodes=specs.map(function(spec,index){var cfId="cf-"+token+"-"+(index+1);drafts[cfId]={cfId:cfId,revision:1,name:spec[0],does:spec[1],input:"来自上游节点或用户的结构化输入",output:"供下游节点使用的结构化结果",inputContract:{type:"object"},outputContract:{type:"object"},defaultExecutor:state.runtime};return{id:"step-"+(index+1),kind:"cf-call",cfRef:{cfId:cfId,version:"1.0.0"},executor:state.runtime};});
+          var output={id:"output",kind:"output",outputId:"result"},edges=[{id:"entry",from:"$entry",to:nodes[0].id}];
+          for(var i=0;i<nodes.length-1;i++)edges.push({id:"edge-"+(i+1),from:nodes[i].id,to:nodes[i+1].id});
+          edges.push({id:"finish",from:nodes[nodes.length-1].id,to:output.id});
+          var bindings=[{id:"initial-input",from:"$user.input",to:nodes[0].id+".input"}];for(var j=1;j<nodes.length;j++)bindings.push({id:"binding-"+j,from:nodes[j-1].id+".output",to:nodes[j].id+".input"});bindings.push({id:"result",from:nodes[nodes.length-1].id+".output",to:"output.input"});return{drafts:drafts,flow:{flowId:"flow-"+token,revision:1,name:objective.slice(0,36),objective:objective,nodes:nodes.concat([output]),edges:edges,bindings:bindings,limits:{maxConcurrency:2,maxNodeDispatches:32}}};
+        }
+        function adoptDraft(draft,generated){state.draft=draft;state.generatedCfDrafts=generated||{};state.positions=defaultPositions(draft);state.selectedNodeId=null;state.dirty=true;state.testState="idle";state.nodeStatuses={};saveWorkspace();renderAll();}
+        function generateFromGoal(objective) {
+          setBusy(els.sendButton,true);addMessage("user",objective);
+          return post("/api/flow-proposals",{objective:objective,runtimeId:state.runtime}).then(function(proposal){
+            if(proposal.flowDraft){var generated={};(proposal.cfDrafts||[]).forEach(function(draft){generated[draft.cfId]=draft;});adoptDraft(proposal.flowDraft,generated);addMessage("agent",proposal.assistantMessage||("已由 "+state.runtime+" 生成 Flow 草案，请检查节点、顺序和授权边界。"),{nodes:proposal.flowDraft.nodes.length,edges:proposal.flowDraft.edges.length,runtime:state.runtime});}
+            else{var candidate=createCandidateDrafts(objective);adoptDraft(candidate.flow,candidate.drafts);addMessage("agent","Local Echo 已按当前 CF 框架生成候选草案。它只用于离线验证，没有调用外部 agent。",{nodes:candidate.flow.nodes.length,edges:candidate.flow.edges.length,runtime:state.runtime});}
+            setView("canvas");window.requestAnimationFrame(function(){fitCanvas(false);});toast("Flow 草案已就绪","节点可拖动、编辑或删除；任何修改都需要重新测试。","success");
+          }).catch(function(error){var detail=readableError(error);addMessage("agent","Runtime 未能生成草案："+detail+" 请打开工作台设置测试连接，或切换到 Local Echo 进行离线编排。");setNotice("Runtime 调用失败",detail,"error");toast("Runtime 调用失败",detail,"error");}).finally(function(){setBusy(els.sendButton,false);});
+        }
+        function renderFlowList() {
+          var query=els.flowSearch.value.trim().toLowerCase(),published=state.plans.filter(function(plan){return!query||(plan.objective||plan.flowId).toLowerCase().indexOf(query)>=0;}),draftHtml="";
+          if(state.draft&&(!query||(state.draft.name||state.draft.objective).toLowerCase().indexOf(query)>=0))draftHtml='<div class="flow-group-label"><span>正在编辑</span><span class="flow-count">1</span></div><button class="flow-item" type="button" aria-current="page" data-local="true"><span class="route-lamp draft"></span><span><span class="flow-name">'+escapeHtml(state.draft.name||state.draft.objective)+'</span><span class="flow-meta"><span>'+escapeHtml(state.draft.objective)+'</span><span>· Draft</span></span></span></button>';
+          var saved=state.serverDrafts.filter(function(draft){return(!state.draft||draft.flowId!==state.draft.flowId)&&(!query||(draft.name||draft.objective||draft.flowId).toLowerCase().indexOf(query)>=0);});
+          if(saved.length)draftHtml+='<div class="flow-group-label"><span>服务端草稿</span><span class="flow-count">'+saved.length+'</span></div>'+saved.map(function(draft){return'<div class="flow-item-wrap"><button class="flow-item" type="button" data-draft-id="'+escapeHtml(draft.flowId)+'"><span class="route-lamp draft"></span><span><span class="flow-name">'+escapeHtml(draft.name||draft.objective)+'</span><span class="flow-meta"><span>'+escapeHtml(draft.flowId)+'</span><span>· 已保存</span></span></span></button><button class="icon-button flow-item-delete" type="button" data-delete-draft="'+escapeHtml(draft.flowId)+'" aria-label="删除草稿 '+escapeHtml(draft.name||draft.objective)+'">'+icon("i-trash")+'</button></div>';}).join("");
+          var publishedHtml='<div class="flow-group-label"><span>已发布线路</span><span class="flow-count">'+published.length+"</span></div>"+(published.length?published.map(function(plan){return'<button class="flow-item" type="button" data-flow-id="'+escapeHtml(plan.flowId)+'" data-version="'+escapeHtml(plan.flowVersion)+'"><span class="route-lamp published"></span><span><span class="flow-name">'+escapeHtml(plan.objective||plan.flowId)+'</span><span class="flow-meta"><span>'+escapeHtml(plan.flowId)+'</span><span>· v'+escapeHtml(plan.flowVersion)+"</span></span></span></button>";}).join(""):'<div class="empty-list">还没有已发布 Flow</div>');
+          els.flowList.innerHTML=draftHtml+publishedHtml;
+          els.flowList.querySelectorAll("[data-flow-id]").forEach(function(button){button.addEventListener("click",function(){openPublished(button.getAttribute("data-flow-id"),button.getAttribute("data-version"));});});
+          els.flowList.querySelectorAll("[data-draft-id]").forEach(function(button){button.addEventListener("click",function(){openServerDraft(button.getAttribute("data-draft-id"));});});
+          els.flowList.querySelectorAll("[data-delete-draft]").forEach(function(button){button.addEventListener("click",function(){deleteServerDraft(button.getAttribute("data-delete-draft"));});});
+          var local=els.flowList.querySelector("[data-local]");if(local)local.addEventListener("click",function(){setView(state.draft?"canvas":"chat");});
+        }
+        function deleteServerDraft(flowId){var draft=state.serverDrafts.find(function(item){return item.flowId===flowId;});if(!draft)return;confirmOperation({title:"删除服务端草稿",subtitle:"该操作只删除草稿，不影响已经发布的不可变版本。",confirmLabel:"删除草稿",rows:[["Flow",draft.name||draft.objective||draft.flowId],["草稿 ID",draft.flowId],["已发布版本","保留"]]}).then(function(confirmed){if(!confirmed)return;return request("/api/flow-drafts/"+encodeURIComponent(flowId),{method:"DELETE"}).then(function(){state.serverDrafts=state.serverDrafts.filter(function(item){return item.flowId!==flowId;});renderFlowList();clearNotice();toast("草稿已删除",draft.name||draft.flowId,"success");}).catch(function(error){var detail=readableError(error);setNotice("草稿删除失败",detail,"error");toast("草稿删除失败",detail,"error");});});}
+        function openServerDraft(flowId){var draft=state.serverDrafts.find(function(item){return item.flowId===flowId;});if(!draft)return;if(state.draft&&state.dirty&&state.draft.flowId!==flowId&&!window.confirm("当前 Flow 已自动保存。切换到另一条草稿吗？"))return;state.draft=JSON.parse(JSON.stringify(draft));state.generatedCfDrafts={};state.draft.nodes.forEach(function(node){if(node.kind!=="cf-call")return;var candidate=state.serverCfDrafts.find(function(item){return item.cfId===node.cfRef.cfId;});if(candidate)state.generatedCfDrafts[candidate.cfId]=candidate;});state.positions=defaultPositions(state.draft);state.dirty=true;state.testState="stale";state.selectedNodeId=null;saveWorkspace();renderAll();setView("canvas");window.requestAnimationFrame(function(){fitCanvas(false);});closeMobileLayers();}
+        function openPublished(flowId,version) {
+          var plan=state.plans.find(function(item){return item.flowId===flowId&&item.flowVersion===version;});if(!plan)return;
+          state.draft={flowId:plan.flowId,revision:parseInt(plan.flowVersion,10)+1,name:plan.objective,objective:plan.objective,nodes:plan.nodes.map(function(node){var copy=Object.assign({},node);delete copy.index;delete copy.programHash;return copy;}),edges:plan.edges.map(function(edge){var from=edge.from==="$entry"?"$entry":plan.nodes[edge.from].id;return Object.assign({},edge,{from:from,to:plan.nodes[edge.to].id});}),bindings:plan.bindings||[],resources:plan.resources,limits:plan.limits};
+          state.generatedCfDrafts={};state.positions=defaultPositions(state.draft);state.dirty=false;state.testState="idle";state.selectedNodeId=null;saveWorkspace();renderAll();setView("canvas");window.requestAnimationFrame(function(){fitCanvas(false);});closeMobileLayers();
+        }
+        function libraryItems() {
+          var items=state.cfs.map(function(cf){return{cfId:cf.cfId,version:cf.version,name:cf.draft.name,does:cf.draft.does,executor:cf.draft.defaultExecutor||"echo",published:true};});
+          Object.keys(state.generatedCfDrafts).forEach(function(id){var draft=state.generatedCfDrafts[id];items.push({cfId:id,version:draft.revision+".0.0",name:draft.name,does:draft.does,executor:draft.defaultExecutor||"echo",published:false});});
+          if(!items.length)items.push({cfId:"starter-echo",version:"1.0.0",name:"通用 Agent 任务",does:"根据输入完成一个受约束的智能任务",executor:"echo",published:false,template:true});
+          return items;
+        }
+        function renderLibrary() {
+          els.libraryTray.innerHTML=libraryItems().map(function(item,index){return'<button class="library-item" type="button" draggable="true" data-library-index="'+index+'"><span class="library-icon">CF</span><span><strong>'+escapeHtml(item.name)+"</strong><span>"+escapeHtml(item.published?("v"+item.version+" · 已发布"):"候选草案")+"</span></span></button>";}).join("");
+          els.libraryTray.querySelectorAll(".library-item").forEach(function(button){button.addEventListener("dragstart",function(event){event.dataTransfer.setData("text/cf-library-index",button.getAttribute("data-library-index"));event.dataTransfer.effectAllowed="copy";});button.addEventListener("click",function(){addLibraryNode(Number(button.getAttribute("data-library-index")));});});
+        }
+        function ensureDraft() {
+          if(state.draft)return;var token=Date.now().toString(36);
+          state.draft={flowId:"flow-"+token,revision:1,name:"未命名 Flow",objective:"待补充目标",nodes:[{id:"output",kind:"output",outputId:"result"}],edges:[],bindings:[],limits:{maxConcurrency:2,maxNodeDispatches:32}};state.positions=defaultPositions(state.draft);
+        }
+        function nextNodeId(prefix){var number=1,id=prefix+"-1";while(state.draft.nodes.some(function(node){return node.id===id;}))id=prefix+"-"+(++number);return id;}
+        function replaceNodePrefix(ref,oldId,newId){var prefix=String(ref).charAt(0)==="$"?"$":"",plain=prefix?String(ref).slice(1):String(ref);return prefix+(plain.indexOf(oldId+".")===0?newId+plain.slice(oldId.length):plain);}
+        function hasComplexControl(){return Boolean(state.draft&&state.draft.nodes.some(function(node){return node.kind==="branch";}));}
+        function routeNodeBeforeOutput(node){var output=state.draft.nodes.find(function(item){return item.kind==="output";}),incoming=output?state.draft.edges.filter(function(edge){return edge.to===output.id;}):[];if(incoming.length)incoming.forEach(function(edge){edge.to=node.id;});else state.draft.edges.push({id:"entry-"+node.id,from:"$entry",to:node.id});if(output)state.draft.edges.push({id:"edge-"+node.id+"-output",from:node.id,to:output.id,when:node.kind==="approval"?{outcome:"approved"}:undefined});}
+        function addLibraryNode(index,point) {
+          var item=libraryItems()[index];if(!item)return;ensureDraft();
+          if(item.template&&!state.generatedCfDrafts[item.cfId])state.generatedCfDrafts[item.cfId]={cfId:item.cfId,revision:1,name:item.name,does:item.does,inputContract:{type:"object"},outputContract:{type:"object"},defaultExecutor:state.runtime};
+          var base=slug(item.name)||"step",suffix=1,id=base;while(state.draft.nodes.some(function(node){return node.id===id;}))id=base+"-"+(++suffix);
+          var node={id:id,kind:"cf-call",cfRef:{cfId:item.cfId,version:item.version},executor:item.executor},outputIndex=state.draft.nodes.findIndex(function(current){return current.kind==="output";});if(outputIndex<0)outputIndex=state.draft.nodes.length;
+          var complex=hasComplexControl(),output=state.draft.nodes.find(function(current){return current.kind==="output";});state.draft.nodes.splice(outputIndex,0,node);state.positions[node.id]=point||{x:150+Math.max(0,outputIndex)*210,y:255};if(!point&&output)state.positions[output.id]={x:state.positions[node.id].x+210,y:(state.positions[output.id]||{y:278}).y};if(complex)routeNodeBeforeOutput(node);else rebuildSequentialEdges();state.selectedNodeId=node.id;markDirty();renderAll();openInspector();
+        }
+        function addApprovalNode(){ensureDraft();var id=nextNodeId("approval"),node={id:id,kind:"approval",policyRef:"manual"},output=state.draft.nodes.find(function(item){return item.kind==="output";}),outputIndex=state.draft.nodes.indexOf(output);if(outputIndex<0)outputIndex=state.draft.nodes.length;var complex=hasComplexControl();state.draft.nodes.splice(outputIndex,0,node);state.positions[node.id]={x:150+Math.max(0,outputIndex)*210,y:278};if(output)state.positions[output.id]={x:state.positions[node.id].x+210,y:(state.positions[output.id]||{y:278}).y};if(complex)routeNodeBeforeOutput(node);else rebuildSequentialEdges();state.selectedNodeId=node.id;markDirty();renderAll();openInspector();}
+        function addJoinNode(){ensureDraft();var id=nextNodeId("join"),node={id:id,kind:"join",mode:"all",onUpstreamFailure:"fail"},output=state.draft.nodes.find(function(item){return item.kind==="output";}),outputIndex=state.draft.nodes.indexOf(output);if(outputIndex<0)outputIndex=state.draft.nodes.length;state.draft.nodes.splice(outputIndex,0,node);state.positions[node.id]={x:150+Math.max(0,outputIndex)*210,y:278};if(output)state.positions[output.id]={x:state.positions[node.id].x+210,y:(state.positions[output.id]||{y:278}).y};if(hasComplexControl())routeNodeBeforeOutput(node);else rebuildSequentialEdges();state.selectedNodeId=node.id;markDirty();renderAll();openInspector();}
+        function addBranchNode(){ensureDraft();var branchId=nextNodeId("branch"),joinId=nextNodeId("join"),branch={id:branchId,kind:"branch",cond:{$get:"route"},cases:["yes","no"],inputDefaults:{route:"yes"}},join={id:joinId,kind:"join",mode:"any",onUpstreamFailure:"continue-eligible"},output=state.draft.nodes.find(function(item){return item.kind==="output";}),outputIndex=state.draft.nodes.indexOf(output);if(outputIndex<0)outputIndex=state.draft.nodes.length;var incoming=output?state.draft.edges.filter(function(edge){return edge.to===output.id;}):[];if(incoming.length)incoming.forEach(function(edge){edge.to=branchId;});else state.draft.edges.push({id:"entry-"+branchId,from:"$entry",to:branchId});state.draft.nodes.splice(outputIndex,0,branch,join);state.draft.edges.push({id:"case-"+branchId+"-yes",from:branchId,to:joinId,when:{outcome:"branch-case",caseId:"yes"}},{id:"case-"+branchId+"-no",from:branchId,to:joinId,when:{outcome:"branch-case",caseId:"no"}});if(output)state.draft.edges.push({id:"edge-"+joinId+"-output",from:joinId,to:output.id});var maxX=Math.max.apply(null,state.draft.nodes.filter(function(node){return node.kind!=="output"&&node.id!==branchId&&node.id!==joinId;}).map(function(node){return(state.positions[node.id]||{x:0}).x;}).concat([120]));state.positions[branchId]={x:maxX+210,y:190};state.positions[joinId]={x:maxX+420,y:300};if(output)state.positions[output.id]={x:maxX+630,y:278};state.selectedNodeId=branchId;markDirty();renderAll();openInspector();toast("条件分支已添加","默认 yes/no 两条有限线路已接入汇合节点，可在右侧编辑连接。","success");}
+        function rebuildSequentialEdges() {
+          if(!state.draft)return;var ordered=state.draft.nodes.filter(function(node){return node.kind!=="output";}).sort(function(a,b){return(state.positions[a.id]||{x:0}).x-(state.positions[b.id]||{x:0}).x;}),output=state.draft.nodes.find(function(node){return node.kind==="output";});
+          state.draft.nodes=ordered.concat(output?[output]:[]);var edges=[];if(ordered.length){edges.push({id:"entry",from:"$entry",to:ordered[0].id});for(var i=0;i<ordered.length-1;i++)edges.push({id:"edge-"+(i+1),from:ordered[i].id,to:ordered[i+1].id,when:ordered[i].kind==="approval"?{outcome:"approved"}:undefined});if(output)edges.push({id:"finish",from:ordered[ordered.length-1].id,to:output.id,when:ordered[ordered.length-1].kind==="approval"?{outcome:"approved"}:undefined});}
+          state.draft.edges=edges;state.draft.bindings=[];if(ordered.length){var capabilityNodes=ordered.filter(function(node){return node.kind==="cf-call";});if(capabilityNodes.length){state.draft.bindings.push({id:"initial-input",from:"$user.input",to:capabilityNodes[0].id+".input"});for(var j=1;j<capabilityNodes.length;j++)state.draft.bindings.push({id:"binding-"+j,from:capabilityNodes[j-1].id+".output",to:capabilityNodes[j].id+".input"});if(output)state.draft.bindings.push({id:"result",from:capabilityNodes[capabilityNodes.length-1].id+".output",to:output.id+".input"});}}
+        }
+        function nodeClass(node){var classes=["flow-node"];if(state.selectedNodeId===node.id)classes.push("selected");if(state.nodeStatuses[node.id])classes.push(state.nodeStatuses[node.id]);return classes.join(" ");}
+        function renderCanvas() {
+          if(!state.draft){els.nodesLayer.innerHTML="";els.routeMap.innerHTML="";els.entryMarker.hidden=true;els.canvasEmpty.hidden=false;renderLibrary();return;}
+          els.canvasNote.textContent=hasComplexControl()?"拖动只调整位置；分支线路在右侧 Flow 详情中编辑":"拖动节点调整位置；横向顺序会重建线路与自动 Bindings";
+          els.canvasEmpty.hidden=state.draft.nodes.length>0;els.entryMarker.hidden=!state.draft.nodes.length;
+          els.nodesLayer.innerHTML=state.draft.nodes.map(function(node,index){var position=state.positions[node.id]||{x:150+index*210,y:258};state.positions[node.id]=position;
+            var kindShort=node.kind==="cf-call"?"CF":node.kind==="output"?"OUT":node.kind==="approval"?"OK":"FX",kindLabel=node.kind==="cf-call"?"CF NODE":node.kind.toUpperCase();
+            var status=state.nodeStatuses[node.id]==="running"?"正在运行":state.nodeStatuses[node.id]==="passed"?"测试通过":state.nodeStatuses[node.id]==="failed"?"运行失败":"等待测试";
+            if(state.nodeStatuses[node.id]==="blocked")status="上游阻塞";
+            return'<button class="'+nodeClass(node)+'" type="button" data-node-id="'+escapeHtml(node.id)+'" aria-label="'+escapeHtml(nodeName(node))+'。Alt 加左右方向键可重排节点" style="left:'+position.x+"px;top:"+position.y+'px"><span class="port in"></span><span class="port out"></span><span class="node-head"><span class="node-kind '+escapeHtml(node.kind)+'">'+kindShort+"</span><span>"+kindLabel+'</span><span class="node-order">'+String(index+1).padStart(2,"0")+'</span></span><span class="node-body"><span class="node-title">'+escapeHtml(nodeName(node))+'</span><span class="node-subtitle">'+escapeHtml(nodeDescription(node))+'</span></span><span class="node-foot"><span class="node-status-lamp"></span><span>'+status+"</span></span></button>";
+          }).join("");
+          els.nodesLayer.querySelectorAll(".flow-node").forEach(function(nodeEl){nodeEl.addEventListener("pointerdown",startNodeDrag);nodeEl.addEventListener("click",function(event){if(state.drag&&state.drag.moved)return;event.stopPropagation();selectNode(nodeEl.getAttribute("data-node-id"));});nodeEl.addEventListener("keydown",function(event){if(event.altKey&&(event.key==="ArrowLeft"||event.key==="ArrowRight")){event.preventDefault();reorderNodeKeyboard(nodeEl.getAttribute("data-node-id"),event.key==="ArrowLeft"?-1:1);}});});
+          els.flowCanvas.style.setProperty("--inverse-zoom",String(1/state.zoom));els.flowCanvas.style.width=canvasPlaneWidth()+"px";els.flowCanvas.style.transform="scale("+state.zoom+")";els.zoomLabel.textContent=Math.round(state.zoom*100)+"%";renderLibrary();window.requestAnimationFrame(drawEdges);
+        }
+        function drawEdges() {
+          if(!state.draft||state.view!=="canvas")return;var lines=[];
+          state.draft.edges.forEach(function(edge){var target=els.nodesLayer.querySelector('[data-node-id="'+CSS.escape(edge.to)+'"]');if(!target)return;var tx=target.offsetLeft,ty=target.offsetTop+target.offsetHeight/2,sx,sy;
+            if(edge.from==="$entry"){sx=els.entryMarker.offsetLeft+els.entryMarker.offsetWidth;sy=els.entryMarker.offsetTop+els.entryMarker.offsetHeight/2;}else{var source=els.nodesLayer.querySelector('[data-node-id="'+CSS.escape(edge.from)+'"]');if(!source)return;sx=source.offsetLeft+source.offsetWidth;sy=source.offsetTop+source.offsetHeight/2;}
+            var siblings=state.draft.edges.filter(function(item){return item.from===edge.from&&item.to===edge.to;}),siblingIndex=siblings.indexOf(edge),bend=(siblingIndex-(siblings.length-1)/2)*56,delta=Math.max(48,Math.abs(tx-sx)*.42),d="M "+sx+" "+sy+" C "+(sx+delta)+" "+(sy+bend)+", "+(tx-delta)+" "+(ty+bend)+", "+tx+" "+ty,sourceStatus=edge.from==="$entry"?null:state.nodeStatuses[edge.from],targetStatus=state.nodeStatuses[edge.to],statusClass=targetStatus==="running"?" active":(sourceStatus==="passed"&&targetStatus==="passed"?" passed":"");
+            lines.push('<path class="route-edge-under" d="'+d+'"></path><path class="route-edge'+statusClass+'" d="'+d+'"></path>');
+          });els.routeMap.setAttribute("viewBox","0 0 "+canvasPlaneWidth()+" 680");els.routeMap.innerHTML=lines.join("");
+        }
+        function startNodeDrag(event){if(event.button!==0)return;var target=event.currentTarget,nodeId=target.getAttribute("data-node-id");state.drag={nodeId:nodeId,startX:event.clientX,startY:event.clientY,originX:target.offsetLeft,originY:target.offsetTop,moved:false,pointerId:event.pointerId};target.setPointerCapture(event.pointerId);target.addEventListener("pointermove",moveNodeDrag);target.addEventListener("pointerup",endNodeDrag,{once:true});}
+        function moveNodeDrag(event){if(!state.drag)return;var dx=(event.clientX-state.drag.startX)/state.zoom,dy=(event.clientY-state.drag.startY)/state.zoom;if(Math.abs(dx)+Math.abs(dy)>4)state.drag.moved=true;var x=Math.max(120,Math.min(canvasPlaneWidth()-210,state.drag.originX+dx)),y=Math.max(80,Math.min(520,state.drag.originY+dy));state.positions[state.drag.nodeId]={x:Math.round(x),y:Math.round(y)};event.currentTarget.style.left=x+"px";event.currentTarget.style.top=y+"px";drawEdges();}
+        function endNodeDrag(event){var moved=state.drag&&state.drag.moved;event.currentTarget.removeEventListener("pointermove",moveNodeDrag);if(moved){if(!hasComplexControl())rebuildSequentialEdges();markDirty();renderCanvas();}window.setTimeout(function(){state.drag=null;},0);}
+        function reorderNodeKeyboard(id,direction){if(!state.draft)return;if(hasComplexControl()){toast("复杂线路保持连接","含条件分支的 Flow 只移动画布位置；请在 Flow 详情的控制连接中改线。","warning");return;}var ordered=state.draft.nodes.filter(function(node){return node.kind!=="output";}).sort(function(a,b){return(state.positions[a.id]||{x:0}).x-(state.positions[b.id]||{x:0}).x;}),index=ordered.findIndex(function(node){return node.id===id;}),targetIndex=index+direction;if(index<0||targetIndex<0||targetIndex>=ordered.length){toast("无法继续移动","该节点已经位于线路边界。","warning");return;}var currentPosition=state.positions[ordered[index].id],targetPosition=state.positions[ordered[targetIndex].id];state.positions[ordered[index].id]={x:targetPosition.x,y:currentPosition.y};state.positions[ordered[targetIndex].id]={x:currentPosition.x,y:targetPosition.y};rebuildSequentialEdges();markDirty();renderCanvas();window.requestAnimationFrame(function(){var target=els.nodesLayer.querySelector('[data-node-id="'+CSS.escape(id)+'"]');if(target)target.focus();});toast("线路顺序已更新",nodeName(ordered[index])+" 已向"+(direction<0?"前":"后")+"移动，自动 Bindings 已同步重建。","success");}
+        function selectNode(id){state.selectedNodeId=id;renderCanvas();renderInspector();switchInspectorPanel("details");openInspector();}
+        function selectedNode(){return state.draft&&state.draft.nodes.find(function(node){return node.id===state.selectedNodeId;});}
+        function renderInspector(){if(state.view==="settings"){renderSettingsInspector();return;}var node=selectedNode();if(node){els.inspectorTitle.textContent=nodeName(node);els.inspectorSubtitle.textContent=node.kind==="cf-call"?"CF 详情与执行配置":"Flow 控制节点";}else{els.inspectorTitle.textContent="Flow 详情";els.inspectorSubtitle.textContent="草案配置与运行门禁";}renderDetailsPanel(node);renderVersionsPanel();renderActivityPanel();}
+        function renderSettingsInspector(){var runtime=state.runtimes.find(function(item){return item.id===state.settingsRuntimeId;})||currentRuntime();els.inspectorTitle.textContent="配置证据";els.inspectorSubtitle.textContent="Runtime 边界与版本事实";if(!runtime){els.detailsPanel.innerHTML='<div class="empty-list">选择 Runtime 后显示执行边界。</div>';els.versionsPanel.innerHTML="";els.activityPanel.innerHTML="";return;}var traits=runtime.traits||{},health=runtime.health||{};els.detailsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>'+escapeHtml(runtime.name)+'</span><code>v'+escapeHtml(runtime.profileVersion)+'</code></h3><div class="property-row"><span>Backend</span><strong>'+escapeHtml(traits.backendKind||runtime.backend)+'</strong></div><div class="property-row"><span>Session</span><strong>'+escapeHtml(traits.sessionMode||"unknown")+'</strong></div><div class="property-row"><span>取消</span><strong>'+escapeHtml(traits.cancellation||"unsupported")+'</strong></div><div class="property-row"><span>文件边界</span><strong>'+escapeHtml(traits.filesystemIsolation||"host-permissions")+'</strong></div><div class="property-row"><span>网络边界</span><strong>'+escapeHtml(traits.networkIsolation||"unenforced")+'</strong></div><div class="property-row"><span>Usage</span><strong>'+escapeHtml(traits.tokenAccounting||"unavailable")+'</strong></div></section><section class="inspector-section"><div class="test-gate '+(health.status==="available"?"passed":health.status==="unavailable"?"failed":"")+'"><div class="test-gate-head"><span class="test-lamp"></span><div><strong>'+escapeHtml(health.status==="available"?"Runtime 当前可用":health.status==="unavailable"?"Runtime 当前不可用":"Runtime 尚未探测")+'</strong><p>'+escapeHtml(health.version||health.error||"在 Profile 编辑区测试连接。")+'</p></div></div></div></section>';var history=runtime.history&&runtime.history.length?runtime.history:[runtime];els.versionsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>Profile Versions</span><span>'+history.length+'</span></h3><div class="version-list">'+history.map(function(profile){return'<div class="version-item '+(profile.profileVersion===runtime.profileVersion?'current':'')+'"><strong>v'+escapeHtml(profile.profileVersion)+'</strong><span>'+escapeHtml(profile.name)+' · '+escapeHtml(profile.adapterBuild||"adapter")+'</span><span>'+escapeHtml(profile.createdAt||"")+'</span></div>';}).join("")+'</div></section>';els.activityPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>健康探测</span></h3><div class="activity-list"><div class="activity-item '+(health.status==="available"?"success":"error")+'"><strong>'+escapeHtml(health.status||"unknown")+'</strong><span>'+escapeHtml(health.checkedAt||"尚未执行")+'</span><span>'+(health.latencyMs==null?"未上报":escapeHtml(health.latencyMs)+" ms")+'</span></div></div></section>';}
+        function field(label,id,value,type,help){var control=type==="textarea"?'<textarea id="'+id+'">'+escapeHtml(value)+"</textarea>":'<input id="'+id+'" value="'+escapeHtml(value)+'" />';return'<div class="field"><label for="'+id+'">'+label+"</label>"+control+(help?'<span class="field-help">'+help+"</span>":"")+"</div>";}
+        function selectMarkup(items,current){var found=items.some(function(item){return item.value===current;}),all=found?items:[{value:current,label:current+" · 当前引用"}].concat(items);return all.map(function(item){return'<option value="'+escapeHtml(item.value)+'"'+(item.value===current?' selected':'')+'>'+escapeHtml(item.label)+'</option>';}).join("");}
+        function bindingSourceItems(){var items=[{value:"$user.input",label:"Flow 输入"}];(state.draft&&state.draft.nodes||[]).forEach(function(node){if(node.kind!=="output")items.push({value:node.id+".output",label:nodeName(node)+" / 输出"});});return items;}
+        function bindingTargetItems(){return(state.draft&&state.draft.nodes||[]).map(function(node){return{value:node.id+".input",label:nodeName(node)+" / 输入"};});}
+        function flowBindingsEditor(){var bindings=state.draft&&state.draft.bindings||[];return'<section class="inspector-section"><h3 class="section-title"><span>数据 Bindings</span><button class="button" id="addFlowBindingButton" type="button">添加</button></h3><div id="flowBindingsList">'+(bindings.length?bindings.map(function(binding,index){return'<div class="flow-binding-row" data-flow-binding="'+index+'"><select data-binding-key="from" aria-label="数据来源">'+selectMarkup(bindingSourceItems(),binding.from)+'</select><span class="binding-arrow" aria-hidden="true">→</span><select data-binding-key="to" aria-label="数据目标">'+selectMarkup(bindingTargetItems(),binding.to)+'</select><button class="icon-button danger" data-remove-flow-binding="'+index+'" type="button" aria-label="删除 Binding">'+icon("i-trash")+'</button></div>';}).join(""):'<div class="binding-empty">还没有数据传递。添加后选择“来源 → 目标”，无需编写内部索引表达式。</div>')+'</div><span class="field-help">这里只允许 Flow 输入或节点正式输出，不能选择 agent 原始文本、tool transcript 或 secret。</span></section>';}
+        function edgeFromItems(){var items=[{value:"$entry",label:"Flow 入口"}];(state.draft&&state.draft.nodes||[]).forEach(function(node){if(node.kind!=="output")items.push({value:node.id,label:nodeName(node)});});return items;}
+        function edgeToItems(){return(state.draft&&state.draft.nodes||[]).map(function(node){return{value:node.id,label:nodeName(node)};});}
+        function edgeOutcomeItems(){return[{value:"",label:"完成后继续"},{value:"failed",label:"失败线路"},{value:"branch-case",label:"分支结果"},{value:"approved",label:"批准线路"},{value:"rejected",label:"拒绝线路"}];}
+        function flowEdgesEditor(){var edges=state.draft&&state.draft.edges||[];return'<details class="advanced-editor"><summary>控制连接 · '+edges.length+' 条</summary><div><div class="section-title"><span>从节点到节点</span><button class="button" id="addFlowEdgeButton" type="button">添加连接</button></div>'+(edges.length?edges.map(function(edge,index){var outcome=edge.when&&edge.when.outcome||"";return'<div class="edge-editor-row" data-flow-edge="'+index+'"><select data-edge-key="from" aria-label="连接来源">'+selectMarkup(edgeFromItems(),edge.from)+'</select><span class="binding-arrow" aria-hidden="true">→</span><select data-edge-key="to" aria-label="连接目标">'+selectMarkup(edgeToItems(),edge.to)+'</select><select data-edge-key="outcome" aria-label="连接条件">'+selectMarkup(edgeOutcomeItems(),outcome)+'</select><input class="edge-case-input" data-edge-key="caseId" aria-label="分支结果" placeholder="case ID" value="'+escapeHtml(edge.when&&edge.when.caseId||"")+'"'+(outcome!=="branch-case"?' hidden':'')+' /><button class="icon-button danger" data-remove-flow-edge="'+index+'" type="button" aria-label="删除控制连接">'+icon("i-trash")+'</button></div>';}).join(""):'<div class="binding-empty">还没有控制连接。Flow 至少需要一条入口连接。</div>')+'<span class="field-help">控制连接决定何时执行；Binding 决定传递什么数据，两者独立保存。</span></div></details>';}
+        function resourceRequirementsEditor(){var resources=state.draft&&state.draft.resources||[];return'<section class="inspector-section"><h3 class="section-title"><span>资源要求</span><button class="button" id="addFlowResourceButton" type="button">添加</button></h3><div id="flowResourceList">'+(resources.length?resources.map(function(resource,index){return'<div class="resource-requirement-row" data-flow-resource="'+index+'"><input data-resource-key="id" aria-label="Requirement ID" placeholder="repo" value="'+escapeHtml(resource.id)+'"/><input data-resource-key="type" aria-label="资源类型" placeholder="repository" value="'+escapeHtml(resource.type)+'"/><select data-resource-key="access" aria-label="访问级别"><option value="read"'+(resource.access==="read"?" selected":"")+'>只读</option><option value="write"'+(resource.access==="write"?" selected":"")+'>读写</option><option value="admin"'+(resource.access==="admin"?" selected":"")+'>管理</option></select><select data-resource-key="required" aria-label="是否必需"><option value="true"'+(resource.required!==false?" selected":"")+'>必需</option><option value="false"'+(resource.required===false?" selected":"")+'>可选</option></select><button class="icon-button danger" data-remove-flow-resource="'+index+'" type="button" aria-label="删除资源要求">'+icon("i-trash")+'</button></div>';}).join(""):'<div class="binding-empty">当前 Flow 不要求外部资源。</div>')+'</div><span class="field-help">测试与运行时会使用默认 Resource Profile 逐项解析；类型不匹配会拒绝启动。</span></section>';}
+        function flowValidationIssues(){if(!state.draft)return["还没有 Flow 草案。"];var draft=state.draft,issues=[],ids={},edgeIds={},bindingIds={},resourceIds={};if(!String(draft.name||"").trim())issues.push("Flow 名称不能为空。");if(!String(draft.objective||"").trim())issues.push("Flow 目标不能为空。");(draft.nodes||[]).forEach(function(node){if(!String(node.id||"").trim())issues.push("存在没有 ID 的节点。");else if(ids[node.id])issues.push("节点 ID 重复："+node.id);else ids[node.id]=node;if(node.kind==="cf-call"){var hasDraft=Boolean(state.generatedCfDrafts[node.cfRef&&node.cfRef.cfId]),hasVersion=state.cfs.some(function(cf){return node.cfRef&&cf.cfId===node.cfRef.cfId&&cf.version===node.cfRef.version;});if(!hasDraft&&!hasVersion)issues.push("CF 引用不可用："+(node.cfRef&&node.cfRef.cfId||node.id));var runtime=state.runtimes.find(function(item){return item.id===(node.executor||state.runtime);});if(!runtime||!runtime.enabled||runtimeState(runtime)!=="available")issues.push("节点 “"+nodeName(node)+"” 的 Runtime 不可用。");}});if(!(draft.nodes||[]).some(function(node){return node.kind==="output";}))issues.push("Flow 缺少输出节点。");(draft.edges||[]).forEach(function(edge){if(!edge.id||edgeIds[edge.id])issues.push("控制连接 ID 为空或重复："+(edge.id||"未命名"));edgeIds[edge.id]=true;if(edge.from!=="$entry"&&!ids[edge.from])issues.push("控制连接来源不存在："+edge.from);if(!ids[edge.to])issues.push("控制连接目标不存在："+edge.to);if(edge.from===edge.to)issues.push("控制连接不能指向自身："+edge.to);});if(!(draft.edges||[]).some(function(edge){return edge.from==="$entry";}))issues.push("Flow 缺少入口连接。");var reached={},queue=(draft.edges||[]).filter(function(edge){return edge.from==="$entry"&&ids[edge.to];}).map(function(edge){return edge.to;});while(queue.length){var current=queue.shift();if(reached[current])continue;reached[current]=true;(draft.edges||[]).filter(function(edge){return edge.from===current&&ids[edge.to];}).forEach(function(edge){queue.push(edge.to);});}(draft.nodes||[]).forEach(function(node){if(!reached[node.id])issues.push("节点未接入入口线路："+nodeName(node));if(node.kind==="branch"){(node.cases||[]).forEach(function(caseId){if(!(draft.edges||[]).some(function(edge){return edge.from===node.id&&edge.when&&edge.when.outcome==="branch-case"&&edge.when.caseId===caseId;}))issues.push("分支 “"+nodeName(node)+"” 缺少结果线路："+caseId);});}});(draft.bindings||[]).forEach(function(binding){if(!binding.id||bindingIds[binding.id])issues.push("Binding ID 为空或重复："+(binding.id||"未命名"));bindingIds[binding.id]=true;var from=String(binding.from||"").replace(/^\$/,""),to=String(binding.to||"");if(String(binding.from||"").indexOf("$user.input")!==0&&!ids[from.split(".")[0]])issues.push("Binding 来源不存在："+binding.from);if(!ids[to.split(".")[0]])issues.push("Binding 目标不存在："+binding.to);});var profile=state.resources.find(function(item){return state.settings&&item.id===state.settings.defaultResourceProfileId;});(draft.resources||[]).forEach(function(resource){if(!resource.id||resourceIds[resource.id])issues.push("资源 Requirement ID 为空或重复："+(resource.id||"未命名"));resourceIds[resource.id]=true;if(resource.required){var binding=profile&&(profile.bindings||[]).find(function(item){return item.requirementId===resource.id;});if(!binding)issues.push("必需资源未由默认 Resource Profile 绑定："+resource.id);else if(binding.type!==resource.type)issues.push("资源类型不匹配："+resource.id);}});return issues.filter(function(issue,index,all){return all.indexOf(issue)===index;});}
+        function flowIssuesMarkup(issues){if(!issues.length)return'<section class="inspector-section"><h3 class="section-title"><span>结构检查</span><span>已通过</span></h3><div class="test-gate passed"><div class="test-gate-head"><span class="test-lamp"></span><div><strong>没有发现阻断项</strong><p>仍需运行测试来验证真实执行结果。</p></div></div></div></section>';return'<section class="inspector-section"><h3 class="section-title"><span>待修复问题</span><span>'+issues.length+'</span></h3><ul class="issue-list">'+issues.map(function(issue){return'<li>'+escapeHtml(issue)+'</li>';}).join("")+'</ul></section>';}
+        function renderDetailsPanel(node) {
+          if(!state.draft){els.detailsPanel.innerHTML='<div class="empty-list">先通过对话创建 Flow，详情与门禁会显示在这里。</div>';return;}
+          if(node&&node.kind==="cf-call"){var local=state.generatedCfDrafts[node.cfRef.cfId],published=state.cfs.find(function(cf){return cf.cfId===node.cfRef.cfId&&cf.version===node.cfRef.version;}),draft=local||(published&&published.draft)||{name:node.cfRef.cfId,does:"",defaultExecutor:node.executor||"echo",input:"",output:""};
+            els.detailsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>CF 节点</span><code>'+escapeHtml(node.id)+"</code></h3>"+field("节点名称","nodeNameInput",draft.name||"","input")+field("能力目标","nodeDoesInput",draft.does||"","textarea","修改候选 CF 源；发布版本本身不会被改写。")+'<div class="inline-fields"><div class="field"><label for="nodeExecutor">执行器</label><select id="nodeExecutor">'+executorOptions(node.executor||draft.defaultExecutor||"echo")+'</select></div><div class="field"><label for="nodeErrorPolicy">失败策略</label><select id="nodeErrorPolicy"><option value="stop">停止 Flow</option><option value="retry"'+(node.onError&&node.onError.action==="retry"?" selected":"")+'>重试 2 次</option></select></div></div></section><section class="inspector-section"><h3 class="section-title"><span>契约与版本</span></h3><div class="property-row"><span>CF ID</span><code>'+escapeHtml(node.cfRef.cfId)+'</code></div><div class="property-row"><span>引用版本</span><strong>'+escapeHtml(node.cfRef.version)+'</strong></div><div class="property-row"><span>状态</span><strong>'+(local?"候选草案":"已发布")+'</strong></div></section><div class="inspector-actions"><button class="button danger" id="deleteNodeButton" type="button">'+icon("i-trash")+"<span>删除节点</span></button></div>";bindNodeInspector(node,draft,Boolean(local));
+          }else if(node){var controlFields=node.kind==="output"?field("输出 ID","outputIdInput",node.outputId||"result","input"):node.kind==="approval"?field("审批策略","approvalPolicyInput",node.policyRef||"manual","input","批准和拒绝必须通过显式控制边推进。"):node.kind==="branch"?field("条件字段","branchConditionInput",node.cond&&node.cond.$get||"route","input","读取该节点输入中的字段，并匹配下面的有限结果。")+field("分支结果","branchCasesInput",(node.cases||[]).join(", "),"input","用逗号分隔；每个结果都必须有一条 branch-case 连接。"):node.kind==="join"?'<div class="field"><label for="joinModeInput">汇合策略</label><select id="joinModeInput"><option value="all"'+(node.mode==="all"?' selected':'')+'>全部完成</option><option value="any"'+(node.mode==="any"?' selected':'')+'>任一完成</option></select></div><div class="field"><label for="joinFailureInput">上游失败</label><select id="joinFailureInput"><option value="fail"'+(node.onUpstreamFailure!=="continue-eligible"?' selected':'')+'>停止汇合</option><option value="continue-eligible"'+(node.onUpstreamFailure==="continue-eligible"?' selected':'')+'>继续可用线路</option></select></div>':"";els.detailsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>控制节点</span><code>'+escapeHtml(node.id)+"</code></h3>"+field("节点名称","controlNodeId",node.id,"input")+'<div class="property-row"><span>类型</span><strong>'+escapeHtml(node.kind)+"</strong></div>"+controlFields+'</section>'+(node.kind!=="output"?'<div class="inspector-actions"><button class="button danger" id="deleteNodeButton" type="button">'+icon("i-trash")+"<span>删除节点</span></button></div>":'<div class="test-gate"><div class="test-gate-head"><span class="test-lamp"></span><div><strong>Flow 的明确终点</strong><p>输出节点不可删除，但可修改输出 ID。</p></div></div></div>');bindControlInspector(node);
+          }else{var issues=flowValidationIssues(),gateClass=state.testState==="running"?"running":state.testState==="passed"||state.testState==="published"?"passed":state.testState==="failed"?"failed":"",gateText=state.testState==="published"?"当前版本已发布":state.testState==="passed"?"测试已通过，可以发布":state.testState==="running"?"测试运行中，正在检查线路":state.testState==="failed"?"测试失败，请修复后重试":state.testState==="stale"?"草案已变更，需要重新测试":"尚未测试";
+            els.detailsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>Flow 定义</span><code>r'+escapeHtml(state.draft.revision)+"</code></h3>"+field("Flow 名称","flowNameInput",state.draft.name||"","input")+field("目标","flowObjectiveInput",state.draft.objective||"","textarea")+'<div class="inline-fields"><div class="field"><label for="flowConcurrency">最大并发</label><input id="flowConcurrency" type="number" min="1" max="16" value="'+escapeHtml((state.draft.limits&&state.draft.limits.maxConcurrency)||2)+'"/></div><div class="field"><label for="flowDispatches">节点上限</label><input id="flowDispatches" type="number" min="1" max="256" value="'+escapeHtml((state.draft.limits&&state.draft.limits.maxNodeDispatches)||32)+'"/></div></div>'+flowEdgesEditor()+'</section>'+flowBindingsEditor()+resourceRequirementsEditor()+flowIssuesMarkup(issues)+'<section class="inspector-section"><h3 class="section-title"><span>发布门禁</span></h3><div class="test-gate '+gateClass+'"><div class="test-gate-head"><span class="test-lamp"></span><div><strong>'+gateText+'</strong><p>每次修改节点、顺序或配置后测试结果都会失效。</p></div></div></div><div class="inspector-actions"><button class="button signal" id="inspectorTestButton" type="button"'+(state.testState==="running"?" disabled":"")+">"+icon("i-play")+'<span>测试 Flow</span></button></div></section><section class="inspector-section"><h3 class="section-title"><span>结构摘要</span></h3><div class="property-row"><span>节点</span><strong>'+state.draft.nodes.length+'</strong></div><div class="property-row"><span>连接</span><strong>'+state.draft.edges.length+'</strong></div><div class="property-row"><span>Bindings</span><strong>'+state.draft.bindings.length+"</strong></div></section>";bindFlowInspector();}
+        }
+        function bindInput(id,handler,eventName){var input=document.getElementById(id);if(input)input.addEventListener(eventName||"change",handler);}
+        function bindNodeInspector(node,draft,local) {
+          bindInput("nodeNameInput",function(event){if(local)state.generatedCfDrafts[node.cfRef.cfId].name=event.target.value;else node.id=slug(event.target.value)||node.id;markDirty();renderCanvas();},"input");
+          bindInput("nodeDoesInput",function(event){if(!local){var clone=Object.assign({},draft,{cfId:draft.cfId+"-fork-"+Date.now().toString(36),revision:1});state.generatedCfDrafts[clone.cfId]=clone;node.cfRef={cfId:clone.cfId,version:"1.0.0"};local=true;}state.generatedCfDrafts[node.cfRef.cfId].does=event.target.value;markDirty();renderCanvas();},"input");
+          bindInput("nodeExecutor",function(event){node.executor=event.target.value;if(state.generatedCfDrafts[node.cfRef.cfId])state.generatedCfDrafts[node.cfRef.cfId].defaultExecutor=event.target.value;markDirty();});
+          bindInput("nodeErrorPolicy",function(event){node.onError=event.target.value==="retry"?{action:"retry",maxAttempts:2}:{action:"stop"};markDirty();});
+          var del=document.getElementById("deleteNodeButton");if(del)del.addEventListener("click",function(){deleteNode(node.id);});
+        }
+        function bindControlInspector(node){bindInput("controlNodeId",function(event){var old=node.id,next=slug(event.target.value)||old;if(state.draft.nodes.some(function(item){return item!==node&&item.id===next;}))return;node.id=next;state.positions[next]=state.positions[old];delete state.positions[old];state.selectedNodeId=next;if(hasComplexControl()){state.draft.edges.forEach(function(edge){if(edge.from===old)edge.from=next;if(edge.to===old)edge.to=next;});state.draft.bindings.forEach(function(binding){binding.from=replaceNodePrefix(binding.from,old,next);binding.to=replaceNodePrefix(binding.to,old,next);});}else rebuildSequentialEdges();markDirty();renderCanvas();});bindInput("outputIdInput",function(event){node.outputId=event.target.value;markDirty();renderCanvas();});bindInput("approvalPolicyInput",function(event){node.policyRef=event.target.value.trim()||"manual";markDirty();});bindInput("branchConditionInput",function(event){node.cond={$get:event.target.value.trim()||"route"};markDirty();});bindInput("branchCasesInput",function(event){var cases=splitList(event.target.value,",").slice(0,8);if(cases.length<2){toast("至少需要两个分支结果","例如 yes, no。当前连接未修改。","warning");return;}node.cases=cases;state.draft.edges.filter(function(edge){return edge.from===node.id&&edge.when&&edge.when.outcome==="branch-case";}).forEach(function(edge,index){edge.when.caseId=cases[index]||edge.when.caseId;});markDirty();renderCanvas();});bindInput("joinModeInput",function(event){node.mode=event.target.value;markDirty();});bindInput("joinFailureInput",function(event){node.onUpstreamFailure=event.target.value;markDirty();});var del=document.getElementById("deleteNodeButton");if(del)del.addEventListener("click",function(){deleteNode(node.id);});}
+        function bindFlowInspector(){
+          bindInput("flowNameInput",function(event){state.draft.name=event.target.value;markDirty();renderStatus();renderFlowList();},"input");
+          bindInput("flowObjectiveInput",function(event){state.draft.objective=event.target.value;markDirty();},"input");
+          bindInput("flowConcurrency",function(event){state.draft.limits=state.draft.limits||{};state.draft.limits.maxConcurrency=Math.max(1,Number(event.target.value)||1);markDirty();});
+          bindInput("flowDispatches",function(event){state.draft.limits=state.draft.limits||{};state.draft.limits.maxNodeDispatches=Math.max(1,Number(event.target.value)||1);markDirty();});
+          var test=document.getElementById("inspectorTestButton");if(test)test.addEventListener("click",testFlow);
+          var addBinding=document.getElementById("addFlowBindingButton");if(addBinding)addBinding.addEventListener("click",function(){var sources=bindingSourceItems(),targets=bindingTargetItems(),id="binding-"+(state.draft.bindings.length+1);while(state.draft.bindings.some(function(item){return item.id===id;}))id="binding-"+Date.now().toString(36);state.draft.bindings.push({id:id,from:sources[0].value,to:targets[0].value});markDirty();renderInspector();});
+          els.detailsPanel.querySelectorAll("[data-flow-binding]").forEach(function(row){var index=Number(row.getAttribute("data-flow-binding"));row.querySelectorAll("[data-binding-key]").forEach(function(input){input.addEventListener("change",function(){state.draft.bindings[index][input.getAttribute("data-binding-key")]=input.value;markDirty();});});});
+          els.detailsPanel.querySelectorAll("[data-remove-flow-binding]").forEach(function(button){button.addEventListener("click",function(){state.draft.bindings.splice(Number(button.getAttribute("data-remove-flow-binding")),1);markDirty();renderInspector();});});
+          var addEdge=document.getElementById("addFlowEdgeButton");if(addEdge)addEdge.addEventListener("click",function(){var from=edgeFromItems()[0].value,to=edgeToItems()[0].value,id="edge-"+Date.now().toString(36);state.draft.edges.push({id:id,from:from,to:to});markDirty();renderInspector();});
+          els.detailsPanel.querySelectorAll("[data-flow-edge]").forEach(function(row){var index=Number(row.getAttribute("data-flow-edge"));row.querySelectorAll("[data-edge-key]").forEach(function(input){input.addEventListener("change",function(){var edge=state.draft.edges[index],key=input.getAttribute("data-edge-key");if(key==="from"||key==="to")edge[key]=input.value;else if(key==="outcome"){if(!input.value)delete edge.when;else edge.when={outcome:input.value};if(input.value==="branch-case")edge.when.caseId=(row.querySelector('[data-edge-key="caseId"]').value||"case");renderInspector();}else{edge.when=edge.when||{outcome:"branch-case"};edge.when.caseId=input.value.trim();}markDirty();drawEdges();});});});
+          els.detailsPanel.querySelectorAll("[data-remove-flow-edge]").forEach(function(button){button.addEventListener("click",function(){state.draft.edges.splice(Number(button.getAttribute("data-remove-flow-edge")),1);markDirty();renderInspector();renderCanvas();});});
+          var add=document.getElementById("addFlowResourceButton");if(add)add.addEventListener("click",function(){state.draft.resources=state.draft.resources||[];var index=state.draft.resources.length+1,id="resource-"+index;while(state.draft.resources.some(function(item){return item.id===id;}))id="resource-"+(++index);state.draft.resources.push({id:id,type:"repository",access:"read",required:true});markDirty();renderInspector();});
+          els.detailsPanel.querySelectorAll("[data-flow-resource]").forEach(function(row){var index=Number(row.getAttribute("data-flow-resource"));row.querySelectorAll("[data-resource-key]").forEach(function(input){input.addEventListener("change",function(){var key=input.getAttribute("data-resource-key"),value=input.value;if(key==="required")value=value==="true";state.draft.resources[index][key]=value;markDirty();});});});
+          els.detailsPanel.querySelectorAll("[data-remove-flow-resource]").forEach(function(button){button.addEventListener("click",function(){state.draft.resources.splice(Number(button.getAttribute("data-remove-flow-resource")),1);markDirty();renderInspector();});});
+        }
+        function deleteNode(id){if(!state.draft)return;var node=state.draft.nodes.find(function(item){return item.id===id;});if(!node)return;if(node.kind==="output"){toast("输出节点必须保留","每条 Flow 必须有明确终点；可以修改输出 ID，但不能删除终点。","warning");return;}var complex=hasComplexControl();state.draft.nodes=state.draft.nodes.filter(function(item){return item.id!==id;});delete state.positions[id];state.selectedNodeId=null;if(complex){state.draft.edges=state.draft.edges.filter(function(edge){return edge.from!==id&&edge.to!==id;});state.draft.bindings=state.draft.bindings.filter(function(binding){return!String(binding.from).replace(/^\$/," ").trim().startsWith(id+".")&&!String(binding.to).startsWith(id+".");});}else rebuildSequentialEdges();markDirty();renderAll();}
+        function renderVersionsPanel(){var relevant=state.draft?state.plans.filter(function(plan){return plan.flowId===state.draft.flowId;}):state.plans;if(!relevant.length){els.versionsPanel.innerHTML='<div class="empty-list">当前 Flow 还没有版本。测试通过并发布后，会在这里形成不可变记录。</div>';return;}els.versionsPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>Flow Versions</span><span>'+relevant.length+'</span></h3><div class="version-list">'+relevant.slice().reverse().map(function(plan,index){return'<div class="version-item '+(index===0?"current":"")+'"><strong>v'+escapeHtml(plan.flowVersion)+"</strong><span>"+escapeHtml(plan.objective)+'</span><span class="mono">'+escapeHtml(plan.planHash.slice(0,14))+"…</span></div>";}).join("")+"</div></section>";}
+        function ledgerDataSummary(data){if(data==null)return"";try{var value=JSON.stringify(data);return value.length>420?value.slice(0,420)+"…":value;}catch(_){return String(data);}}
+        function runLedgerMarkup(){if(state.runDetailLoading)return'<div class="run-ledger" role="status">正在读取 Ledger…</div>';var run=state.runDetail;if(!run)return"";var events=run.events||[];return'<div class="run-ledger"><div class="run-ledger-head"><div><strong>Run Ledger · '+escapeHtml(run.status)+'</strong><span>'+escapeHtml(run.id)+'</span><span>'+escapeHtml(run.created_at||"")+' → '+escapeHtml(run.updated_at||"")+'</span></div><span>'+events.length+' events</span></div><div class="ledger-events">'+events.map(function(event){var node=event.node==null?"—":String(event.node).padStart(2,"0"),summary=ledgerDataSummary(event.data);return'<div class="ledger-event"><span>#'+escapeHtml(event.seq)+'</span><div><strong>'+escapeHtml(event.type)+(event.node==null?"":" · node "+escapeHtml(node))+'</strong><small>'+escapeHtml(event.at||"")+'</small>'+(summary?'<code>'+escapeHtml(summary)+'</code>':"")+'</div></div>';}).join("")+'</div></div>';}
+        function openRunDetail(runId){if(state.runDetail&&state.runDetail.id===runId){state.runDetail=null;state.runDetailLoading=null;renderActivityPanel();return;}state.runDetail=null;state.runDetailLoading=runId;renderActivityPanel();request("/api/runs/"+encodeURIComponent(runId)).then(function(run){state.runDetail=run;state.runDetailLoading=null;renderActivityPanel();}).catch(function(error){state.runDetailLoading=null;var detail=readableError(error);setNotice("运行证据加载失败",detail,"error");toast("运行证据加载失败",detail,"error");renderActivityPanel();});}
+        function renderActivityPanel(){var flowId=state.draft&&state.draft.flowId,runItems=state.runs.filter(function(run){return flowId&&run.id!==state.lastTestRunId&&(run.flow_version_id.indexOf(flowId+"@")==0||run.id===state.liveRunId);}).slice(0,12),testClass=state.testState==="passed"?"success":state.testState==="running"?"running":state.testState==="failed"?"error":"",currentTest=state.lastTestRunId?'<button class="activity-item activity-button '+testClass+'" type="button" data-run-id="'+escapeHtml(state.lastTestRunId)+'" aria-expanded="'+String(Boolean(state.runDetail&&state.runDetail.id===state.lastTestRunId))+'"><strong>草案测试 · '+escapeHtml(state.testState)+'</strong><span class="mono">'+escapeHtml(state.lastTestRunId)+"</span></button>":"",blocked=state.blockedNodes.map(function(id){var node=state.draft&&state.draft.nodes.find(function(item){return item.id===id;});return'<div class="activity-item warning"><strong>节点阻塞 · '+escapeHtml(node?nodeName(node):id)+'</strong><span>检查上游失败或连接条件，修复后重新测试。</span></div>';}).join(""),approval=state.liveRunStatus==="waiting-approval"?'<div class="test-gate running"><div class="test-gate-head"><span class="test-lamp"></span><div><strong>运行等待人工批准</strong><p>该门禁来自已发布 Flow Version。批准后继续；拒绝后按已发布线路结束。</p></div></div><div class="inspector-actions"><button class="button primary" id="approveRunButton" type="button">批准继续</button><button class="button danger" id="rejectRunButton" type="button">拒绝</button></div></div>':state.liveRunStatus==="running"?'<div class="inspector-actions"><button class="button danger" id="cancelRunButton" type="button">'+icon("i-close")+'<span>取消当前运行</span></button></div>':"";els.activityPanel.innerHTML='<section class="inspector-section"><h3 class="section-title"><span>运行记录</span><span>'+(runItems.length+(currentTest?1:0)+state.blockedNodes.length)+'</span></h3>'+approval+'<div class="activity-list">'+blocked+currentTest+(runItems.length?runItems.map(function(run){var tone=run.status==="completed"?"success":run.status==="failed"||run.status==="cancelled"?"error":"running",expanded=Boolean(state.runDetail&&state.runDetail.id===run.id);return'<button class="activity-item activity-button '+tone+'" type="button" data-run-id="'+escapeHtml(run.id)+'" aria-expanded="'+String(expanded)+'"><strong>'+escapeHtml(run.status)+"</strong><span>"+escapeHtml(run.flow_version_id)+'</span><span class="mono">'+escapeHtml(run.id.slice(0,16))+"…</span></button>";}).join(""):(!currentTest&&!blocked?'<div class="empty-list">还没有运行记录</div>':""))+"</div>"+runLedgerMarkup()+"</section>";var approve=document.getElementById("approveRunButton"),reject=document.getElementById("rejectRunButton"),cancel=document.getElementById("cancelRunButton");if(approve)approve.addEventListener("click",function(){decideLiveRun("approved");});if(reject)reject.addEventListener("click",function(){decideLiveRun("rejected");});if(cancel)cancel.addEventListener("click",cancelLiveRun);els.activityPanel.querySelectorAll("[data-run-id]").forEach(function(button){button.addEventListener("click",function(){openRunDetail(button.getAttribute("data-run-id"));});});}
+        function switchInspectorPanel(panel,focusTab){state.activePanel=panel;document.querySelectorAll(".inspector-tab").forEach(function(tab){var selected=tab.getAttribute("data-panel")===panel;tab.setAttribute("aria-selected",String(selected));tab.tabIndex=selected?0:-1;if(selected&&focusTab)tab.focus();});els.detailsPanel.hidden=panel!=="details";els.versionsPanel.hidden=panel!=="versions";els.activityPanel.hidden=panel!=="activity";}
+        function updateNodeFromEvent(event){if(!state.draft||event.node==null)return;var node=state.draft.nodes[event.node];if(!node)return;if(event.type==="node.started")state.nodeStatuses[node.id]="running";if(event.type==="node.completed")state.nodeStatuses[node.id]="passed";if(event.type==="node.failed")state.nodeStatuses[node.id]="failed";if(event.type==="node.blocked"){state.nodeStatuses[node.id]="blocked";if(state.blockedNodes.indexOf(node.id)<0)state.blockedNodes.push(node.id);}renderCanvas();renderActivityPanel();}
+        function streamTest(runId){return new Promise(function(resolve,reject){var stream=new EventSource("/api/runs/"+encodeURIComponent(runId)+"/events"),settled=false;stream.onmessage=function(message){var event=JSON.parse(message.data);updateNodeFromEvent(event);if(event.type==="approval.requested"){toast("测试等待人工批准","测试环境将自动批准该门禁。","warning");post("/api/runs/"+encodeURIComponent(runId)+"/approvals/"+event.node,{decision:"approved"}).catch(function(error){toast("审批失败",readableError(error),"error");});}if(event.type==="run.completed"){settled=true;stream.close();resolve(event);}if(event.type==="run.failed"||event.type==="run.cancelled"){settled=true;stream.close();reject(new Error(event.data&&event.data.code?event.data.code:event.type));}};stream.onerror=function(){if(!settled){stream.close();request("/api/runs/"+encodeURIComponent(runId)).then(function(run){if(run.status==="completed")resolve(run);else reject(new Error(run.status||"TEST_STREAM_CLOSED"));}).catch(reject);}};});}
+        function streamPublishedRun(runId){return new Promise(function(resolve,reject){var stream=new EventSource("/api/runs/"+encodeURIComponent(runId)+"/events"),settled=false;stream.onmessage=function(message){var event=JSON.parse(message.data);updateNodeFromEvent(event);if(event.type==="approval.requested"){state.liveRunStatus="waiting-approval";state.waitingApprovalNode=event.node;switchInspectorPanel("activity");renderActivityPanel();renderStatus();toast("运行等待批准","请在右侧运行面板批准或拒绝。","warning");}if(event.type==="approval.approved"||event.type==="approval.rejected"){state.liveRunStatus="running";state.waitingApprovalNode=null;renderActivityPanel();renderStatus();}if(event.type==="run.completed"){settled=true;stream.close();resolve(event);}if(event.type==="run.failed"||event.type==="run.cancelled"){settled=true;stream.close();reject(new Error(event.data&&event.data.code?event.data.code:event.type));}};stream.onerror=function(){if(!settled){stream.close();request("/api/runs/"+encodeURIComponent(runId)).then(function(run){if(run.status==="completed")resolve(run);else reject(new Error(run.status||"RUN_STREAM_CLOSED"));}).catch(reject);}};});}
+        function runPublished(){var plan=latestPublishedPlan();if(!plan||state.liveRunStatus==="running"||state.liveRunStatus==="waiting-approval")return;state.liveRunStatus="running";state.nodeStatuses={};state.blockedNodes=[];switchInspectorPanel("activity");openInspector();renderAll();setBusy(els.runButton,true);post("/api/runs",{flowId:plan.flowId,flowVersion:plan.flowVersion,resourceProfileId:state.settings&&state.settings.defaultResourceProfileId,input:{objective:state.draft.objective}}).then(function(started){state.liveRunId=started.runId;toast("Flow Run 已启动",plan.flowId+" · v"+plan.flowVersion);return streamPublishedRun(started.runId);}).then(function(){state.liveRunStatus="completed";toast("Flow Run 已完成","运行事实已写入 Ledger。","success");}).catch(function(error){state.liveRunStatus=String(error&&error.message).indexOf("cancelled")>=0?"cancelled":"failed";toast("Flow Run 未完成",readableError(error),state.liveRunStatus==="cancelled"?"warning":"error");}).finally(function(){state.waitingApprovalNode=null;setBusy(els.runButton,false);refreshData().catch(function(){});renderAll();});}
+        function decideLiveRun(decision){if(!state.liveRunId||state.waitingApprovalNode==null)return;var approve=document.getElementById("approveRunButton"),reject=document.getElementById("rejectRunButton");if(approve)approve.disabled=true;if(reject)reject.disabled=true;post("/api/runs/"+encodeURIComponent(state.liveRunId)+"/approvals/"+state.waitingApprovalNode,{decision:decision}).then(function(){state.liveRunStatus="running";state.waitingApprovalNode=null;renderActivityPanel();renderStatus();toast(decision==="approved"?"已批准":"已拒绝",decision==="approved"?"运行继续执行。":"将按已发布拒绝线路推进。","success");}).catch(function(error){toast("审批失败",readableError(error),"error");renderActivityPanel();});}
+        function cancelLiveRun(){if(!state.liveRunId)return;post("/api/runs/"+encodeURIComponent(state.liveRunId)+"/cancel",{}).then(function(){toast("取消请求已发送","正在等待 Runtime 安全停止。","warning");}).catch(function(error){toast("取消失败",readableError(error),"error");});}
+        function testFlow(){if(!state.draft||state.testState==="running")return;var issues=flowValidationIssues();if(issues.length){var detail=issues.slice(0,3).join("；")+(issues.length>3?"；另有 "+(issues.length-3)+" 项":"");setNotice("Flow 暂不能测试",detail,"error");switchInspectorPanel("details");openInspector();renderInspector();toast("请先修复结构问题",detail,"error");return;}var resources=(state.draft.resources||[]).map(function(item){return item.id+" · "+item.access+(item.required?" · 必需":" · 可选");}).join("；")||"无外部资源要求",profile=state.resources.find(function(item){return state.settings&&item.id===state.settings.defaultResourceProfileId;});confirmOperation({title:"测试这条 Flow",subtitle:"先确认实际执行范围；测试不会创建正式版本。",confirmLabel:"开始测试",rows:[["执行线路",flowRouteSummary()],["Runtime",flowRuntimeSummary()],["资源访问",resources],["资源 Profile",profile?profile.name:"未绑定"],["结构检查","已通过"],["测试行为","临时编译候选 CF；人工门禁在测试中自动批准；结果不自动发布"]]}).then(function(confirmed){if(confirmed)startTestFlow();});}
+        function startTestFlow(){if(!state.draft||state.testState==="running")return;clearNotice();state.testState="running";state.nodeStatuses={};state.blockedNodes=[];renderAll();setBusy(els.testButton,true);switchInspectorPanel("activity");openInspector();toast("线路测试已启动","正在临时编译草案并通过现有 Flow Engine 运行。");var drafts=Object.keys(state.generatedCfDrafts).map(function(key){return state.generatedCfDrafts[key];});post("/api/flow-tests",{flowDraft:state.draft,cfDrafts:drafts,resourceProfileId:state.settings&&state.settings.defaultResourceProfileId,input:{input:{objective:state.draft.objective,message:"flow test"}}}).then(function(started){state.lastTestRunId=started.runId;renderInspector();return streamTest(started.runId);}).then(function(){state.testState="passed";state.dirty=false;saveWorkspace();setNotice("测试通过","线路已经放行，可以发布不可变 Flow Version。","success");toast("测试通过，线路已放行","现在可以发布不可变 Flow Version。","success");}).catch(function(error){state.testState="failed";var detail=readableError(error)+" 请修复后重新测试。";setNotice("测试未通过",detail,"error");toast("测试未通过",detail,"error");}).finally(function(){setBusy(els.testButton,false);refreshData().catch(function(){});renderAll();});}
+        function publishFlow(){if(!state.draft||state.testState!=="passed")return;var approvals=state.draft.nodes.filter(function(node){return node.kind==="approval";}).length,resources=(state.draft.resources||[]).map(function(item){return item.id+" · "+item.access;}).join("；")||"无外部资源要求";confirmOperation({title:"发布“"+(state.draft.name||state.draft.objective)+"”",subtitle:"发布会固定已经通过测试的结构与执行 Profile。",confirmLabel:"确认发布",tone:"publish",rows:[["目标版本",state.draft.revision+".0.0"],["结构",state.draft.nodes.length+" 个节点 · "+state.draft.edges.length+" 条连接 · "+state.draft.bindings.length+" 个 Bindings"],["人工门禁",approvals+" 个"],["资源访问",resources],["Runtime",flowRuntimeSummary()],["版本规则","FlowPlan、CFVersion、programHash、planHash 与 Runtime Profile 将不可变固定"]]}).then(function(confirmed){if(confirmed)startPublishFlow();});}
+        function startPublishFlow(){if(!state.draft||state.testState!=="passed")return;setBusy(els.publishButton,true);var drafts=Object.keys(state.generatedCfDrafts).map(function(key){return state.generatedCfDrafts[key];});Promise.all(drafts.map(function(draft){return post("/api/cfs",draft);})).then(function(published){published.forEach(function(version){state.draft.nodes.forEach(function(node){if(node.kind==="cf-call"&&node.cfRef.cfId===version.cfId)node.cfRef.version=version.version;});});return post("/api/flows",state.draft);}).then(function(plan){state.generatedCfDrafts={};state.dirty=false;state.testState="published";state.draft.revision=parseInt(plan.flowVersion,10)+1;saveWorkspace();setNotice("Flow Version 已发布",plan.flowId+" · v"+plan.flowVersion,"success");toast("Flow Version 已发布",plan.flowId+" · v"+plan.flowVersion,"success");return refreshData();}).then(function(){switchInspectorPanel("versions");renderAll();}).catch(function(error){var detail=readableError(error)+" 草案仍保留在工作台。";setNotice("发布失败",detail,"error");toast("发布失败",detail,"error");}).finally(function(){setBusy(els.publishButton,false);renderStatus();});}
+        function showSettings(){if(state.view!=="settings")state.previousView=state.view;closeMobileLayers(false);setView("settings");if(state.settingsRuntimeId)loadRuntimeDetail(state.settingsRuntimeId);}
+        function hideSettings(){setView(state.previousView==="canvas"&&state.draft?"canvas":"chat");}
+        function loadRuntimeDetail(id){if(!id)return Promise.resolve();return request("/api/runtimes/"+encodeURIComponent(id)).then(function(detail){var index=state.runtimes.findIndex(function(item){return item.id===id;});if(index>=0)state.runtimes[index]=detail;renderSettings();return detail;}).catch(function(error){toast("Runtime 详情加载失败",readableError(error),"error");});}
+        function renderSettings(){
+          if(!state.settings||!state.runtimes.length){els.runtimeList.innerHTML='<div class="empty-list">正在加载设置…</div>';els.runtimeEditor.innerHTML="";return;}
+          els.defaultRuntimeInput.innerHTML=runtimeOptionMarkup(state.settings.defaultRuntimeId);els.defaultRuntimeInput.value=state.settings.defaultRuntimeId;els.defaultResourceInput.innerHTML='<option value="">不自动绑定</option>'+state.resources.map(function(profile){return'<option value="'+escapeHtml(profile.id)+'">'+escapeHtml(profile.name)+'</option>';}).join("");els.defaultResourceInput.value=state.settings.defaultResourceProfileId||"";els.testTimeoutInput.value=state.settings.testTimeoutMs;els.workspaceRootInput.value=state.settings.workspaceRoot;els.autoSaveDraftsInput.checked=Boolean(state.settings.autoSaveDrafts);
+          if(!state.settingsRuntimeId||(!state.runtimes.some(function(item){return item.id===state.settingsRuntimeId;})&&!state.runtimeDraft))state.settingsRuntimeId=state.runtime;
+          els.runtimeList.innerHTML=state.runtimes.map(function(runtime){var health=runtimeState(runtime);return'<button class="runtime-row" type="button" data-runtime-id="'+escapeHtml(runtime.id)+'" aria-current="'+String(runtime.id===state.settingsRuntimeId&&!state.runtimeDraft)+'"><span class="runtime-lamp '+escapeHtml(health)+'"></span><span><strong>'+escapeHtml(runtime.name)+'</strong><span>'+escapeHtml(runtime.id)+' · '+escapeHtml(health==="available"?"可用":health==="unavailable"?"不可用":health==="disabled"?"已停用":"检查中")+'</span></span><code>v'+escapeHtml(runtime.profileVersion)+'</code></button>';}).join("");
+          els.runtimeList.querySelectorAll("[data-runtime-id]").forEach(function(button){button.addEventListener("click",function(){state.settingsRuntimeId=button.getAttribute("data-runtime-id");state.runtimeDraft=null;renderSettings();loadRuntimeDetail(state.settingsRuntimeId);});});renderResourceProfiles();renderRuntimeEditor();renderSettingsInspector();
+        }
+        function renderResourceProfiles(){
+          if(!state.resourceProfileId&&!state.resourceDraft&&state.resources.length)state.resourceProfileId=state.resources[0].id;els.resourceProfileSelect.innerHTML=(state.resources.length?state.resources.map(function(profile){return'<option value="'+escapeHtml(profile.id)+'">'+escapeHtml(profile.name)+'</option>';}).join(""):'<option value="">还没有 Resource Profile</option>');els.resourceProfileSelect.value=state.resourceProfileId||"";
+          var profile=state.resourceDraft||state.resources.find(function(item){return item.id===state.resourceProfileId;});if(!profile){els.resourceProfileEditor.innerHTML='<div class="binding-empty">创建 Profile 后，可把 requirement ID 映射到本机资源标识。</div>';return;}
+          els.resourceProfileEditor.innerHTML='<form class="settings-form" id="resourceProfileForm"><div class="settings-form-grid"><div class="field"><label for="resourceIdInput">Profile ID</label><input id="resourceIdInput" type="text" maxlength="64" value="'+escapeHtml(profile.id||"")+'" '+(state.resourceDraft?"":"disabled")+' /></div><div class="field"><label for="resourceNameInput">显示名称</label><input id="resourceNameInput" type="text" maxlength="80" value="'+escapeHtml(profile.name||"")+'" /></div></div><div class="field"><label for="resourceEnvironmentInput">环境标签</label><input id="resourceEnvironmentInput" type="text" maxlength="80" value="'+escapeHtml(profile.environment||"")+'" /></div><div><div class="section-title"><span>Requirement Bindings</span><button class="button" id="addBindingButton" type="button">添加映射</button></div><div class="binding-editor" id="bindingEditor">'+((profile.bindings||[]).length?profile.bindings.map(function(binding,index){return'<div class="binding-editor-row" data-binding-index="'+index+'"><input data-key="requirementId" aria-label="Requirement ID" placeholder="requirement ID" value="'+escapeHtml(binding.requirementId||"")+'" /><input data-key="resourceId" aria-label="资源 ID 或路径" placeholder="资源 ID 或绝对路径" value="'+escapeHtml(binding.resourceId||"")+'" /><input data-key="type" aria-label="资源类型" placeholder="repository" value="'+escapeHtml(binding.type||"")+'" /><button class="icon-button danger" data-remove-binding="'+index+'" type="button" aria-label="删除资源映射">'+icon("i-trash")+'</button></div>';}).join(""):'<div class="binding-empty">还没有映射。添加后，Flow requirement 才能在测试或运行前解析。</div>')+'</div></div><div class="settings-actions"><button class="button signal" id="saveResourceButton" type="submit">保存 Resource Profile</button>'+(!state.resourceDraft?'<button class="button danger" id="deleteResourceButton" type="button">'+icon("i-trash")+'<span>删除</span></button>':"")+'</div></form>';
+          document.getElementById("resourceProfileForm").addEventListener("submit",saveResourceProfile);document.getElementById("addBindingButton").addEventListener("click",function(){profile.bindings=profile.bindings||[];profile.bindings.push({requirementId:"",resourceId:"",type:"repository"});renderResourceProfiles();});els.resourceProfileEditor.querySelectorAll("[data-remove-binding]").forEach(function(button){button.addEventListener("click",function(){profile.bindings.splice(Number(button.getAttribute("data-remove-binding")),1);renderResourceProfiles();});});var del=document.getElementById("deleteResourceButton");if(del)del.addEventListener("click",deleteResourceProfile);
+        }
+        function saveResourceProfile(event){event.preventDefault();var profile=state.resourceDraft||state.resources.find(function(item){return item.id===state.resourceProfileId;}),button=document.getElementById("saveResourceButton");if(!profile)return;var bindings=[];els.resourceProfileEditor.querySelectorAll("[data-binding-index]").forEach(function(row){var item={};row.querySelectorAll("[data-key]").forEach(function(input){item[input.getAttribute("data-key")]=input.value.trim();});bindings.push(item);});setBusy(button,true);post("/api/resources",{id:document.getElementById("resourceIdInput").value.trim(),name:document.getElementById("resourceNameInput").value.trim(),environment:document.getElementById("resourceEnvironmentInput").value.trim()||undefined,bindings:bindings}).then(function(saved){var index=state.resources.findIndex(function(item){return item.id===saved.id;});if(index>=0)state.resources[index]=saved;else state.resources.push(saved);state.resourceProfileId=saved.id;state.resourceDraft=null;renderSettings();toast("Resource Profile 已保存",saved.name,"success");}).catch(function(error){toast("资源配置保存失败",readableError(error),"error");}).finally(function(){setBusy(button,false);});}
+        function deleteResourceProfile(){var profile=state.resources.find(function(item){return item.id===state.resourceProfileId;});if(!profile||!window.confirm("删除 Resource Profile “"+profile.name+"”？已发布 Flow 不会被改写，但后续运行可能需要重新绑定。"))return;request("/api/resources/"+encodeURIComponent(profile.id),{method:"DELETE"}).then(function(){state.resources=state.resources.filter(function(item){return item.id!==profile.id;});state.resourceProfileId=state.resources[0]?state.resources[0].id:null;if(state.settings.defaultResourceProfileId===profile.id)state.settings.defaultResourceProfileId=undefined;renderSettings();toast("Resource Profile 已删除",profile.name,"success");}).catch(function(error){toast("删除失败",readableError(error),"error");});}
+        function addResourceProfile(){state.resourceDraft={id:"resources-"+Date.now().toString(36),name:"Local Resources",environment:"local",bindings:[]};renderSettings();window.requestAnimationFrame(function(){var input=document.getElementById("resourceIdInput");if(input)input.focus();});}
+        function renderRuntimeEditor(){
+          var profile=state.runtimeDraft||state.runtimes.find(function(item){return item.id===state.settingsRuntimeId;});if(!profile){els.runtimeEditor.innerHTML='<div class="empty-list">选择一个 Runtime Profile</div>';return;}var health=profile.health||{status:"checking",latencyMs:0},isNew=Boolean(state.runtimeDraft),builtin=profile.backend==="builtin";
+          els.runtimeEditorTitle.textContent=isNew?"添加 Process Runtime":profile.name;els.runtimeEditorDescription.textContent=builtin?"内置执行器用于离线验证，不启动外部进程。":"进程由服务端直接启动，不经过 shell；环境变量仅按名称白名单继承。";
+          els.runtimeEditor.innerHTML='<div class="runtime-evidence"><div><span>连接状态</span><strong>'+escapeHtml(health.status==="available"?"可用":health.status==="unavailable"?"不可用":health.status==="disabled"?"已停用":"尚未检查")+'</strong></div><div><span>Profile</span><strong>'+(isNew?"尚未保存":"v"+escapeHtml(profile.profileVersion)+" · "+escapeHtml(profile.adapterBuild||"adapter"))+'</strong></div><div><span>探测证据</span><strong>'+escapeHtml(health.version||health.error||"保存后可测试")+'</strong></div></div><form class="settings-form" id="runtimeProfileForm" style="margin-top:16px"><div class="settings-form-grid"><div class="field"><label for="runtimeIdInput">Runtime ID</label><input id="runtimeIdInput" type="text" maxlength="64" value="'+escapeHtml(profile.id||"")+'" '+(isNew?"":"disabled")+' /></div><div class="field"><label for="runtimeNameInput">显示名称</label><input id="runtimeNameInput" type="text" maxlength="80" value="'+escapeHtml(profile.name||"")+'" /></div></div><div class="field"><label for="runtimeDescriptionInput">说明</label><input id="runtimeDescriptionInput" type="text" maxlength="400" value="'+escapeHtml(profile.description||"")+'" /></div><label class="check-field"><input id="runtimeEnabledInput" type="checkbox" '+(profile.enabled!==false?"checked":"")+' />允许新 Flow 使用这个 Runtime</label><div class="settings-form-grid"><div class="field"><label for="runtimeCommandInput">执行命令</label><input id="runtimeCommandInput" type="text" value="'+escapeHtml(profile.command||"")+'" '+(builtin?"disabled":"")+' /></div><div class="field"><label for="runtimeModelInput">默认模型（可选）</label><input id="runtimeModelInput" type="text" value="'+escapeHtml(profile.model||"")+'" '+(builtin?"disabled":"")+' /></div></div><div class="field"><label for="runtimeArgsInput">启动参数 · 每行一个</label><textarea id="runtimeArgsInput" '+(builtin?"disabled":"")+'>'+escapeHtml((profile.args||[]).join("\n"))+'</textarea><span class="field-help">参数直接传给进程，不经 shell 展开。Prompt 默认从 stdin 发送。</span></div><div class="settings-form-grid"><div class="field"><label for="runtimeCwdInput">专用工作目录（可选）</label><input id="runtimeCwdInput" type="text" value="'+escapeHtml(profile.workingDirectory||"")+'" '+(builtin?"disabled":"")+' /></div><div class="field"><label for="runtimeTimeoutInput">执行超时（毫秒）</label><input id="runtimeTimeoutInput" type="number" min="1000" max="3600000" value="'+escapeHtml(profile.timeoutMs||300000)+'" '+(builtin?"disabled":"")+' /></div></div><div class="settings-form-grid"><div class="field"><label for="runtimeVersionArgsInput">健康探测参数 · 每行一个</label><textarea id="runtimeVersionArgsInput" '+(builtin?"disabled":"")+'>'+escapeHtml((profile.versionArgs||[]).join("\n"))+'</textarea></div><div class="field"><label for="runtimeMaxOutputInput">最大输出（bytes）</label><input id="runtimeMaxOutputInput" type="number" min="1024" max="16777216" value="'+escapeHtml(profile.maxOutputBytes||1048576)+'" '+(builtin?"disabled":"")+' /></div></div><div class="settings-form-grid"><div class="field"><label for="runtimeOutputInput">输出协议</label><select id="runtimeOutputInput" '+(builtin?"disabled":"")+'><option value="json"'+(profile.outputMode!=="text"?" selected":"")+'>JSON · 契约校验</option><option value="text"'+(profile.outputMode==="text"?" selected":"")+'>Text · 包装为 content</option></select></div><div class="field"><label for="runtimeTransportInput">Prompt 传输</label><select id="runtimeTransportInput" '+(builtin?"disabled":"")+'><option value="stdin"'+(profile.promptTransport!=="argument"?" selected":"")+'>stdin</option><option value="argument"'+(profile.promptTransport==="argument"?" selected":"")+'>末尾参数</option></select></div></div><div class="field"><label for="runtimeEnvInput">继承环境变量名称 · 逗号分隔</label><input id="runtimeEnvInput" type="text" value="'+escapeHtml((profile.envAllowlist||[]).join(", "))+'" '+(builtin?"disabled":"")+' /><span class="field-help">这里只保存变量名，不在产品数据库中保存密钥值。</span></div><div class="field"><label for="runtimeCapabilitiesInput">能力标签 · 逗号分隔</label><input id="runtimeCapabilitiesInput" type="text" value="'+escapeHtml((profile.capabilities||[]).join(", "))+'" /></div><div class="settings-actions"><button class="button signal" id="saveRuntimeButton" type="submit">'+(isNew?"创建 Runtime":"保存为新 Profile 版本")+'</button>'+(!isNew&&!builtin?'<button class="button" id="testRuntimeButton" type="button">'+icon("i-play")+'<span>测试连接</span></button>':"")+'</div></form>';
+          document.getElementById("runtimeProfileForm").addEventListener("submit",saveRuntimeProfile);var test=document.getElementById("testRuntimeButton");if(test)test.addEventListener("click",testSelectedRuntime);
+        }
+        function splitList(value,separator){return String(value||"").split(separator||"\n").map(function(item){return item.trim();}).filter(Boolean);}
+        function saveRuntimeProfile(event){event.preventDefault();var current=state.runtimeDraft||state.runtimes.find(function(item){return item.id===state.settingsRuntimeId;}),button=document.getElementById("saveRuntimeButton");if(!current)return;setBusy(button,true);var body=Object.assign({},current,{id:document.getElementById("runtimeIdInput").value.trim(),name:document.getElementById("runtimeNameInput").value.trim(),description:document.getElementById("runtimeDescriptionInput").value.trim(),enabled:document.getElementById("runtimeEnabledInput").checked,backend:current.backend||"process",command:document.getElementById("runtimeCommandInput").value.trim()||undefined,model:document.getElementById("runtimeModelInput").value.trim()||undefined,args:splitList(document.getElementById("runtimeArgsInput").value),versionArgs:splitList(document.getElementById("runtimeVersionArgsInput").value),workingDirectory:document.getElementById("runtimeCwdInput").value.trim()||undefined,timeoutMs:Number(document.getElementById("runtimeTimeoutInput").value),maxOutputBytes:Number(document.getElementById("runtimeMaxOutputInput").value),outputMode:document.getElementById("runtimeOutputInput").value,promptTransport:document.getElementById("runtimeTransportInput").value,envAllowlist:splitList(document.getElementById("runtimeEnvInput").value,","),capabilities:splitList(document.getElementById("runtimeCapabilitiesInput").value,",")});delete body.health;delete body.history;post("/api/runtimes",body).then(function(saved){var index=state.runtimes.findIndex(function(item){return item.id===saved.id;});if(index>=0)state.runtimes[index]=saved;else state.runtimes.push(saved);state.settingsRuntimeId=saved.id;state.runtimeDraft=null;renderRuntimeOptions();renderSettings();clearNotice();toast("Runtime Profile 已保存",saved.name+" · v"+saved.profileVersion,"success");return loadRuntimeDetail(saved.id);}).catch(function(error){var detail=readableError(error);setNotice("Runtime 保存失败",detail,"error");toast("Runtime 保存失败",detail,"error");}).finally(function(){setBusy(button,false);});}
+        function testSelectedRuntime(){var button=document.getElementById("testRuntimeButton"),id=state.settingsRuntimeId;if(!id)return;setBusy(button,true);post("/api/runtimes/"+encodeURIComponent(id)+"/test",{}).then(function(health){var runtime=state.runtimes.find(function(item){return item.id===id;});if(runtime)runtime.health=health;renderRuntimeOptions();renderSettings();toast(health.status==="available"?"Runtime 可用":"Runtime 不可用",health.version||health.error||"探测已完成",health.status==="available"?"success":"error");}).catch(function(error){toast("连接测试失败",readableError(error),"error");}).finally(function(){if(button)setBusy(button,false);});}
+        function addCustomRuntime(){var id="custom-"+Date.now().toString(36);state.runtimeDraft={id:id,name:"Custom Agent",description:"本机自定义 Process Runtime",enabled:true,backend:"process",command:"",args:[],versionArgs:["--version"],promptTransport:"stdin",outputMode:"json",timeoutMs:300000,maxOutputBytes:1048576,envAllowlist:["HOME","PATH","LANG"],capabilities:["reasoning"],traits:{backendKind:"process",sessionMode:"per-cf-call",structuredOutput:true,streaming:false,toolEvents:false,permissionPrompts:false,tokenAccounting:"unavailable",cancellation:"process-kill",filesystemIsolation:"cwd-scoped",networkIsolation:"unenforced"}};state.settingsRuntimeId=id;renderSettings();window.requestAnimationFrame(function(){var input=document.getElementById("runtimeIdInput");if(input)input.focus();});}
+        function saveWorkspaceSettings(event){event.preventDefault();setBusy(els.saveWorkspaceSettingsButton,true);put("/api/settings",{defaultRuntimeId:els.defaultRuntimeInput.value,defaultResourceProfileId:els.defaultResourceInput.value||undefined,workspaceRoot:els.workspaceRootInput.value.trim(),autoSaveDrafts:els.autoSaveDraftsInput.checked,testTimeoutMs:Number(els.testTimeoutInput.value),locale:"zh-CN"}).then(function(settings){state.settings=settings;if(!currentRuntime()||runtimeState(currentRuntime())!=="available")state.runtime=settings.defaultRuntimeId;renderRuntimeOptions();renderSettings();scheduleDraftSave();clearNotice();toast("工作区设置已保存","默认 Runtime、资源与执行目录已更新。","success");}).catch(function(error){var detail=readableError(error);setNotice("设置保存失败",detail,"error");toast("设置保存失败",detail,"error");}).finally(function(){setBusy(els.saveWorkspaceSettingsButton,false);});}
+        function refreshData(){return Promise.all([request("/api/cfs"),request("/api/flows"),request("/api/runs"),request("/api/resources"),request("/api/runtimes"),request("/api/settings"),request("/api/flow-drafts"),request("/api/cf-drafts")]).then(function(results){state.cfs=results[0];state.plans=results[1];state.runs=results[2];state.resources=results[3];state.runtimes=results[4];state.settings=results[5];state.serverDrafts=results[6];state.serverCfDrafts=results[7];if(!localStorage.getItem(workspaceKey))state.runtime=state.settings.defaultRuntimeId;renderRuntimeOptions();renderFlowList();renderLibrary();renderInspector();if(state.view==="settings")renderSettings();});}
+        function newFlow(){if(state.draft&&state.testState==="passed"&&!window.confirm("这条 Flow 已测试通过但尚未发布。草稿会保存在服务端，但测试放行状态不会保留。继续新建吗？"))return;scheduleDraftSave();state.draft=null;state.messages=[];state.generatedCfDrafts={};state.positions={};state.selectedNodeId=null;state.dirty=false;state.testState="idle";state.nodeStatuses={};state.blockedNodes=[];localStorage.removeItem(workspaceKey);renderAll();setView("chat");closeMobileLayers(false);els.goalInput.focus();}
+        function focusable(container){return Array.from(container.querySelectorAll('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')).filter(function(item){return item.offsetParent!==null;});}
+        function trapFocus(container,event){var items=focusable(container);if(!items.length)return;var first=items[0],last=items[items.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+        function moveTabFocus(event,tabs,activate){var keys=["ArrowLeft","ArrowRight","Home","End"];if(keys.indexOf(event.key)<0)return;event.preventDefault();var current=tabs.indexOf(event.currentTarget),next=event.key==="Home"?0:event.key==="End"?tabs.length-1:(current+(event.key==="ArrowLeft"?-1:1)+tabs.length)%tabs.length;activate(tabs[next]);}
+        function openInspector(){state.returnFocus=document.activeElement;els.inspector.classList.add("open");if(window.innerWidth<=980){els.mobileScrim.classList.add("show");window.requestAnimationFrame(function(){var target=els.inspector.querySelector('.inspector-tab[aria-selected="true"]');if(target)target.focus();});}}
+        function openSidebar(){state.returnFocus=document.activeElement;els.flowSidebar.classList.add("open");els.mobileScrim.classList.add("show");window.requestAnimationFrame(function(){els.newFlowButton.focus();});}
+        function closeMobileLayers(restore){var target=state.returnFocus;els.inspector.classList.remove("open");els.flowSidebar.classList.remove("open");els.mobileScrim.classList.remove("show");state.returnFocus=null;if(restore!==false&&target&&typeof target.focus==="function")window.requestAnimationFrame(function(){target.focus();});}
+        function bindEvents(){
+          els.newFlowButton.addEventListener("click",newFlow);els.flowSearch.addEventListener("input",renderFlowList);
+          els.settingsButton.addEventListener("click",showSettings);els.closeSettingsButton.addEventListener("click",hideSettings);els.addRuntimeButton.addEventListener("click",addCustomRuntime);els.addResourceProfileButton.addEventListener("click",addResourceProfile);els.resourceProfileSelect.addEventListener("change",function(event){state.resourceProfileId=event.target.value||null;state.resourceDraft=null;renderResourceProfiles();});els.workspaceSettingsForm.addEventListener("submit",saveWorkspaceSettings);
+          els.refreshButton.addEventListener("click",function(){refreshData().then(function(){clearNotice();toast("工作台已刷新","Flow、CF、版本和运行记录已同步。","success");}).catch(function(error){var detail=readableError(error);setNotice("刷新失败",detail,"error");toast("刷新失败",detail,"error");});});
+          els.chatTab.addEventListener("click",function(){setView("chat");});els.canvasTab.addEventListener("click",function(){setView("canvas");});els.runButton.addEventListener("click",runPublished);els.testButton.addEventListener("click",testFlow);els.publishButton.addEventListener("click",publishFlow);
+          [els.chatTab,els.canvasTab].forEach(function(tab){tab.addEventListener("keydown",function(event){moveTabFocus(event,[els.chatTab,els.canvasTab],function(next){setView(next===els.chatTab?"chat":"canvas");next.focus();});});});
+          els.inspectorButton.addEventListener("click",openInspector);els.closeInspectorButton.addEventListener("click",function(){closeMobileLayers(true);});els.mobileMenuButton.addEventListener("click",openSidebar);els.mobileScrim.addEventListener("click",function(){closeMobileLayers(true);});
+          els.runtimeSelect.addEventListener("change",function(event){state.runtime=event.target.value;saveWorkspace();renderRuntimeOptions();});
+          els.composer.addEventListener("submit",function(event){event.preventDefault();var value=els.goalInput.value.trim();if(!value){els.goalInput.focus();return;}els.goalInput.value="";generateFromGoal(value);});
+          els.goalInput.addEventListener("keydown",function(event){if(event.key==="Enter"&&!event.shiftKey){event.preventDefault();els.composer.requestSubmit();}});
+          document.querySelectorAll(".starter").forEach(function(starter){starter.addEventListener("click",function(){els.goalInput.value=starter.getAttribute("data-prompt");els.goalInput.focus();});});
+          els.toggleLibraryButton.addEventListener("click",function(){els.libraryTray.hidden=!els.libraryTray.hidden;if(!els.libraryTray.hidden)renderLibrary();});els.addApprovalButton.addEventListener("click",addApprovalNode);els.addBranchButton.addEventListener("click",addBranchNode);els.addJoinButton.addEventListener("click",addJoinNode);els.emptyAddButton.addEventListener("click",function(){els.libraryTray.hidden=false;renderLibrary();});
+          els.canvasWrap.addEventListener("dragover",function(event){if(event.dataTransfer.types.indexOf("text/cf-library-index")>=0){event.preventDefault();els.canvasWrap.classList.add("drag-over");}});
+          els.canvasWrap.addEventListener("dragleave",function(){els.canvasWrap.classList.remove("drag-over");});
+          els.canvasWrap.addEventListener("drop",function(event){event.preventDefault();els.canvasWrap.classList.remove("drag-over");var index=Number(event.dataTransfer.getData("text/cf-library-index")),rect=els.canvasWrap.getBoundingClientRect();addLibraryNode(index,{x:Math.round((event.clientX-rect.left+els.canvasWrap.scrollLeft)/state.zoom-92),y:Math.round((event.clientY-rect.top+els.canvasWrap.scrollTop)/state.zoom-56)});});
+          els.flowCanvas.addEventListener("click",function(event){if(event.target===els.flowCanvas||event.target===els.nodesLayer||event.target===els.routeMap){state.selectedNodeId=null;renderCanvas();renderInspector();switchInspectorPanel("details");}});
+          els.zoomOutButton.addEventListener("click",function(){state.zoom=Math.max(.6,state.zoom-.1);renderCanvas();});els.zoomInButton.addEventListener("click",function(){state.zoom=Math.min(1.4,state.zoom+.1);renderCanvas();});
+          els.fitButton.addEventListener("click",function(){fitCanvas(true);});
+          var inspectorTabs=Array.from(document.querySelectorAll(".inspector-tab"));inspectorTabs.forEach(function(tab){tab.addEventListener("click",function(){switchInspectorPanel(tab.getAttribute("data-panel"));});tab.addEventListener("keydown",function(event){moveTabFocus(event,inspectorTabs,function(next){switchInspectorPanel(next.getAttribute("data-panel"),true);});});});
+          els.operationDialogClose.addEventListener("click",function(){closeOperation(false);});els.operationDialogCancel.addEventListener("click",function(){closeOperation(false);});els.operationDialogConfirm.addEventListener("click",function(){closeOperation(true);});els.operationDialog.addEventListener("cancel",function(event){event.preventDefault();closeOperation(false);});
+          els.operationNoticeClose.addEventListener("click",clearNotice);
+          document.addEventListener("keydown",function(event){if(event.key==="Escape"&&(els.inspector.classList.contains("open")||els.flowSidebar.classList.contains("open"))){event.preventDefault();closeMobileLayers(true);return;}if(event.key==="Tab"){if(window.innerWidth<=980&&els.inspector.classList.contains("open"))trapFocus(els.inspector,event);else if(window.innerWidth<=720&&els.flowSidebar.classList.contains("open"))trapFocus(els.flowSidebar,event);}});
+          window.addEventListener("resize",function(){if(window.innerWidth>980)closeMobileLayers(false);drawEdges();});
+        }
+        function fitCanvas(smooth){state.zoom=Math.min(1,Math.max(.62,(els.canvasWrap.clientWidth-30)/canvasPlaneWidth()));els.canvasWrap.scrollTo({left:0,top:0,behavior:smooth?"smooth":"auto"});renderCanvas();}
+        function renderAll(){renderStatus();renderMessages();renderFlowList();renderCanvas();renderInspector();renderRuntimeOptions();if(state.view==="settings")renderSettings();}
+        function init(){cacheElements();restoreWorkspace();bindEvents();renderAll();setView(state.draft?"canvas":"chat");refreshData().then(function(){renderAll();scheduleDraftSave();}).catch(function(error){var detail=readableError(error)+" 浏览器中的草案仍可继续编辑。";setNotice("本地服务暂不可用",detail,"error");toast("本地服务暂不可用",detail,"error");});}
+        init();
+      })();
+    </script>
+  </body>
+</html>
