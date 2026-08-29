@@ -6,6 +6,14 @@ import { compileCF, compileFlow } from './compiler.js'
 import { builtins, Engine } from './engine.js'
 import type { CFDraft, FlowDraft } from './types.js'
 
+async function waitFor(predicate: () => boolean, timeoutMs = 500, stepMs = 5) {
+  const start = Date.now()
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout')
+    await new Promise((resolve) => setTimeout(resolve, stepMs))
+  }
+}
+
 test('runs a published Flow, validates contracts and records Ledger', async () => {
   const cf: CFDraft = {
     cfId: 'echo-runtime',
@@ -101,6 +109,134 @@ test('evaluates a restricted branch and marks the inactive path', async () => {
   assert.equal(run?.status, 'completed')
   assert.equal((run?.value as any).outputId, 'high')
   assert.ok(store.events(runId).some((event) => event.type === 'node.inactive' && event.node === 2))
+  store.close()
+})
+
+test('treats inactive branch descendants as inactive instead of blocking the run', async () => {
+  const cf: CFDraft = {
+    cfId: 'branch-node',
+    revision: 1,
+    name: 'Branch Node',
+    does: 'branch node',
+    inputContract: { type: 'object' },
+    outputContract: { type: 'object' },
+    defaultExecutor: 'echo',
+  }
+  const version = compileCF(cf)
+  const flow: FlowDraft = {
+    flowId: 'inactive-branch-flow',
+    revision: 1,
+    name: 'Inactive Branch',
+    objective: 'route',
+    nodes: [
+      { id: 'route', kind: 'branch', cond: { $get: 'risk' }, cases: ['high', 'low'] },
+      { id: 'high-step', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
+      { id: 'low-step', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
+      { id: 'low-audit', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
+      { id: 'out', kind: 'output', outputId: 'result' },
+    ],
+    edges: [
+      { id: 'entry', from: '$entry', to: 'route' },
+      { id: 'high', from: 'route', to: 'high-step', when: { outcome: 'branch-case', caseId: 'high' } },
+      { id: 'low', from: 'route', to: 'low-step', when: { outcome: 'branch-case', caseId: 'low' } },
+      { id: 'low-chain', from: 'low-step', to: 'low-audit' },
+      { id: 'high-out', from: 'high-step', to: 'out' },
+      { id: 'low-out', from: 'low-audit', to: 'out' },
+    ],
+    bindings: [
+      { id: 'risk', from: '$user.input.risk', to: 'route.input.risk' },
+      { id: 'high-output', from: 'high-step.output', to: 'out.input' },
+    ],
+  }
+  const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
+  const store = new Store(`/tmp/cf-inactive-${randomUUID()}.sqlite`)
+  const runId = randomUUID()
+  store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`, { risk: 'high' })
+  new Engine(store, builtins(), () => [version]).start(runId, plan)
+  await waitFor(() => ['completed', 'failed'].includes(store.getRun(runId)?.status ?? ''))
+  assert.equal(store.getRun(runId)?.status, 'completed')
+  assert.ok(
+    store.events(runId).some((event) => event.type === 'node.inactive' && event.node === 2),
+    'low-step should be marked inactive',
+  )
+  assert.ok(
+    store.events(runId).some((event) => event.type === 'node.inactive' && event.node === 3),
+    'low-audit should be marked inactive',
+  )
+  store.close()
+})
+
+test('dispatches join-any as soon as one predecessor completes and drains in-flight work after output', async () => {
+  const cf: CFDraft = {
+    cfId: 'join-node',
+    revision: 1,
+    name: 'Join Node',
+    does: 'join node',
+    inputContract: { type: 'object' },
+    outputContract: { type: 'object' },
+    defaultExecutor: 'echo',
+  }
+  const version = compileCF(cf)
+  let releaseSlow = () => {}
+  const slowGate = new Promise<void>((resolve) => {
+    releaseSlow = resolve
+  })
+  const calls: string[] = []
+  const registry = builtins()
+    .register({
+      id: 'slow-executor',
+      execute: async (_task, input) => {
+        calls.push('slow-start')
+        await slowGate
+        calls.push('slow-end')
+        return input
+      },
+    })
+    .register({
+      id: 'fast-executor',
+      execute: async (_task, input) => {
+        calls.push('fast-start')
+        return input
+      },
+    })
+  const flow: FlowDraft = {
+    flowId: 'join-any-flow',
+    revision: 1,
+    name: 'Join Any',
+    objective: 'join',
+    nodes: [
+      { id: 'slow', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version }, executor: 'slow-executor' },
+      { id: 'fast', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version }, executor: 'fast-executor' },
+      { id: 'join', kind: 'join', mode: 'any' },
+      { id: 'out', kind: 'output', outputId: 'result' },
+    ],
+    edges: [
+      { id: 'entry-slow', from: '$entry', to: 'slow' },
+      { id: 'entry-fast', from: '$entry', to: 'fast' },
+      { id: 'slow-join', from: 'slow', to: 'join' },
+      { id: 'fast-join', from: 'fast', to: 'join' },
+      { id: 'join-out', from: 'join', to: 'out' },
+    ],
+    bindings: [
+      { id: 'join-output', from: 'join.output', to: 'out.input' },
+    ],
+  }
+  const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
+  const store = new Store(`/tmp/cf-join-${randomUUID()}.sqlite`)
+  const runId = randomUUID()
+  store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`)
+  new Engine(store, registry, () => [version]).start(runId, plan)
+  await waitFor(() => calls.includes('fast-start') && calls.includes('slow-start'))
+  await waitFor(() => store.events(runId).some((event) => event.type === 'node.started' && event.node === 2))
+  assert.ok(calls.includes('fast-start'), 'fast branch should start immediately')
+  assert.ok(
+    store.events(runId).some((event) => event.type === 'node.started' && event.node === 2),
+    'join should start before the slow branch finishes',
+  )
+  releaseSlow()
+  await waitFor(() => ['completed', 'failed'].includes(store.getRun(runId)?.status ?? ''))
+  assert.equal(store.getRun(runId)?.status, 'completed')
+  assert.ok(calls.includes('slow-end'))
   store.close()
 })
 
@@ -315,6 +451,47 @@ test('pauses for approval and resumes on an explicit decision', async () => {
   }
   assert.equal(store.getRun(runId)?.status, 'completed')
   assert.equal((store.getRun(runId)?.value as any).outputId, 'approved')
+  store.close()
+})
+
+test('does not auto-replay a ledger node that started but never committed', async () => {
+  const cf: CFDraft = {
+    cfId: 'uncommitted',
+    revision: 1,
+    name: 'Uncommitted',
+    does: 'uncommitted',
+    inputContract: { type: 'object' },
+    outputContract: { type: 'object' },
+    defaultExecutor: 'echo',
+  }
+  const version = compileCF(cf)
+  const flow: FlowDraft = {
+    flowId: 'uncommitted-flow',
+    revision: 1,
+    name: 'Uncommitted',
+    objective: 'recover',
+    nodes: [
+      { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
+      { id: 'out', kind: 'output', outputId: 'result' },
+    ],
+    edges: [
+      { id: 'start', from: '$entry', to: 'call' },
+      { id: 'finish', from: 'call', to: 'out' },
+    ],
+    bindings: [{ id: 'output', from: 'call.output', to: 'out.input' }],
+  }
+  const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
+  const store = new Store(`/tmp/cf-uncommitted-${randomUUID()}.sqlite`)
+  const runId = randomUUID()
+  store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`)
+  store.append(runId, 'node.started', 0)
+  new Engine(store, builtins(), () => [version]).start(runId, plan)
+  await waitFor(() => store.getRun(runId)?.status === 'needs-reconciliation')
+  assert.equal(store.getRun(runId)?.status, 'needs-reconciliation')
+  assert.ok(
+    store.events(runId).some((event) => event.type === 'run.needs-reconciliation'),
+    'recovery decision should be written to the ledger',
+  )
   store.close()
 })
 

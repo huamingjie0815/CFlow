@@ -44,8 +44,14 @@ export interface CFDraft {
   process?: string
   inputContract?: Json
   outputContract?: Json
+  effects?: CapabilityEffect[]
   defaultExecutor?: string
   program?: CFProgram
+}
+export type CapabilityEffect = {
+  type: 'file-read' | 'file-write' | 'command'
+  scope: 'workspace'
+  description: string
 }
 export interface CFVersion {
   cfId: string
@@ -81,6 +87,7 @@ export interface ResourceProfile {
 export type FlowNode =
   | {
       id: string
+      name?: string
       kind: 'cf-call'
       cfRef: { cfId: string; version: string }
       inputDefaults?: Json
@@ -89,7 +96,14 @@ export type FlowNode =
       outputContract?: Json
       onError?: { action: 'stop' | 'retry'; maxAttempts?: number }
     }
-  | { id: string; kind: 'branch'; cond: Json; cases: string[] }
+  | {
+      id: string
+      kind: 'branch'
+      cond: Json
+      cases: string[]
+      /** Natural-language routing rule for each case id. */
+      caseConditions?: Record<string, string>
+    }
   | {
       id: string
       kind: 'join'
@@ -121,12 +135,13 @@ export interface FlowDraft {
   objective: string
   nodes: FlowNode[]
   edges: FlowEdge[]
-  bindings: FlowBinding[]
+  /** @deprecated Field-level bindings are no longer used. */
+  bindings?: FlowBinding[]
   resources?: ResourceRequirement[]
   limits?: { maxConcurrency?: number; maxNodeDispatches?: number }
 }
 export interface FlowPlan {
-  version: '0.4'
+  version: '0.5'
   flowId: string
   flowVersion: string
   objective: string
@@ -137,10 +152,21 @@ export interface FlowPlan {
     executorProfile?: { id: string; profileVersion: number }
   })[]
   edges: (FlowEdge & { from: number | '$entry'; to: number })[]
-  bindings: FlowBinding[]
   resources?: ResourceRequirement[]
   limits: { maxConcurrency: number; maxNodeDispatches: number }
   planHash: string
+}
+
+export interface FlowCompilationSnapshot {
+  id: string
+  flowId: string
+  flowRevision: number
+  mode: 'preview' | 'test'
+  flowDraft: FlowDraft
+  plan: FlowPlan
+  programs: CFVersion[]
+  runId?: string
+  createdAt: string
 }
 export type LedgerEvent = {
   seq: number
@@ -151,11 +177,11 @@ export type LedgerEvent = {
   at: string
 }
 
-export type RuntimeBackendKind = 'builtin' | 'process'
+export type RuntimeBackendKind = 'builtin' | 'acp'
 export type RuntimePromptTransport = 'stdin' | 'argument'
 export type RuntimeOutputMode = 'json' | 'text'
 export interface ExecutorRuntimeTraits {
-  backendKind: 'native-llm' | 'acp' | 'process' | 'dsh' | 'custom-sdk'
+  backendKind: 'builtin' | 'acp'
   sessionMode: 'stateless' | 'per-cf-call' | 'persistent'
   structuredOutput: boolean
   streaming: boolean
@@ -205,4 +231,12 @@ export interface WorkspaceSettings {
   testTimeoutMs: number
   locale: string
   updatedAt: string
+}
+
+export type RuntimeExecutionError = {
+  layer: 'adapter' | 'runtime' | 'permission' | 'engine'
+  code: string
+  message: string
+  retryable: boolean
+  effectState: 'none' | 'started' | 'committed' | 'unknown'
 }

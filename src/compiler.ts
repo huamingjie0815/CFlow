@@ -31,17 +31,36 @@ function checkGraph(
   assert(seen.size === nodes.length, 'UNREACHABLE_NODE: all nodes must be reachable')
 }
 export function compileCF(draft: CFDraft): CFVersion {
+  if (draft.effects) {
+    const validTypes = new Set(['file-read', 'file-write', 'command'])
+    for (const effect of draft.effects) {
+      assert(validTypes.has(effect.type), 'CF_EFFECT_TYPE_INVALID')
+      assert(effect.scope === 'workspace', 'CF_EFFECT_SCOPE_INVALID')
+      assert(
+        typeof effect.description === 'string' && effect.description.trim().length > 0,
+        'CF_EFFECT_DESCRIPTION_REQUIRED',
+      )
+    }
+  }
   const inputContract = draft.inputContract ?? { type: 'object' }
   const outputContract = draft.outputContract ?? { type: 'object' }
   assertContractSchema(inputContract, 'CF_INPUT')
   assertContractSchema(outputContract, 'CF_OUTPUT')
+  const task = [
+    draft.does.trim(),
+    draft.input?.trim() ? `Input guidance: ${draft.input.trim()}` : undefined,
+    draft.output?.trim() ? `Output guidance: ${draft.output.trim()}` : undefined,
+    draft.process?.trim() ? `Process constraints: ${draft.process.trim()}` : undefined,
+  ]
+    .filter(Boolean)
+    .join('\n')
   const program = draft.program ?? {
     version: '0.1' as const,
     cfId: draft.cfId,
     sourceRevision: draft.revision,
     entry: 0,
     steps: [
-      { index: 0, kind: 'agent' as const, task: draft.does, input: '$input', next: 1 },
+      { index: 0, kind: 'agent' as const, task, input: '$inputContext', next: 1 },
       { index: 1, kind: 'return' as const, source: '$local.0.output' },
     ],
     limits: { maxStepExecutions: 8, maxExternalCalls: 2, maxOutputBytes: 65536 },
@@ -122,6 +141,18 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
     if (node.kind === 'output') assert(outgoing.length === 0, 'OUTPUT_MUST_BE_TERMINAL')
     else assert(outgoing.length > 0, `NON_TERMINAL_NODE:${node.id}`)
     if (node.kind === 'branch') {
+      assert(node.cases.length > 0, `BRANCH_CASES_REQUIRED:${node.id}`)
+      assert(
+        new Set(node.cases).size === node.cases.length &&
+          node.cases.every((caseId) => caseId.trim().length > 0),
+        `BRANCH_CASE_IDS_INVALID:${node.id}`,
+      )
+      if (node.caseConditions)
+        for (const caseId of node.cases)
+          assert(
+            node.caseConditions[caseId]?.trim().length,
+            `BRANCH_CONDITION_REQUIRED:${node.id}:${caseId}`,
+          )
       const cases = outgoing.map((edge) =>
         edge.when?.outcome === 'branch-case' ? edge.when.caseId : undefined,
       )
@@ -142,20 +173,6 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
     if (e.when?.outcome === 'approved' || e.when?.outcome === 'rejected') {
       const source = typeof e.from === 'number' ? draft.nodes[e.from] : undefined
       assert(source?.kind === 'approval', 'APPROVAL_EDGE_SOURCE_REQUIRED')
-    }
-  }
-  const bindingIds = new Set<string>()
-  for (const b of draft.bindings) {
-    assert(b.id.trim().length > 0, 'FLOW_BINDING_ID_REQUIRED')
-    assert(!bindingIds.has(b.id), 'FLOW_DUPLICATE_BINDING')
-    bindingIds.add(b.id)
-    if (b.required === false)
-      assert(b.default !== undefined, `OPTIONAL_BINDING_DEFAULT_REQUIRED:${b.id}`)
-    const target = b.to.split('.')[0]
-    assert(target && ids.has(target), `BAD_BINDING_TARGET:${target}`)
-    if (!b.from.startsWith('$user.') && !b.from.startsWith('$context.')) {
-      const source = b.from.replace(/^\$?/, '').split('.')[0]
-      assert(ids.has(source), `BAD_BINDING_SOURCE:${source}`)
     }
   }
   if (draft.resources) {
@@ -181,16 +198,6 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
     }
     return visit(from)
   }
-  for (const binding of draft.bindings)
-    if (!binding.from.startsWith('$user.') && !binding.from.startsWith('$context.')) {
-      const source = binding.from.replace(/^\$?/, '').split('.')[0]
-      const sourceIndex = index.get(source)
-      const targetIndex = index.get(binding.to.split('.')[0])
-      assert(
-        sourceIndex !== undefined && targetIndex !== undefined && reaches(sourceIndex, targetIndex),
-        `BINDING_CONTROL_UNREACHABLE:${binding.id}`,
-      )
-    }
   const nodes = draft.nodes.map((n, i) => ({
     ...n,
     index: i,
@@ -199,14 +206,13 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       : {}),
   }))
   const base = {
-    version: '0.4' as const,
+    version: '0.5' as const,
     flowId: draft.flowId,
     flowVersion: `${draft.revision}.0.0`,
     objective: draft.objective,
     entries,
     nodes,
     edges,
-    bindings: draft.bindings,
     ...(draft.resources ? { resources: draft.resources } : {}),
     limits: {
       maxConcurrency: draft.limits?.maxConcurrency ?? 2,

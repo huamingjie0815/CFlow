@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import type {
   Json,
+  FlowCompilationSnapshot,
   LedgerEvent,
   ResolvedResource,
   ResourceProfile,
@@ -17,7 +18,7 @@ export class Store {
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('busy_timeout = 5000')
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS approvals (run_id TEXT NOT NULL, node INTEGER NOT NULL, decision TEXT, decided_at TEXT, PRIMARY KEY(run_id,node)); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+      `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_compilations (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, flow_revision INTEGER NOT NULL, mode TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS approvals (run_id TEXT NOT NULL, node INTEGER NOT NULL, decision TEXT, decided_at TEXT, PRIMARY KEY(run_id,node)); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
     )
     const columns = this.db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
     if (!columns.some((column) => column.name === 'input'))
@@ -26,6 +27,27 @@ export class Store {
       this.db.exec('ALTER TABLE runs ADD COLUMN resource_profile_id TEXT')
     if (!columns.some((column) => column.name === 'resources'))
       this.db.exec("ALTER TABLE runs ADD COLUMN resources TEXT NOT NULL DEFAULT '[]'")
+  }
+  saveFlowCompilation(snapshot: FlowCompilationSnapshot) {
+    this.db
+      .prepare(
+        'INSERT OR REPLACE INTO flow_compilations(id,flow_id,flow_revision,mode,value,created_at) VALUES(?,?,?,?,?,?)',
+      )
+      .run(
+        snapshot.id,
+        snapshot.flowId,
+        snapshot.flowRevision,
+        snapshot.mode,
+        JSON.stringify(snapshot),
+        snapshot.createdAt,
+      )
+  }
+  flowCompilations(): FlowCompilationSnapshot[] {
+    return (
+      this.db
+        .prepare('SELECT value FROM flow_compilations ORDER BY created_at DESC, id DESC')
+        .all() as { value: string }[]
+    ).map((row) => JSON.parse(row.value) as FlowCompilationSnapshot)
   }
   save(
     table: 'cf_drafts' | 'cf_versions' | 'flow_drafts' | 'flow_versions',

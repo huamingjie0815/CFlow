@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import type { CFVersion, FlowPlan, Json, ResolvedResource, FlowNode } from './types.js'
+import type {
+  CFVersion,
+  FlowPlan,
+  Json,
+  ResolvedResource,
+  FlowNode,
+  CapabilityEffect,
+} from './types.js'
 import { assertContract } from './contract.js'
 import { Store } from './db.js'
 import { sha256 } from './hash.js'
@@ -11,6 +18,7 @@ export interface Executor {
     input: Json,
     signal: AbortSignal,
     resources?: ResolvedResource[],
+    effects?: CapabilityEffect[],
   ): Promise<Json>
 }
 export class ExecutorRegistry {
@@ -26,6 +34,21 @@ export class ExecutorRegistry {
   }
 }
 type Status = 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'inactive'
+type NodeCompletion = {
+  index: number
+  status: 'completed' | 'failed'
+  value?: Json
+  error?: string
+  details?: unknown
+}
+
+type EngineState = {
+  statuses: Map<number, Status>
+  values: Map<number, Json>
+  terminalCandidate: { outputId: string; value: Json } | null
+  admissionOpen: boolean
+  recoveryRequired: number[]
+}
 
 export class Engine {
   private active = new Set<string>()
@@ -70,6 +93,16 @@ export class Engine {
       this.store.append(runId, 'run.failed', undefined, { code: 'RESOURCE_BINDING_MISSING' })
       return
     }
+    const controller = new AbortController()
+    this.controllers.set(runId, controller)
+    const state = this.restoreState(runId)
+    if (state.recoveryRequired.length) {
+      this.store.setRun(runId, 'needs-reconciliation', { nodes: state.recoveryRequired })
+      this.store.append(runId, 'run.needs-reconciliation', undefined, {
+        nodes: state.recoveryRequired,
+      })
+      return
+    }
     this.store.setRun(runId, 'running')
     this.store.append(runId, 'run.started')
     if (resources.length) {
@@ -83,76 +116,101 @@ export class Engine {
         })),
       })
     }
-    const values = new Map<number, Json>()
-    const statuses = new Map<number, Status>()
-    for (const event of this.store.events(runId)) {
-      if (event.node === undefined) continue
-      if (event.type === 'node.completed') {
-        values.set(event.node, (event.data as any)?.value as Json)
-        statuses.set(event.node, 'completed')
-      }
-      if (event.type === 'node.failed') statuses.set(event.node, 'failed')
-      if (event.type === 'node.inactive') statuses.set(event.node, 'inactive')
-      if (event.type === 'approval.approved' || event.type === 'approval.rejected') {
-        values.set(event.node, event.type.slice('approval.'.length) as Json)
-        statuses.set(event.node, 'completed')
-      }
-    }
-    const controller = new AbortController()
-    this.controllers.set(runId, controller)
-    let dispatched = [...statuses.values()].filter((s) => s !== 'inactive').length
+    const inFlight = new Map<number, Promise<NodeCompletion>>()
+    let dispatched = [...state.statuses.values()].filter((s) => s !== 'inactive').length
     while (true) {
       if (controller.signal.aborted) {
         this.store.setRun(runId, 'cancelled')
         this.store.append(runId, 'run.cancelled')
         return
       }
-      const transitions = this.resolveTransitions(plan, statuses, values)
+      const transitions = this.resolveTransitions(plan, state.statuses, state.values)
       for (const [index, status] of transitions) {
         if (status === 'inactive' || status === 'blocked') {
-          statuses.set(index, status)
+          state.statuses.set(index, status)
           this.store.append(runId, `node.${status}`, index)
         }
         if (status === 'failed') {
-          statuses.set(index, status)
+          state.statuses.set(index, status)
           this.store.append(runId, 'node.failed', index, { error: 'UPSTREAM_FAILURE' })
         }
       }
       const output = plan.nodes.find(
-        (node) => node.kind === 'output' && statuses.get(node.index) === 'completed',
+        (node) => node.kind === 'output' && state.statuses.get(node.index) === 'completed',
       )
       if (output) {
-        this.store.setRun(runId, 'completed', {
+        state.terminalCandidate ??= {
           outputId: (output as any).outputId,
-          value: values.get(output.index) ?? null,
+          value: state.values.get(output.index) ?? null,
+        }
+        state.admissionOpen = false
+      }
+      if (state.terminalCandidate && inFlight.size === 0) {
+        this.store.setRun(runId, 'completed', {
+          outputId: state.terminalCandidate.outputId,
+          value: state.terminalCandidate.value,
         })
-        this.store.append(runId, 'run.completed', undefined, { outputId: (output as any).outputId })
+        this.store.append(runId, 'run.completed', undefined, {
+          outputId: state.terminalCandidate.outputId,
+        })
         return
       }
-      if ([...statuses.values()].some((s) => s === 'failed' || s === 'blocked')) {
+      if (
+        !state.terminalCandidate &&
+        [...state.statuses.values()].some((s) => s === 'failed' || s === 'blocked')
+      ) {
         this.store.setRun(runId, 'failed')
         this.store.append(runId, 'run.failed')
         return
       }
-      if (dispatched >= plan.limits.maxNodeDispatches) {
+      if (!state.terminalCandidate && dispatched >= plan.limits.maxNodeDispatches) {
         this.store.setRun(runId, 'failed', { code: 'STEP_LIMIT_EXCEEDED' })
         this.store.append(runId, 'run.failed', undefined, { code: 'STEP_LIMIT_EXCEEDED' })
         return
       }
-      const ready = plan.nodes
-        .filter(
-          (node) => !statuses.has(node.index) && this.isReady(node.index, plan, statuses, values),
-        )
-        .map((node) => node.index)
-      if (!ready.length) {
-        if (statuses.size === plan.nodes.length) {
-          this.store.setRun(runId, 'failed', { code: 'NO_TERMINAL_OUTPUT' })
-          this.store.append(runId, 'run.failed', undefined, { code: 'NO_TERMINAL_OUTPUT' })
-          return
+      if (state.terminalCandidate) {
+        const completion = await Promise.race(inFlight.values())
+        inFlight.delete(completion.index)
+        const node = plan.nodes[completion.index]
+        if (completion.status === 'completed') {
+          state.statuses.set(completion.index, 'completed')
+          state.values.set(completion.index, completion.value ?? null)
+          this.store.append(runId, 'node.completed', completion.index, {
+            value: completion.value ?? null,
+          })
+          if (node.kind === 'output') {
+            state.terminalCandidate = {
+              outputId: node.outputId,
+              value: completion.value ?? null,
+            }
+            state.admissionOpen = false
+          }
+        } else {
+          if ((completion.details as any)?.effectState === 'unknown') {
+            this.store.setRun(runId, 'needs-reconciliation', {
+              nodes: [completion.index],
+              error: completion.details as any,
+            })
+            this.store.append(runId, 'run.needs-reconciliation', completion.index, {
+              error: completion.details as any,
+            })
+            return
+          }
+          state.statuses.set(completion.index, 'failed')
+          this.store.append(runId, 'node.failed', completion.index, {
+            error: completion.error ?? 'UNKNOWN_ERROR',
+            ...(completion.details ? { details: completion.details as any } : {}),
+          })
         }
-        await new Promise((resolve) => setTimeout(resolve, 10))
         continue
       }
+      const ready = plan.nodes
+        .filter(
+          (node) =>
+            !state.statuses.has(node.index) &&
+            this.isReady(node.index, plan, state.statuses, state.values),
+        )
+        .map((node) => node.index)
       const approval = ready
         .map((index) => plan.nodes[index])
         .find((node) => node.kind === 'approval')
@@ -166,47 +224,95 @@ export class Engine {
         })
         return
       }
-      const batch = ready.slice(0, Math.max(1, plan.limits.maxConcurrency))
-      await Promise.all(
-        batch.map(async (index) => {
-          statuses.set(index, 'running')
-          dispatched++
-          const startedNode = plan.nodes[index]
-          this.store.append(
+      while (
+        ready.length &&
+        inFlight.size < Math.max(1, plan.limits.maxConcurrency) &&
+        state.admissionOpen
+      ) {
+        const index = ready.shift()!
+        if (state.statuses.has(index) || inFlight.has(index)) continue
+        const node = plan.nodes[index]
+        state.statuses.set(index, 'running')
+        dispatched++
+        this.store.append(
+          runId,
+          'node.started',
+          index,
+          node.kind === 'cf-call'
+            ? {
+                cfRef: node.cfRef,
+                executor: node.executorProfile ?? {
+                  id: node.executor ?? 'default',
+                  profileVersion: 0,
+                },
+              }
+            : { kind: node.kind },
+        )
+        inFlight.set(
+          index,
+          this.executeWithPolicy(
+            plan,
+            node,
+            state.values,
+            initial,
+            controller.signal,
             runId,
-            'node.started',
-            index,
-            startedNode.kind === 'cf-call'
-              ? {
-                  cfRef: startedNode.cfRef,
-                  executor: startedNode.executorProfile ?? {
-                    id: startedNode.executor ?? 'default',
-                    profileVersion: 0,
-                  },
-                }
-              : { kind: startedNode.kind },
-          )
-          try {
-            const value = await this.executeWithPolicy(
-              plan,
-              plan.nodes[index],
-              values,
-              initial,
-              controller.signal,
-              runId,
-              resources,
-            )
-            values.set(index, value)
-            statuses.set(index, 'completed')
-            this.store.append(runId, 'node.completed', index, { value })
-          } catch (error) {
-            statuses.set(index, 'failed')
-            this.store.append(runId, 'node.failed', index, {
+            resources,
+          ).then(
+            (value) => ({ index, status: 'completed' as const, value }),
+            (error) => ({
+              index,
+              status: 'failed' as const,
               error: error instanceof Error ? error.message : String(error),
-            })
+              details: (error as any)?.details,
+            }),
+          ),
+        )
+      }
+      if (!inFlight.size) {
+        if (state.terminalCandidate) continue
+        if (state.statuses.size === plan.nodes.length) {
+          this.store.setRun(runId, 'failed', { code: 'NO_TERMINAL_OUTPUT' })
+          this.store.append(runId, 'run.failed', undefined, { code: 'NO_TERMINAL_OUTPUT' })
+          return
+        }
+        this.store.setRun(runId, 'failed', { code: 'FLOW_STALLED' })
+        this.store.append(runId, 'run.failed', undefined, { code: 'FLOW_STALLED' })
+        return
+      }
+      const completion = await Promise.race(inFlight.values())
+      inFlight.delete(completion.index)
+      const node = plan.nodes[completion.index]
+      if (completion.status === 'completed') {
+        state.statuses.set(completion.index, 'completed')
+        state.values.set(completion.index, completion.value ?? null)
+        this.store.append(runId, 'node.completed', completion.index, {
+          value: completion.value ?? null,
+        })
+        if (node.kind === 'output') {
+          state.terminalCandidate = {
+            outputId: node.outputId,
+            value: completion.value ?? null,
           }
-        }),
-      )
+          state.admissionOpen = false
+        }
+      } else {
+        if ((completion.details as any)?.effectState === 'unknown') {
+          this.store.setRun(runId, 'needs-reconciliation', {
+            nodes: [completion.index],
+            error: completion.details as any,
+          })
+          this.store.append(runId, 'run.needs-reconciliation', completion.index, {
+            error: completion.details as any,
+          })
+          return
+        }
+        state.statuses.set(completion.index, 'failed')
+        this.store.append(runId, 'node.failed', completion.index, {
+          error: completion.error ?? 'UNKNOWN_ERROR',
+          ...(completion.details ? { details: completion.details as any } : {}),
+        })
+      }
     }
   }
   private async executeWithPolicy(
@@ -227,10 +333,50 @@ export class Engine {
         return await this.execute(plan, node, values, input, signal, runId, resources)
       } catch (error) {
         last = error
+        const details = (error as any)?.details as
+          import('./types.js').RuntimeExecutionError | undefined
+        if (details && (!details.retryable || details.effectState === 'unknown')) throw error
         if (attempt === maxAttempts) throw error
       }
     }
     throw last instanceof Error ? last : new Error(String(last))
+  }
+  private restoreState(runId: string): EngineState {
+    const statuses = new Map<number, Status>()
+    const values = new Map<number, Json>()
+    const started = new Set<number>()
+    for (const event of this.store.events(runId)) {
+      if (event.node === undefined) continue
+      if (event.type === 'node.started') {
+        statuses.set(event.node, 'running')
+        started.add(event.node)
+      }
+      if (event.type === 'node.completed') {
+        values.set(event.node, (event.data as any)?.value as Json)
+        statuses.set(event.node, 'completed')
+        started.delete(event.node)
+      }
+      if (event.type === 'node.failed') {
+        statuses.set(event.node, 'failed')
+        started.delete(event.node)
+      }
+      if (event.type === 'node.inactive') {
+        statuses.set(event.node, 'inactive')
+        started.delete(event.node)
+      }
+      if (event.type === 'approval.approved' || event.type === 'approval.rejected') {
+        values.set(event.node, event.type.slice('approval.'.length) as Json)
+        statuses.set(event.node, 'completed')
+        started.delete(event.node)
+      }
+    }
+    return {
+      statuses,
+      values,
+      terminalCandidate: null,
+      admissionOpen: true,
+      recoveryRequired: [...started].filter((index) => statuses.get(index) === 'running'),
+    }
   }
   private edgeState(
     edge: FlowPlan['edges'][number],
@@ -254,6 +400,7 @@ export class Engine {
     node: FlowNode & { index: number },
     incoming: FlowPlan['edges'],
     statuses: Map<number, Status>,
+    values: Map<number, Json>,
   ) {
     if (node.kind === 'join' && node.onUpstreamFailure === 'continue-eligible') return false
     return incoming.some(
@@ -263,7 +410,7 @@ export class Engine {
         edge.when?.outcome !== 'failed',
     )
   }
-  private resolveTransitions(
+  private settleTransitions(
     plan: FlowPlan,
     statuses: Map<number, Status>,
     values: Map<number, Json>,
@@ -274,18 +421,31 @@ export class Engine {
       const incoming = plan.edges.filter((edge) => edge.to === node.index)
       if (!incoming.length) continue
       const states = incoming.map((edge) => this.edgeState(edge, statuses, values))
-      if (states.some((state) => state === 'pending')) continue
-      const active = states.filter((state) => state === 'active').length
-      if (this.failedDependency(node, incoming, statuses)) {
+      if (node.kind === 'join' && node.mode === 'any') {
+        if (states.some((state) => state === 'active')) continue
+        if (states.some((state) => state === 'pending')) continue
+        if (this.failedDependency(node, incoming, statuses, values)) {
+          out.push([node.index, 'blocked'])
+          continue
+        }
+        out.push([node.index, 'inactive'])
+        continue
+      }
+      if (this.failedDependency(node, incoming, statuses, values)) {
         out.push([node.index, 'blocked'])
         continue
       }
-      if (!active) {
-        out.push([node.index, node.kind === 'output' ? 'inactive' : 'blocked'])
-        continue
-      }
+      if (states.some((state) => state === 'pending')) continue
+      if (!states.includes('active')) out.push([node.index, 'inactive'])
     }
     return out
+  }
+  private resolveTransitions(
+    plan: FlowPlan,
+    statuses: Map<number, Status>,
+    values: Map<number, Json>,
+  ): Array<[number, Status]> {
+    return this.settleTransitions(plan, statuses, values)
   }
   private isReady(
     index: number,
@@ -298,11 +458,15 @@ export class Engine {
     const states = incoming.map((edge) => this.edgeState(edge, statuses, values))
     if (
       !incoming.length ||
-      states.some((state) => state === 'pending') ||
-      !states.includes('active') ||
-      this.failedDependency(node, incoming, statuses)
+      ((node.kind !== 'join' || node.mode !== 'any') &&
+        states.some((state) => state === 'pending')) ||
+      ((node.kind !== 'join' || node.mode !== 'any') && !states.includes('active')) ||
+      ((node.kind !== 'join' || node.mode !== 'any') &&
+        this.failedDependency(node, incoming, statuses, values))
     )
       return false
+    if (node.kind === 'join' && node.mode === 'any')
+      return states.some((state) => state === 'active')
     return true
   }
   private async execute(
@@ -314,7 +478,7 @@ export class Engine {
     runId: string,
     resources: ResolvedResource[],
   ): Promise<Json> {
-    const input = this.inputFor(node.index, plan, values, runInput)
+    const input = this.inputContextFor(node.index, plan, values, runInput)
     if (node.kind === 'cf-call') {
       if (resources.length)
         this.store.append(runId, 'resource.access', node.index, {
@@ -329,6 +493,23 @@ export class Engine {
         (value) => value.cfId === node.cfRef.cfId && value.version === node.cfRef.version,
       )
       if (!version) throw new Error('CF_VERSION_NOT_FOUND')
+      const context = input as any
+      if (
+        version.draft.input?.trim() &&
+        /原始文件|已知错误列表|required|must provide/i.test(version.draft.input) &&
+        (!context?.upstream || context.upstream.length === 0) &&
+        (!context?.flowInput ||
+          (typeof context.flowInput === 'object' && Object.keys(context.flowInput).length === 0))
+      ) {
+        const error = new Error('INPUT_UNRESOLVED')
+        ;(error as any).details = {
+          code: 'INPUT_UNRESOLVED',
+          missing: [version.draft.input.trim()],
+          availableSources: [],
+          reason: '上游结果中没有找到符合描述的数据',
+        }
+        throw error
+      }
       if (
         sha256({
           inputContract: version.draft.inputContract,
@@ -343,17 +524,22 @@ export class Engine {
         input,
         node.executorProfile
           ? `${node.executorProfile.id}@${node.executorProfile.profileVersion}`
-          : node.executor ?? version.draft.defaultExecutor ?? 'echo',
+          : (node.executor ?? version.draft.defaultExecutor ?? 'echo'),
         signal,
         resources,
+        version.draft.effects ?? [],
       )
       assertContract(node.outputContract ?? version.draft.outputContract, output, 'CF_OUTPUT')
       return output
     }
     if (node.kind === 'branch') return this.evaluate(node.cond, input)
-    if (node.kind === 'join') return { status: 'joined' }
+    if (node.kind === 'join') return input
     if (node.kind === 'approval') return 'approved'
-    if (node.kind === 'output') return input
+    if (node.kind === 'output') {
+      const upstream = (input as any)?.upstream
+      if (Array.isArray(upstream) && upstream.length === 1) return upstream[0]?.output ?? null
+      return input
+    }
     throw new Error('UNKNOWN_NODE')
   }
   private async executeCF(
@@ -362,6 +548,7 @@ export class Engine {
     executorId: string,
     signal: AbortSignal,
     resources: ResolvedResource[],
+    effects: import('./types.js').CapabilityEffect[] = [],
   ): Promise<Json> {
     let current = version.program.entry
     const local: Record<string, Json> = {}
@@ -386,7 +573,7 @@ export class Engine {
         try {
           output = await this.executors
             .get(executorIdForStep)
-            .execute(task, stepInput, signal, resources)
+            .execute(task, stepInput, signal, resources, effects)
           break
         } catch (error) {
           if (step.onError?.action === 'continue') {
@@ -401,20 +588,50 @@ export class Engine {
     }
     throw new Error('STEP_LIMIT_EXCEEDED')
   }
-  private inputFor(index: number, plan: FlowPlan, values: Map<number, Json>, runInput: Json): Json {
-    const input: Record<string, Json> = {}
+  private inputContextFor(
+    index: number,
+    plan: FlowPlan,
+    values: Map<number, Json>,
+    runInput: Json,
+  ): Json {
     const node = plan.nodes[index]
-    for (const binding of plan.bindings.filter(
-      (value) => value.to.startsWith(`${node.id}.`) || value.to.startsWith(`$${index}.`),
-    )) {
-      const path = binding.from.slice('$user.'.length)
-      input[binding.to.split('.').pop()!] = binding.from.startsWith('$user.')
-        ? path === 'input'
-          ? runInput
-          : this.path(runInput, path.startsWith('input.') ? path.slice(6) : path)
-        : this.resolveRef(binding.from, plan, values)
+    const legacyBindings = (plan as any).bindings as Array<any> | undefined
+    if (legacyBindings?.length) {
+      const legacy: Record<string, Json> = {}
+      for (const binding of legacyBindings.filter(
+        (value) => value.to?.startsWith(`${node.id}.`) || value.to?.startsWith(`$${index}.`),
+      )) {
+        const path = String(binding.from).slice('$user.'.length)
+        legacy[String(binding.to).split('.').pop()!] = String(binding.from).startsWith('$user.')
+          ? path === 'input'
+            ? runInput
+            : this.path(runInput, path.startsWith('input.') ? path.slice(6) : path)
+          : this.resolveRef(binding.from, plan, values)
+      }
+      if (Object.keys(legacy).length) return legacy
     }
-    return Object.keys(input).length ? input : ((node as any).inputDefaults ?? {})
+    const incoming = plan.edges.filter((edge) => edge.to === index && typeof edge.from === 'number')
+    const upstream = incoming
+      .filter((edge) => typeof edge.from === 'number' && values.has(edge.from))
+      .map((edge) => {
+        const sourceIndex = edge.from as unknown as number
+        const source = plan.nodes[sourceIndex]
+        return {
+          nodeId: source.id,
+          nodeName: this.nodeName(source),
+          output: values.get(sourceIndex) ?? null,
+        }
+      })
+    return {
+      flowInput: runInput ?? {},
+      upstream,
+      ...(upstream.length === 0 && (node as any).inputDefaults !== undefined
+        ? { inputDefaults: (node as any).inputDefaults }
+        : {}),
+    }
+  }
+  private nodeName(node: FlowPlan['nodes'][number]) {
+    return (node as any).name ?? (node.kind === 'cf-call' ? node.cfRef.cfId : node.kind)
   }
   private resolveRef(ref: string, plan: FlowPlan, values: Map<number, Json>): Json {
     const match = /^\$?([\w-]+)\.output(?:\.(.*))?$/.exec(ref)
@@ -427,7 +644,7 @@ export class Engine {
   }
   private resolve(value: Json, input: Json, local: Record<string, Json>): Json {
     if (typeof value !== 'string') return value
-    if (value === '$input') return input
+    if (value === '$input' || value === '$inputContext') return input
     const match = /^\$local\.(\d+)\.output(?:\.(.*))?$/.exec(value)
     if (!match) return value
     const output = local[match[1]]
@@ -445,7 +662,21 @@ export class Engine {
         return this.evaluate(op.$eq[0], input, local) === this.evaluate(op.$eq[1], input, local)
       if ('$and' in op) return op.$and.every((x: Json) => this.evaluate(x, input, local))
       if ('$or' in op) return op.$or.some((x: Json) => this.evaluate(x, input, local))
-      if ('$get' in op) return this.path(input, String(op.$get))
+      if ('$get' in op) {
+        const key = String(op.$get)
+        const direct = this.path(input, key)
+        if (direct !== null) return direct
+        const context = input as any
+        const flow = this.path(context?.flowInput, key)
+        if (flow !== null) return flow
+        for (const source of context?.upstream ?? []) {
+          const value = this.path(source?.output, key)
+          if (value !== null) return value
+          if (source?.output && typeof source.output === 'object' && key in source.output)
+            return source.output[key]
+        }
+        return null
+      }
     }
     return expression
   }
