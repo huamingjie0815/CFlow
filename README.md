@@ -46,13 +46,13 @@ CFlow 的关键约束：
 直接从 npm 启动：
 
 ```bash
-npx @hmj/cflow
+npx @hmj-ai/cflow
 ```
 
 或全局安装：
 
 ```bash
-npm install -g @hmj/cflow
+npm install -g @hmj-ai/cflow
 cflow
 ```
 
