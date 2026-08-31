@@ -1,163 +1,136 @@
-# CF Platform 技术选型与实现约束 v0.1
+# CFlow 技术选型与实现约束 v1.0
 
-> 适用范围：个人本机版首发（M0–M2）
->
-> 目标：把 `CF-design.md`、`product-design.md`、`frontend-design.md` 和 `llm-prompt-design.md` 中的架构边界落成一套可实现、可验证、可演进的技术方案。
+> 状态：当前实现基线，更新于 2026-08-31。
 
-## 1. 评审结论
+## 1. 部署形态
 
-现有设计的核心边界成立，不调整以下原则：
-
-- Flow/CF 分属两级源对象，CFProgram/FlowPlan 是不可变编译产物；
-- Flow Engine 只解释已发布 FlowPlan，Agent 只能在 AgentStep 内自主执行；
-- `programHash`/`planHash`、权限、DAG、Binding 和运行状态由纯代码负责；
-- Run Ledger 是运行事实权威，Trace 只是可丢失的观测投影；
-- 外部副作用不承诺 exactly-once，未知结果必须进入 `needs-reconciliation`。
-
-当前设计需要补充的主要实现决策：
-
-1. 持久化、恢复、任务租约和事件回放尚未具体化；
-2. `zod` 不能独立承担用户自定义 JSON Contract 的运行时校验；
-3. `BranchNode.cond: string` 可能导致表达式执行不安全且难以保证确定性；
-4. 本机进程不能提供强网络隔离，Executor 的安全能力必须区分“平台强制”和“adapter 声明”；
-5. Ledger、Trace、实时事件和 Run Viewer 投影需要统一事件模型。
-
-## 2. 总体架构
-
-采用“模块化单体 + 独立执行 Worker”，首版不拆微服务，不引入 Temporal、Kubernetes 或 Redis。
+CFlow 当前是本机单用户、单 Node.js 进程的模块化单体。Fastify 同时提供 REST/SSE API 与 Vite 构建后的静态前端；进程内 Engine 执行 Flow，SQLite 保存草稿、版本、Run、Ledger 和 Job Lease。
 
 ```text
-React/Vite Web UI
-        │ REST + SSE
-Fastify API / Application Service
-        │
-SQLite（Ledger、Draft、Version、Run、Job）
-        │
-Flow Engine（确定性 DAG 解释器）
-        │
-CF Runtime
-        │
-受控子进程 / LLM API / Agent SDK Adapter
+桌面浏览器
+  └─ React 19 + TanStack Query + XYFlow
+       └─ REST / SSE
+            └─ Fastify 5
+                 ├─ Compiler
+                 ├─ Flow Engine / CF Runtime
+                 ├─ Runtime Manager
+                 └─ SQLite (better-sqlite3, WAL)
+                      └─ ACP 或 CLI 子进程
 ```
 
-代码按模块组织，但保持单机部署：
+默认监听 `127.0.0.1:3000`。只有外部另行提供认证和网络访问控制时，才应通过 `HOST` 改成其他地址。
 
-- `core`：领域类型、错误码、权限和版本模型；
-- `compiler`：CF Compiler、Flow Compiler、Validator、Hash；
-- `engine`：Flow Engine、CF Runtime、恢复、重试和取消；
-- `adapters`：AgentExecutor、脚本、服务和 LLM provider adapters；
-- `server`：REST、SSE、资源和凭据接口；
-- `web`：Flow、CF、Run 业务界面。
+## 2. 已采用技术
 
-## 3. 已确定技术选型
+| 领域        | 当前选型                        | 实现约束                                          |
+| ----------- | ------------------------------- | ------------------------------------------------- |
+| 语言/运行时 | TypeScript 7、Node.js ESM       | 服务端与前端共享领域类型                          |
+| 包管理      | pnpm workspace                  | 当前只有根包与 `web` 工作区                       |
+| HTTP        | Fastify 5                       | REST 为主；错误以 `{ error }` 返回                |
+| 文件上传    | `@fastify/multipart`            | 附件流式落入临时目录，再复制到 Flow 工作区归档    |
+| 前端        | React 19、Vite 8                | 单页桌面工作台                                    |
+| 服务端状态  | TanStack Query                  | Run 当前用 700ms 轮询；SSE API 已提供但 UI 未接入 |
+| DAG 画布    | `@xyflow/react`                 | 编辑稳定 source ID，不直接编辑 Plan index         |
+| 数据库      | SQLite + `better-sqlite3`       | WAL、`busy_timeout=5000`，手写建表和兼容性迁移    |
+| Contract    | Ajv 8                           | 校验受限 JSON Schema 和运行时输入/输出            |
+| Hash        | 稳定键排序序列化 + SHA-256      | `programHash`、`planHash` 不包含运行时状态        |
+| Agent 协议  | ACP SDK 1.4、CLI 子进程         | argv 启动，不拼接 shell 命令字符串                |
+| 测试        | Node test runner + `tsx --test` | 编译器、Engine、Runtime、HTTP 和 UI 辅助逻辑      |
+| 图标        | Lucide React                    | 不引入位图视觉依赖                                |
 
-| 子系统        | 选型                                               | 实施约束                                                                                           |
-| ------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| 运行时        | Node.js LTS + TypeScript strict                    | 复用现有 DSL 和 Agent SDK 生态                                                                     |
-| 包管理        | pnpm workspace                                     | 以模块边界替代微服务边界                                                                           |
-| HTTP API      | Fastify + REST + OpenAPI                           | 不使用 GraphQL；接口版本化                                                                         |
-| 实时事件      | SSE                                                | 事件带单调递增序号，支持断线续传                                                                   |
-| 前端          | React + Vite + TanStack Query（M1）                | M0 使用无构建依赖的静态 HTML/DOM 工作台，保持本机首发可直接运行；业务状态边界按 React 迁移目标设计 |
-| DAG 编辑      | `@xyflow/react`                                    | 只负责画布交互，不能直接编辑 FlowPlan/内部 index                                                   |
-| 数据库        | SQLite（WAL）                                      | 单用户本机；所有状态提交使用事务                                                                   |
-| 数据访问      | `better-sqlite3` + Drizzle ORM                     | 通过 migration 管理 schema                                                                         |
-| 调度          | 自研持久化 Scheduler + SQLite Job Lease            | 首版不依赖 Redis/BullMQ                                                                            |
-| Flow 执行     | 自研事件驱动 DAG Engine                            | ready-set、并发、失败传播和终止语义由代码实现                                                      |
-| 并发          | Engine 内置 semaphore                              | 默认单 Run 2、全局 4，可配置且写入 Receipt                                                         |
-| 外部进程      | Node `child_process`                               | timeout、abort、进程树终止、cwd 白名单、env scrubbing                                              |
-| Contract      | Zod + Ajv 8                                        | Zod 校验平台内部对象；Ajv 校验动态 JSON Schema                                                     |
-| Branch 表达式 | 受限 JSONLogic AST                                 | 禁止任意字符串 `eval`；只读取节点自身 input                                                        |
-| Hash          | RFC 8785 JCS + SHA-256                             | 禁止依赖对象插入顺序、时间戳或环境值                                                               |
-| ID            | UUIDv7                                             | 便于 Ledger 和 Run 按时间排序                                                                      |
-| 大对象        | 本地 content-addressed 文件目录                    | SQLite 只保存 metadata、hash 和引用                                                                |
-| Secret        | OS Keychain（如 keytar）                           | 数据库只保存 credential reference，不存明文                                                        |
-| 日志          | Pino structured logging                            | 不把日志当作治理事实                                                                               |
-| Trace         | OpenTelemetry（可选投影）                          | Trace 缺失不能改变业务结果                                                                         |
-| 测试          | Vitest + Playwright + fast-check + golden fixtures | 覆盖确定性、恢复、契约和主流程                                                                     |
+当前没有使用 Drizzle、Zod、OpenAPI 生成器、OpenTelemetry、Vitest、Playwright 或 fast-check；这些不能写成已采用技术。
 
-## 4. 持久化与恢复约束
+## 3. 构建与发布
 
-当前实现已将 Resource Profile 纳入运行闭环：Flow 发布时冻结资源需求，创建 Run 时通过 `resourceProfileId` 解析并校验必需绑定、资源类型和唯一性；解析后的绑定写入 Run 快照，执行前传入 Executor，并以 `resources.bound` / `resource.access` Ledger 事件审计。Profile 后续修改不会影响已经创建的 Run。
+```text
+pnpm build:web     Vite 输出到 public/
+pnpm build:server  tsc 输出到 dist/
+pnpm build         先构建前端，再构建服务端
+pnpm start         运行 dist/src/server.js
+pnpm test          运行 src/*.test.ts
+```
 
-至少实现以下持久化实体或等价结构：
+npm 包名为 `@hmj/cflow`，命令为 `cflow`。发布内容包含 `dist` 与 `README.md`；前端构建产物由服务端从 `public/` 或打包后的 `dist/public/` 提供。
 
-- `cf_drafts`、`cf_versions`；
-- `flow_drafts`、`flow_versions`；
-- `runs`、`run_attempts`、`node_attempts`；
-- `ledger_events`；
-- `jobs`（状态、lease、attempt、nextRunAt）；
-- `approvals`；
-- `resource_profiles`、`credential_refs`；
-- `blob_refs`。
+## 4. 持久化模型
 
-状态推进、CF return、edge outcome、approval、effect marker 和 checkpoint 必须在同一个 SQLite 事务中提交。Worker 领取 Job 时写入 lease；lease 超时后允许恢复领取。恢复依据 Ledger commit position，不依据 Trace span 是否结束。
+当前 SQLite 表：
 
-如果存在 `effect-start` 但没有 `effect-commit`，节点和 Run 必须进入 `needs-reconciliation`，关闭下游 admission，禁止自动重试。
+| 表                                     | 用途                                         |
+| -------------------------------------- | -------------------------------------------- |
+| `cf_drafts` / `cf_versions`            | CF 源对象与不可变发布版本                    |
+| `flow_drafts` / `flow_versions`        | Flow 源对象与不可变发布 Plan                 |
+| `flow_compilations`                    | preview/test 编译快照                        |
+| `runs`                                 | Run 状态、输入、输出和资源快照               |
+| `ledger_events`                        | 每个 Run 内单调递增的事实事件                |
+| `jobs`                                 | 单 Worker 的领取状态、30 秒 lease 和 attempt |
+| `approvals`                            | approval 节点的显式决定                      |
+| `resource_profiles`                    | 资源绑定配置                                 |
+| `runtime_profiles` / `runtime_current` | 不可变 Runtime Profile 历史与当前指针        |
+| `workspace_settings`                   | 默认 Runtime、默认资源 Profile、测试超时等   |
 
-Run Viewer 使用同一 ViewModel 支持四种来源：`live`（SSE）、`result`（数据库投影）、`trace`（诊断数据）、`combined`（合并但保留 evidence warning）。
+数据库默认位于 `data/cf.sqlite`，可用 `CF_DB` 覆盖。Schema 目前通过 `CREATE TABLE IF NOT EXISTS` 与列检查演进，没有独立 migration 框架。
 
-## 5. 必须修正的 DSL/安全约束
+## 5. 调度、恢复与实时事件
 
-### 5.1 Branch 条件
+- `Engine.start` 在同一进程内异步执行，`maxConcurrency` 默认 2。
+- Job 由 250ms 定时器领取；lease 为 30 秒。
+- Ledger 已提交的 completed/failed/inactive/approval 状态可恢复。
+- 进程恢复时若发现只记录 `node.started` 而没有终态，不自动重放，Run 进入 `needs-reconciliation`。
+- 写文件或命令执行在取消/超时后可能产生未知副作用，Runtime 以 `effectState: unknown` 上报并停止下游 admission。
+- `/api/runs/:id/events` 提供带 `id` 的 SSE 增量事件；当前 React 工作台仍轮询 `/api/runs/:id`。
 
-将 `BranchNode.cond: string` 改为受限、可序列化的 JSONLogic AST，并限制：
+这不是多 Worker 一致性实现：没有 lease 心跳、分布式锁、跨进程 executor 协调或跨机器恢复。
 
-- 只能访问该节点的 `$input`；
-- 操作符使用白名单；
-- 限制嵌套深度、数组长度和执行时间；
-- 编译期验证所有 case 必须在边定义中出现。
+## 6. Runtime 与进程边界
 
-### 5.2 Contract 校验
+Runtime 来源按后者覆盖前者：PATH ACP、内置 Codex/Claude Code、npm package manifest、用户 manifest、项目 manifest。具体格式见 [`../docs/agent-manifests.md`](../docs/agent-manifests.md)。
 
-- Zod 只用于平台内部固定结构（CFProgram、FlowPlan、Ledger event）；
-- 用户定义的 `InputContract`/`OutputContract` 使用 Ajv 8 执行 JSON Schema 校验；
-- 明确 JSON Schema 版本、最大深度、最大 payload 和错误码；
-- Contract 不通过时不得提交 canonical return，也不得解锁下游。
+- ACP 只有完成真实 `initialize` 握手才是 available。
+- CLI 通过无副作用的 `versionArgs` 探测可用性。
+- 认证状态默认为 unknown，不通过可能计费的模型请求猜测。
+- 环境变量只从 `envAllowlist` 继承；参数以 argv 数组传递。
+- CLI 依据 effect 映射 `none/read/write/full` 权限参数。
+- ACP permission request 会校验声明的 effect 与工作区路径。
+- 取消先发 SIGTERM，1 秒后补 SIGKILL。
 
-### 5.3 本机执行隔离
+安全表述必须精确：当前只提供独立子进程、工作目录约束、环境清理、超时/取消、输出上限和部分权限校验；不能宣称通用网络隔离或主机级文件系统沙箱。
 
-首版只能承诺受控本机进程：独立子进程、工作目录限制、环境清理、超时/取消、工具 allowlist。不得在 UI 中笼统宣称“网络沙箱”。需要强网络或文件系统隔离时，后续增加 Docker/Firecracker Executor，并在 `ExecutorRuntimeTraits` 中明确标注强制等级。
+## 7. 工作目录与附件
 
-## 6. 暂不采用与升级路径
+- 每个 Flow 必须有绝对、存在、可读写的 `workspaceRoot`。
+- Flow 首次保存后工作目录不可更改；测试、发布、运行和 Flow 助手会重新验证该目录。
+- 普通草稿在目录暂时不可用时仍可编辑保存，但 Agent、测试、发布和运行暂停。
+- skill 附件只接受文本类扩展名，拒绝隐藏路径、`..`、`.git` 和 `node_modules`。
+- 附件分析最多把 400,000 个字符放入有界 Prompt；成功后归档到 `<workspace>/.cflow/flows/<flowId>/attachments`。
+- 带附件的提案要求每个生成阶段提供可在原文中找到的 `sourceQuote`，否则 fail closed。
 
-首版暂不采用：
+## 8. 当前明确不做
 
-- Temporal 等外部工作流引擎；
-- Redis/BullMQ；
-- Kubernetes 和微服务部署；
-- GraphQL；
-- Tauri/Electron 桌面封装；
-- 通用 API connector 平台；
-- 团队、多租户和复杂治理模型。
+- 移动端、触控端和窄屏响应式布局；
+- 原生 Tauri/Electron 壳；
+- 云端多租户、团队与 RBAC；
+- PostgreSQL、Redis、Temporal、Kubernetes 或微服务；
+- 强网络隔离、容器或 VM 沙箱；
+- 通用凭据保险库与 Connector 平台；
+- exactly-once 外部副作用；
+- 全量 Prompt Registry、离线评测平台和 token/cost 账单。
 
-达到以下条件再升级：
+## 9. 升级条件
 
-| 触发条件                       | 升级方向                                               |
-| ------------------------------ | ------------------------------------------------------ |
-| 需要多用户或远程访问           | SQLite → PostgreSQL；增加认证、租户和权限服务          |
-| 并发或任务量超过单 Worker 能力 | Job Lease → Redis/托管队列；拆分 Worker                |
-| 需要长时间、跨机器恢复         | 评估 Temporal；保留当前 FlowPlan/CFProgram 作为业务 IR |
-| 需要强沙箱                     | 本机进程 → Docker/Firecracker Executor                 |
-| Trace/Blob 规模增长            | 本地文件 → 对象存储，Ledger 仍保持独立                 |
+| 触发条件         | 可能演进                                           |
+| ---------------- | -------------------------------------------------- |
+| 需要远程多用户   | 增加认证/租户；SQLite 迁移 PostgreSQL              |
+| 单进程吞吐不足   | 独立 Worker、可靠队列和 lease 心跳                 |
+| 需要跨机器长任务 | 评估 Temporal，同时保留 CFProgram/FlowPlan 业务 IR |
+| 需要强隔离       | 增加容器/VM Executor，并让 traits 反映真实强制能力 |
+| Run 量明显增长   | UI 接入 SSE、增加分页与归档策略                    |
 
-## 7. 验收测试
+## 10. 验收基线
 
-- 相同 Draft、Registry 和 Compiler 版本产生相同 `programHash`/`planHash`；
-- 非法引用、缺失 Binding、环、不可达节点和非终止路径在编译期拒绝；
-- branch、all/any/quorum join、失败传播和 inactive 路径符合设计语义；
-- 进程崩溃后可依据 Ledger 恢复，已提交节点不会重复执行；
-- 未知副作用结果进入 `needs-reconciliation`，不得自动 retry 或推进下游；
-- abort、timeout、预算耗尽能传播到 AgentExecutor 和子进程；
-- SSE 断线后可按事件序号补发，状态不重复、不倒退；
-- Trace 删除或缺失不会改变 Run 结果和 Receipt；
-- Agent 输出不满足 Contract 时不能解锁下游；
-- Prompt injection、结构化输出失败、未注册 executor 和能力不匹配均 fail closed；
-- Playwright 覆盖“创建 Flow → 测试 → 发布 → 运行 → 查看结果”主闭环。
-
-## 8. 默认假设
-
-- 首版是本机单用户产品；
-- 通过 localhost 浏览器访问，不封装桌面壳；
-- 只运行一个 Scheduler/Worker 进程；
-- 不承诺外部副作用 exactly-once；
-- 未来云端迁移路径为 SQLite → PostgreSQL、SQLite Job Lease → 托管队列/Temporal、文件目录 → 对象存储。
+- `pnpm test` 全部通过；
+- `pnpm typecheck:web` 与 `pnpm build` 通过；
+- 同一输入产生稳定 hash，篡改 Plan/Program 时 fail closed；
+- 环、不可达节点、缺 entry/output、非法 branch/approval edge 在编译期拒绝；
+- branch、join all/any、重试、取消、审批、资源解析和恢复行为有测试覆盖；
+- Runtime 不可用、输出非 JSON、Contract 不匹配和越权操作均不解锁下游。

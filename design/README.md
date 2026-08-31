@@ -1,22 +1,32 @@
-# Design Documents
+# CFlow 设计文档
 
-本目录是 CF Platform 设计文档的唯一维护位置。
+本目录描述当前仓库已经实现并由测试覆盖的设计。文档以 `src/`、`web/src/` 和测试为事实源；如果文档与代码冲突，以最新代码为准，并应在同一次变更中修正文档。
 
-| 文档 | 负责回答的问题 |
-|------|----------------|
-| [`CF-design.md`](./CF-design.md) | 高层 Agent Loop 如何被人为设计、编译和机械执行？ |
-| [`product-design.md`](./product-design.md) | 用户如何编写 CF、维护 Flow、发布版本并运行？ |
-| [`frontend-design.md`](./frontend-design.md) | 前端信息架构、页面、交互、视觉系统、响应式与验收标准 |
-| [`llm-prompt-design.md`](./llm-prompt-design.md) | LLM 参与组件的 Prompt、Schema、安全边界、评测与版本策略 |
-| [`tech-selection.md`](./tech-selection.md) | 面向个人本机版的技术选型、持久化、执行隔离与升级路径 |
+## 文档地图
 
-四份文档遵循同一个核心边界：
+| 文档                                                       | 当前职责                                       | 主要代码事实源                                      |
+| ---------------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| [`CF-design.md`](./CF-design.md)                           | CF/Flow 领域模型、编译器、执行引擎与运行不变量 | `src/types.ts`、`compiler.ts`、`engine.ts`、`db.ts` |
+| [`product-design.md`](./product-design.md)                 | 当前产品范围、对象、用户闭环与状态门禁         | `web/src/App.tsx`、`src/server.ts`                  |
+| [`frontend-design.md`](./frontend-design.md)               | 桌面工作台的信息架构、交互、视觉与验收         | `web/src/`、根目录 `DESIGN.md`                      |
+| [`llm-prompt-design.md`](./llm-prompt-design.md)           | 当前 Runtime 提示词、结构化输出和安全边界      | `src/server.ts`、`src/runtime.ts`                   |
+| [`tech-selection.md`](./tech-selection.md)                 | 已采用的技术、部署边界、持久化和升级条件       | `package.json`、`src/`、`web/`                      |
+| [`../docs/agent-manifests.md`](../docs/agent-manifests.md) | 第三方 Agent manifest 格式和发现规则           | `src/runtime-manifest.ts`                           |
 
-- **产品源对象**：CFDraft、FlowDraft。
-- **函数编译产物**：CFProgram，随 CFVersion 冻结。
-- **流程编译产物**：FlowPlan DAG，随 FlowVersion 冻结。
-- **运行时分层**：Flow Engine → CF Runtime → AgentExecutor/Script/Service。
-- **运行记录**：Flow Run + CF Call/Step Audit。
-- **外部资源**：按 Flow 需要绑定，不建立 Project 中心模型。
+根目录 [`../PRODUCT.md`](../PRODUCT.md) 和 [`../DESIGN.md`](../DESIGN.md) 分别是产品摘要和视觉令牌摘要，不重复完整领域设计。
 
-当产品设计与运行时设计发生冲突时，先用“人为设计高层 Loop、agent 执行节点内 Loop”判断是否偏离核心理念，再同时修订两份文档，避免产品对象与 DSL 各自演化。
+## 文档状态规则
+
+- **当前实现**：代码中已存在，且至少有测试、类型或 UI 调用链可以验证。
+- **已知限制**：当前实现的真实边界，不用理想化设计替代。
+- **规划**：尚未实现，只能出现在显式的“后续演进”章节。
+- 不再把 Project、团队治理、云端多租户、通用 Connector、Prompt Registry、OpenTelemetry、Drizzle、UUIDv7 等早期设想写成当前能力。
+
+## 共同边界
+
+- 用户维护 `CFDraft` 与 `FlowDraft`；`CFProgram` 与 `FlowPlan` 是确定性编译产物。
+- Flow 是一级工作上下文，CF 是 Flow 引用的能力函数。
+- Flow Engine 只调度已编译的 DAG；Agent 只执行当前 CF 的当前 Agent step。
+- 发布 Flow 时固定 CF 版本、程序 hash、Runtime Profile 版本和工作目录。
+- Run Ledger 是运行事实来源；Agent 文本不能改变图、审批、权限或运行状态。
+- 产品仅面向桌面浏览器。左右栏可收起为桌面窄轨，不实现移动端、触控端或窄屏抽屉。

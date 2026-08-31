@@ -4,58 +4,66 @@
 
 ## Platform
 
-web
+desktop web
 
 ## Users
 
-主要用户是需要设计、验证和维护智能任务流程的专业用户。他们在桌面浏览器中工作，希望用自然语言描述目标，再通过可视化编排校准由 agent 生成的流程，而不必直接维护底层 DSL 或 JSON。
-
-高级维护者还需要检查 CF 契约、执行器、资源与副作用声明、编译结果和不可变版本，但这些技术信息应按需展开，不能压过主要工作流。
+主要用户是在本机设计、验证和运行 Agent 工作流的专业用户。他们希望先用自然语言表达目标，再通过可视化 DAG 校准步骤，而不是直接维护 JSON DSL。
 
 ## Product Purpose
 
-CF Platform 是一个以 Flow 为第一等对象的通用 agent 工作台。用户选择底层 agent runtime（例如 Claude Code、Codex），通过对话设定初始目标；agent 根据目标和当前框架生成可审阅的 CF 能力节点及 Flow 草案。用户随后在可视化画布中调整节点、连接与顺序，测试流程，并在验证通过后发布不可变版本。
+CFlow 是以 Flow 为一级工作上下文的本机 Agent 编排工作台。用户选择工作目录和可用 Runtime，生成可审阅的 Flow/CF 草稿，在画布中编辑能力、分支、汇合、审批、输出和连线，经确定性检查与测试后发布不可变 Flow Version，之后运行该版本并查看 Ledger 证据。
 
-成功意味着用户能在同一个工作台内顺畅完成“定义目标 → 生成草案 → 人工编排 → 测试 → 发布”，并始终清楚当前编辑对象、运行状态和下一步动作。
+核心闭环：
+
+```text
+选择工作目录 → 描述目标/附加 skill 文本 → 生成草稿
+→ 画布编辑 → 检查 DSL → 测试 → 发布 → 运行 → 查看活动/询问流程助手
+```
 
 ## Positioning
 
-产品不直接调用或维护 LLM 会话层，而是把 Claude Code、Codex 等现有 agent 作为可切换的运行时，让它们在受约束的 CF/Flow 两级框架内生成、执行和校准可版本化的能力流程。目标生成只产生可审阅草案，不在运行时动态改写已发布流程。
+- Flow 是高层、可审阅、可版本化的 DAG；CF 是可复用能力函数。
+- Agent 负责提出候选结构和执行单个 CF step，人负责接受、编辑、测试和发布。
+- 运行已发布 Flow 时不重新规划图。
+- Project 不是一级产品对象；每个 Flow 固定一个本机工作目录，资源通过 Resource Profile 绑定。
 
 ## Operating Context
 
-- Flow 是创建、选择、维护、测试、发布与版本管理的主维度。
-- 工作台采用三栏结构：左侧 Flow 导航，中间对话与可视化编排，右侧上下文功能面板。
-- Flow 初始态是通用 agent 对话，允许选择运行时并输入目标。
-- 生成结果转为可拖拽的 Flow 画布；用户可添加、编辑、删除 CF 节点并重建连接和顺序。
-- 右侧根据当前选中对象承载 CF 详情、Flow 设置、测试信息和版本管理。
-- 测试通过后才能进入发布流程；发布生成不可变 Flow Version。
+- 只支持桌面浏览器，视口最小宽度 1120px。
+- 三栏工作台：Flow 导航、中央目标/画布/DSL 检查、右侧详情/活动/AI 助手。
+- 左右栏可收起为 50px 桌面窄轨，不转换为移动端抽屉。
+- 设置以覆盖层打开，管理默认 Agent、测试超时和高级资源绑定。
+- 中文为主要界面语言；Runtime、CF/Flow ID、版本和 hash 保留技术原名。
 
-## Capabilities and Constraints
+## Current Capabilities
 
-- 保持 CF/Flow 两级架构：CF 是可复用能力节点，Flow 是人工可审阅的高层 DAG。
-- 用户编辑 CFDraft 与 FlowDraft；CFProgram 和 FlowPlan 是只读编译产物。
-- 不把 Project 设为一级产品对象；Repository、Mailbox 等属于运行时 Resource。
-- 现有服务端 API、编译、运行、审批、取消和事件流能力应继续可用。
-- 当前交付为 Web，不开发原生桌面应用。
-- 界面中文优先；底层 agent、版本号、hash 等技术标识保留其原名。
-- Runtime 切换必须路由到服务端 Registry 中健康且启用的精确 Profile；发布 Flow pin Profile 版本。Process Adapter 不得夸大其文件系统或网络隔离能力。
+- Flow/CF 草稿自动保存、选择和删除；已发布 Flow Version 可删除。
+- Codex、Claude Code 内置 manifest；发现 PATH ACP、npm、用户和项目 manifest。
+- 自然语言 Flow 提案；上传 skill 文本文件/目录后进行只读、有引用依据的分析。
+- XYFlow 画布编辑 CF、branch、join、approval、output 和控制连线。
+- 独立 DSL 检查视图，展示 FlowPlan、CFProgram 和编译错误。
+- 测试使用临时编译快照，不先发布 CF/Flow。
+- 测试通过后才能发布；发布固定 Runtime Profile 版本。
+- 运行、取消、审批、失败重试、Run 活动和节点状态。
+- Flow 助手基于当前草稿与最近运行给出最多三个可审阅动作；Runtime 不可用时使用确定性本地建议。
 
-## Evidence on Hand
+## Constraints
 
-- 产品与架构定义位于 `design/`。
-- 当前可运行前端位于 `public/index.html`。
-- 服务端已经提供 CF 发布、Flow 提案与发布、Flow Run、资源绑定、审批、取消和事件流接口。
-- 当前仓库提供版本化 Runtime Profile、CLI 健康探测、Process Adapter、Flow/CF 草稿持久化及工作区设置 API。Codex 可用性取决于本机 CLI 与登录状态；Claude Code 或自定义 Runtime 未安装/未配置时必须明确显示不可用。
+- 当前是本机单用户 Web 应用，不提供认证、多租户或团队治理。
+- 工作目录首次绑定后不可更改；路径失效时停止 Agent、测试、发布和运行。
+- Process/ACP Runtime 不等于通用沙箱；UI 不能宣称已强制网络隔离。
+- Agent 输出不是权限、审批、图合法性或运行成功的权威。
+- 当前前端轮询 Run 状态；SSE API 尚未接入 UI。
 
 ## Product Principles
 
-1. Flow 始终是工作上下文，用户不会在操作中丢失当前 Flow。
-2. 先用自然语言定义目标，再让结构化流程逐步显现。
-3. agent 负责提出方案，人负责接受、编排与发布。
-4. 业务状态和下一步动作优先于 JSON、日志与编译细节。
-5. 测试与发布是明确分离的门禁，版本结果可追溯且不可变。
+1. Flow 始终是工作上下文。
+2. 自然语言先产生候选结构，所有变更都可审阅。
+3. 业务状态、下一步动作和失败原因优先于原始 JSON。
+4. 检查、测试、发布、运行是不同阶段，不互相偷渡。
+5. 发布版本和 Run 事实可追溯；发生未知副作用时停止并要求人工核对。
 
-## Accessibility & Inclusion
+## Accessibility
 
-界面需支持键盘操作、清晰焦点、文本状态提示、减少动态效果偏好和窄屏降级；状态不能只依赖颜色表达。
+必须提供清晰键盘焦点、文本状态标签、可访问名称和 reduced-motion 支持。状态不得只依赖颜色。产品不承担移动端或触控端适配。
