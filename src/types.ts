@@ -1,38 +1,14 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
-export type LocalErrorPolicy =
-  | { action: 'fail-cf' }
-  | { action: 'retry'; maxAttempts: number }
-  | { action: 'continue'; fallback: Json }
-export type CFStep =
-  | {
-      index: number
-      kind: 'agent'
-      task: string
-      input?: Json
-      next?: number
-      outputContract?: Json
-      timeoutMs?: number
-      onError?: LocalErrorPolicy
-    }
-  | {
-      index: number
-      kind: 'call'
-      target: { type: 'script' | 'service'; ref: { id: string; version: string } }
-      input?: Json
-      next?: number
-      outputContract?: Json
-      timeoutMs?: number
-      onError?: LocalErrorPolicy
-    }
-  | { index: number; kind: 'guard'; cond: Json; then: number; else: number }
-  | { index: number; kind: 'return'; source?: Json }
+/**
+ * Deterministic compiler output for one CF. A CF is exactly one bounded agent
+ * capability, so the program carries the compiled task text and nothing else:
+ * there is no internal control flow for the engine to interpret.
+ */
 export interface CFProgram {
-  version: '0.1'
+  version: '0.2'
   cfId: string
   sourceRevision: number
-  entry: number
-  steps: CFStep[]
-  limits: { maxStepExecutions: number; maxExternalCalls: number; maxOutputBytes: number }
+  task: string
 }
 export interface CFDraft {
   cfId: string
@@ -46,7 +22,6 @@ export interface CFDraft {
   outputContract?: Json
   effects?: CapabilityEffect[]
   defaultExecutor?: string
-  program?: CFProgram
 }
 export type CapabilityEffect = {
   type: 'file-read' | 'file-write' | 'command'
@@ -121,30 +96,23 @@ export interface FlowEdge {
     caseId?: string
   }
 }
-export interface FlowBinding {
-  id: string
-  from: string
-  to: string
-  required?: boolean
-  default?: Json
-}
 export interface FlowDraft {
   flowId: string
   revision: number
   name: string
   objective: string
+  workspaceRoot: string
   nodes: FlowNode[]
   edges: FlowEdge[]
-  /** @deprecated Field-level bindings are no longer used. */
-  bindings?: FlowBinding[]
   resources?: ResourceRequirement[]
   limits?: { maxConcurrency?: number; maxNodeDispatches?: number }
 }
 export interface FlowPlan {
-  version: '0.5'
+  version: '0.6'
   flowId: string
   flowVersion: string
   objective: string
+  workspaceRoot: string
   entries: number[]
   nodes: (FlowNode & {
     index: number
@@ -177,11 +145,14 @@ export type LedgerEvent = {
   at: string
 }
 
-export type RuntimeBackendKind = 'builtin' | 'acp'
+export type RuntimeBackendKind = 'builtin' | 'acp' | 'cli'
 export type RuntimePromptTransport = 'stdin' | 'argument'
 export type RuntimeOutputMode = 'json' | 'text'
+export type RuntimePermissionMode = 'none' | 'read' | 'write' | 'full'
+export type RuntimeDiscoverySource =
+  'builtin' | 'path-acp' | 'package-manifest' | 'user-manifest' | 'project-manifest' | 'manual'
 export interface ExecutorRuntimeTraits {
-  backendKind: 'builtin' | 'acp'
+  backendKind: 'builtin' | 'acp' | 'process'
   sessionMode: 'stateless' | 'per-cf-call' | 'persistent'
   structuredOutput: boolean
   streaming: boolean
@@ -210,6 +181,12 @@ export interface RuntimeProfile {
   maxOutputBytes: number
   envAllowlist: string[]
   capabilities: string[]
+  permissionArgs?: Partial<Record<RuntimePermissionMode, string[]>>
+  discovery?: {
+    source: RuntimeDiscoverySource
+    manifestPath?: string
+    manifestHash?: string
+  }
   traits: ExecutorRuntimeTraits
   adapterBuild: string
   createdAt: string
@@ -220,12 +197,13 @@ export interface RuntimeHealth {
   status: 'available' | 'unavailable' | 'disabled' | 'checking'
   checkedAt: string
   latencyMs: number
+  stage?: 'installed' | 'adapter-ready' | 'protocol-ready'
+  authentication?: 'unknown' | 'verified'
   version?: string
   error?: string
 }
 export interface WorkspaceSettings {
   defaultRuntimeId: string
-  workspaceRoot: string
   defaultResourceProfileId?: string
   autoSaveDrafts: boolean
   testTimeoutMs: number

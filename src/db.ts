@@ -20,13 +20,6 @@ export class Store {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_compilations (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, flow_revision INTEGER NOT NULL, mode TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS approvals (run_id TEXT NOT NULL, node INTEGER NOT NULL, decision TEXT, decided_at TEXT, PRIMARY KEY(run_id,node)); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
     )
-    const columns = this.db.prepare('PRAGMA table_info(runs)').all() as { name: string }[]
-    if (!columns.some((column) => column.name === 'input'))
-      this.db.exec("ALTER TABLE runs ADD COLUMN input TEXT NOT NULL DEFAULT '{}'")
-    if (!columns.some((column) => column.name === 'resource_profile_id'))
-      this.db.exec('ALTER TABLE runs ADD COLUMN resource_profile_id TEXT')
-    if (!columns.some((column) => column.name === 'resources'))
-      this.db.exec("ALTER TABLE runs ADD COLUMN resources TEXT NOT NULL DEFAULT '[]'")
   }
   saveFlowCompilation(snapshot: FlowCompilationSnapshot) {
     this.db
@@ -210,6 +203,27 @@ export class Store {
       changes?: number
     }
   }
+  deleteFlowVersion(id: string) {
+    return this.db.prepare('DELETE FROM flow_versions WHERE id=?').run(id) as {
+      changes?: number
+    }
+  }
+  deleteFlowVersions(flowId: string) {
+    const rows = this.db.prepare('SELECT id,value FROM flow_versions').all() as {
+      id: string
+      value: string
+    }[]
+    const ids = rows
+      .filter((row) => (JSON.parse(row.value) as { flowId?: string }).flowId === flowId)
+      .map((row) => row.id)
+    if (!ids.length) return { changes: 0 }
+    const tx = this.db.transaction(() => {
+      const statement = this.db.prepare('DELETE FROM flow_versions WHERE id=?')
+      for (const id of ids) statement.run(id)
+      return ids.length
+    })
+    return { changes: tx() }
+  }
   saveRuntimeProfile(profile: RuntimeProfile) {
     const profileId = `${profile.id}@${profile.profileVersion}`
     const tx = this.db.transaction(() => {
@@ -254,27 +268,33 @@ export class Store {
   runtimeProfileHistory(id: string): RuntimeProfile[] {
     return (
       this.db
-        .prepare('SELECT value FROM runtime_profiles WHERE runtime_id=? ORDER BY profile_version DESC')
+        .prepare(
+          'SELECT value FROM runtime_profiles WHERE runtime_id=? ORDER BY profile_version DESC',
+        )
         .all(id) as { value: string }[]
     ).map((row) => JSON.parse(row.value) as RuntimeProfile)
   }
   allRuntimeProfiles(): RuntimeProfile[] {
     return (
-      this.db.prepare('SELECT value FROM runtime_profiles ORDER BY runtime_id,profile_version').all() as {
+      this.db
+        .prepare('SELECT value FROM runtime_profiles ORDER BY runtime_id,profile_version')
+        .all() as {
         value: string
       }[]
     ).map((row) => JSON.parse(row.value) as RuntimeProfile)
   }
   nextRuntimeProfileVersion(id: string) {
     const row = this.db
-      .prepare('SELECT COALESCE(MAX(profile_version),0)+1 version FROM runtime_profiles WHERE runtime_id=?')
+      .prepare(
+        'SELECT COALESCE(MAX(profile_version),0)+1 version FROM runtime_profiles WHERE runtime_id=?',
+      )
       .get(id) as { version: number }
     return row.version
   }
   settings(): WorkspaceSettings | undefined {
-    const row = this.db.prepare("SELECT value FROM workspace_settings WHERE id='workspace'").get() as
-      | { value: string }
-      | undefined
+    const row = this.db
+      .prepare("SELECT value FROM workspace_settings WHERE id='workspace'")
+      .get() as { value: string } | undefined
     return row ? (JSON.parse(row.value) as WorkspaceSettings) : undefined
   }
   saveSettings(settings: WorkspaceSettings) {

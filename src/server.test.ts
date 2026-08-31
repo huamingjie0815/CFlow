@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { createApp } from './server.js'
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { createApp, isDirectExecution } from './server.js'
 import { Store } from './db.js'
 import type { RuntimeProfile } from './types.js'
 
@@ -38,6 +41,16 @@ const createTestApp = (store: Store) => {
   return createApp(store)
 }
 
+test('recognizes the npm bin symlink as direct execution', (t) => {
+  const root = join('/tmp', `cflow-bin-${randomUUID()}`)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(root, { recursive: true })
+  const bin = join(root, 'cflow')
+  symlinkSync(fileURLToPath(new URL('./server.ts', import.meta.url)), bin)
+  assert.equal(isDirectExecution(bin), true)
+  assert.equal(isDirectExecution(join(root, 'missing')), false)
+})
+
 test('HTTP API publishes and runs a Flow', async () => {
   const store = new Store(`/tmp/cf-api-${randomUUID()}.sqlite`)
   const app = createTestApp(store)
@@ -50,17 +63,6 @@ test('HTTP API publishes and runs a Flow', async () => {
     inputContract: { type: 'object' },
     outputContract: { type: 'object' },
     defaultExecutor: 'echo',
-    program: {
-      version: '0.1',
-      cfId: 'api-echo',
-      sourceRevision: 1,
-      entry: 0,
-      steps: [
-        { index: 0, kind: 'agent', task: 'echo', input: '$input', next: 1 },
-        { index: 1, kind: 'return', source: '$local.0.output' },
-      ],
-      limits: { maxStepExecutions: 4, maxExternalCalls: 1, maxOutputBytes: 4096 },
-    },
   }
   const cfResponse = await app.inject({ method: 'POST', url: '/api/cfs', payload: cf })
   assert.equal(cfResponse.statusCode, 200)
@@ -68,18 +70,18 @@ test('HTTP API publishes and runs a Flow', async () => {
   const proposalResponse = await app.inject({
     method: 'POST',
     url: '/api/flow-proposals',
-    payload: { objective: 'Echo' },
+    payload: { objective: 'Echo', workspaceRoot: process.cwd() },
   })
   assert.equal(proposalResponse.statusCode, 200)
   assert.equal(proposalResponse.json().flowDraft.nodes.length, 2)
   assert.deepEqual(
-    proposalResponse.json().flowDraft.bindings.map((binding: any) => binding.id),
-    ['initial-input', 'result'],
+    proposalResponse.json().flowDraft.nodes.map((node: { kind: string }) => node.kind),
+    ['cf-call', 'output'],
   )
   const unmatchedProposal = await app.inject({
     method: 'POST',
     url: '/api/flow-proposals',
-    payload: { objective: 'unrelated objective' },
+    payload: { objective: 'unrelated objective', workspaceRoot: process.cwd() },
   })
   assert.equal(unmatchedProposal.statusCode, 200)
   assert.equal(unmatchedProposal.json().flowDraft, null)
@@ -88,6 +90,7 @@ test('HTTP API publishes and runs a Flow', async () => {
     revision: 1,
     name: 'API',
     objective: 'echo',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'call', kind: 'cf-call', cfRef: { cfId: 'api-echo', version: version.version } },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -95,10 +98,6 @@ test('HTTP API publishes and runs a Flow', async () => {
     edges: [
       { id: 'start', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
-    ],
-    bindings: [
-      { id: 'input', from: '$user.input.message', to: 'call.input.message' },
-      { id: 'output', from: 'call.output', to: 'out.input' },
     ],
   }
   const flowResponse = await app.inject({ method: 'POST', url: '/api/flows', payload: flow })
@@ -125,6 +124,146 @@ test('HTTP API publishes and runs a Flow', async () => {
   store.close()
 })
 
+test('requires an ACP runtime for skill attachment analysis', async () => {
+  const store = new Store(`/tmp/cf-skill-upload-${randomUUID()}.sqlite`)
+  const app = createTestApp(store)
+  await app.ready()
+  const boundary = 'cflow-boundary'
+  const payload = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="objective"',
+    '',
+    'convert this skill into a flow',
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="runtimeId"',
+    '',
+    'echo',
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="workspaceRoot"',
+    '',
+    process.cwd(),
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="attachments"; filename="SKILL.md"',
+    'Content-Type: text/markdown',
+    '',
+    '# Skill\n1. Read input\n2. Return result',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/flow-proposals',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  })
+  assert.equal(response.statusCode, 400)
+  assert.equal(response.json().error, 'RUNTIME_ANALYSIS_REQUIRED')
+  await app.close()
+  store.close()
+})
+
+test('passes uploaded text content to the runtime instead of only attachment filenames', async (t) => {
+  const root = join('/tmp', `cf-skill-content-${randomUUID()}`)
+  // Cleanup runs on assertion failure too: an unclosed fastify app / sqlite
+  // handle would otherwise keep the test process alive and hang the suite.
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(root, { recursive: true })
+  const executable = join(root, 'content-runtime')
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', chunk => input += chunk)
+process.stdin.on('end', () => {
+  const found = input.includes('UNIQUE_SKILL_MARKER')
+  const ungrounded = input.includes('NO_GROUNDING')
+  process.stdout.write(JSON.stringify({
+    flowName: found ? 'marker-flow' : 'wrong-flow',
+    summary: found ? 'source used' : 'source missing',
+    stages: [{ kind: 'cf-call', name: found ? 'marker-stage' : 'wrong-stage', does: found ? 'use UNIQUE_SKILL_MARKER' : 'ignore source', input: '', output: '', process: '', sourceQuote: ungrounded ? 'invented quote that appears nowhere in the source' : (found ? 'Use UNIQUE_SKILL_MARKER as the source step.' : 'ignore source entirely') }]
+  }))
+})
+`,
+  )
+  chmodSync(executable, 0o755)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  store.saveRuntimeProfile({
+    id: 'content-runtime',
+    profileVersion: 1,
+    name: 'Content runtime',
+    enabled: true,
+    backend: 'cli',
+    command: executable,
+    args: [],
+    versionArgs: [],
+    promptTransport: 'stdin',
+    outputMode: 'json',
+    timeoutMs: 30_000,
+    maxOutputBytes: 1_048_576,
+    envAllowlist: ['PATH'],
+    capabilities: ['workspace-read'],
+    traits: {
+      backendKind: 'process',
+      sessionMode: 'stateless',
+      structuredOutput: true,
+      streaming: false,
+      toolEvents: false,
+      permissionPrompts: false,
+      tokenAccounting: 'unavailable',
+      cancellation: 'process-kill',
+      filesystemIsolation: 'host-permissions',
+      networkIsolation: 'unenforced',
+    },
+    adapterBuild: 'test',
+    createdAt: new Date(0).toISOString(),
+  } satisfies RuntimeProfile)
+  const app = createApp(store)
+  await app.ready()
+  t.after(() => app.close())
+  t.after(() => store.close())
+  const boundary = 'cflow-content-boundary'
+  const payload = [
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="objective"',
+    '',
+    'turn this skill into a flow',
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="runtimeId"',
+    '',
+    'content-runtime',
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="workspaceRoot"',
+    '',
+    root,
+    `--${boundary}`,
+    'Content-Disposition: form-data; name="attachments"; filename="SKILL.md"',
+    'Content-Type: text/markdown',
+    '',
+    '# Skill\nUse UNIQUE_SKILL_MARKER as the source step.',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n')
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/flow-proposals',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload,
+  })
+  assert.equal(response.statusCode, 200, JSON.stringify(response.json()))
+  assert.equal(response.json().flowDraft.name, 'marker-flow')
+  assert.equal(response.json().cfDrafts[0].name, 'marker-stage')
+  const ungroundedPayload = payload.replace('UNIQUE_SKILL_MARKER', 'NO_GROUNDING')
+  const ungroundedResponse = await app.inject({
+    method: 'POST',
+    url: '/api/flow-proposals',
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+    payload: ungroundedPayload,
+  })
+  assert.equal(ungroundedResponse.statusCode, 400)
+  assert.equal(ungroundedResponse.json().error, 'RUNTIME_PROPOSAL_UNGROUNDED:1')
+})
+
 test('tests Flow and candidate CF drafts without publishing either version', async () => {
   const store = new Store(`/tmp/cf-flow-test-${randomUUID()}.sqlite`)
   const app = createTestApp(store)
@@ -141,6 +280,7 @@ test('tests Flow and candidate CF drafts without publishing either version', asy
     revision: 1,
     name: 'Candidate Flow',
     objective: 'test an unpublished flow',
+    workspaceRoot: process.cwd(),
     nodes: [
       {
         id: 'candidate',
@@ -153,7 +293,6 @@ test('tests Flow and candidate CF drafts without publishing either version', asy
       { id: 'entry', from: '$entry' as const, to: 'candidate' },
       { id: 'finish', from: 'candidate', to: 'output' },
     ],
-    bindings: [{ id: 'result', from: 'candidate.output', to: 'output.input' }],
   }
   const response = await app.inject({
     method: 'POST',
@@ -193,6 +332,7 @@ test('previews complete compiler output without publishing or running', async ()
     revision: 3,
     name: 'Compiler Preview',
     objective: 'inspect the whole compiled result',
+    workspaceRoot: process.cwd(),
     nodes: [
       {
         id: 'prepare',
@@ -205,7 +345,6 @@ test('previews complete compiler output without publishing or running', async ()
       { id: 'entry', from: '$entry' as const, to: 'prepare' },
       { id: 'finish', from: 'prepare', to: 'output' },
     ],
-    bindings: [{ id: 'result', from: 'prepare.output', to: 'output.input' }],
   }
   const response = await app.inject({
     method: 'POST',
@@ -241,13 +380,13 @@ test('approval API rejects non-approval nodes and runs in the wrong state', asyn
     flowId: 'approval-flow',
     flowVersion: '1.0.0',
     objective: 'approval',
+    workspaceRoot: process.cwd(),
     entries: [0],
     nodes: [
       { index: 0, id: 'approval', kind: 'approval' as const, policyRef: 'manual' },
       { index: 1, id: 'output', kind: 'output' as const, outputId: 'result' },
     ],
     edges: [],
-    bindings: [],
     limits: { maxConcurrency: 1, maxNodeDispatches: 4 },
     planHash: 'test',
   }
@@ -299,6 +438,7 @@ test('resolves required resource bindings into a Run and Ledger', async () => {
       revision: 1,
       name: 'Resource Flow',
       objective: 'resource',
+      workspaceRoot: process.cwd(),
       nodes: [
         { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: cf.version } },
         { id: 'output', kind: 'output', outputId: 'result' },
@@ -307,7 +447,6 @@ test('resolves required resource bindings into a Run and Ledger', async () => {
         { id: 'entry', from: '$entry', to: 'call' },
         { id: 'finish', from: 'call', to: 'output' },
       ],
-      bindings: [],
       resources: [{ id: 'repo', type: 'repository', access: 'read', required: true }],
     },
   })
@@ -358,6 +497,11 @@ test('persists workspace settings and immutable Runtime Profile versions', async
   const initial = await app.inject({ method: 'GET', url: '/api/runtimes' })
   assert.equal(initial.statusCode, 200)
   assert.ok(initial.json().some((runtime: any) => runtime.id === 'codex'))
+  assert.ok(initial.json().every((runtime: any) => runtime.id !== 'echo'))
+  const discovered = await app.inject({ method: 'POST', url: '/api/runtimes/discover' })
+  assert.equal(discovered.statusCode, 200)
+  assert.ok(Array.isArray(discovered.json().runtimes))
+  assert.ok(Array.isArray(discovered.json().warnings))
   const create = await app.inject({
     method: 'POST',
     url: '/api/runtimes',
@@ -393,15 +537,14 @@ test('persists workspace settings and immutable Runtime Profile versions', async
     method: 'PUT',
     url: '/api/settings',
     payload: {
-      defaultRuntimeId: 'echo',
-      workspaceRoot: process.cwd(),
+      defaultRuntimeId: 'codex',
       autoSaveDrafts: false,
       testTimeoutMs: 120000,
       locale: 'zh-CN',
     },
   })
   assert.equal(settings.statusCode, 200)
-  assert.equal(settings.json().defaultRuntimeId, 'echo')
+  assert.equal(settings.json().defaultRuntimeId, 'codex')
   assert.equal(settings.json().autoSaveDrafts, false)
   await app.close()
   store.close()
@@ -440,6 +583,7 @@ test('executes a Flow through the builtin Runtime without process adapters', asy
       revision: 1,
       name: 'Builtin Flow',
       objective: 'verify runtime execution',
+      workspaceRoot: process.cwd(),
       nodes: [
         {
           id: 'call',
@@ -453,7 +597,6 @@ test('executes a Flow through the builtin Runtime without process adapters', asy
         { id: 'entry', from: '$entry', to: 'call' },
         { id: 'finish', from: 'call', to: 'output' },
       ],
-      bindings: [{ id: 'result', from: 'call.output', to: 'output.input' }],
     },
   })
   const flow = flowResponse.json()
@@ -474,9 +617,10 @@ test('executes a Flow through the builtin Runtime without process adapters', asy
   store.close()
   assert.equal(finalRun?.status, 'completed', JSON.stringify(finalRun))
   assert.deepEqual((finalRun?.value as any).value, {
+    task: 'respond through the builtin runtime',
     input: {
-      task: 'respond through the builtin runtime',
-      input: {},
+      flowInput: {},
+      upstream: [],
     },
   })
   assert.deepEqual((startedEvent?.data as any).executor, { id: 'echo', profileVersion: 1 })
@@ -491,9 +635,9 @@ test('persists and removes Flow drafts through the workspace API', async () => {
     revision: 1,
     name: 'Saved Draft',
     objective: 'persist unfinished work',
+    workspaceRoot: process.cwd(),
     nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
     edges: [],
-    bindings: [],
   }
   const save = await app.inject({
     method: 'PUT',
@@ -510,8 +654,39 @@ test('persists and removes Flow drafts through the workspace API', async () => {
   store.close()
 })
 
-test('keeps every sequential Binding returned by a multi-stage local proposal', async () => {
-  const store = new Store(`/tmp/cf-proposal-bindings-${randomUUID()}.sqlite`)
+test('removes a published Flow version through the workspace API', async () => {
+  const store = new Store(`/tmp/cf-flow-version-delete-${randomUUID()}.sqlite`)
+  const app = createTestApp(store)
+  await app.ready()
+  const plan = {
+    version: '0.5' as const,
+    flowId: 'published-flow',
+    flowVersion: '2.0.0',
+    objective: 'published flow',
+    workspaceRoot: process.cwd(),
+    entries: [0],
+    nodes: [{ index: 0, id: 'output', kind: 'output' as const, outputId: 'result' }],
+    edges: [],
+    limits: { maxConcurrency: 1, maxNodeDispatches: 4 },
+    planHash: 'test',
+  }
+  store.save('flow_versions', 'published-flow@2.0.0', plan)
+  const remove = await app.inject({
+    method: 'DELETE',
+    url: '/api/flows/published-flow/2.0.0',
+  })
+  assert.equal(remove.statusCode, 200)
+  assert.equal(store.list('flow_versions').length, 0)
+  const list = await app.inject({ method: 'GET', url: '/api/flows' })
+  assert.deepEqual(list.json(), [])
+  const missing = await app.inject({ method: 'DELETE', url: '/api/flows/published-flow/2.0.0' })
+  assert.equal(missing.statusCode, 404)
+  await app.close()
+  store.close()
+})
+
+test('keeps sequential stages returned by a multi-stage local proposal', async () => {
+  const store = new Store(`/tmp/cf-proposal-stages-${randomUUID()}.sqlite`)
   const app = createTestApp(store)
   await app.ready()
   for (const [cfId, name, does] of [
@@ -529,17 +704,26 @@ test('keeps every sequential Binding returned by a multi-stage local proposal', 
   const response = await app.inject({
     method: 'POST',
     url: '/api/flow-proposals',
-    payload: { objective: 'collect review report' },
+    payload: { objective: 'collect review report', workspaceRoot: process.cwd() },
   })
   assert.equal(response.statusCode, 200)
   const proposal = response.json()
   assert.deepEqual(
-    proposal.flowDraft.bindings.map((binding: any) => [binding.from, binding.to]),
+    proposal.flowDraft.nodes.map((node: { id: string; kind: string }) => [node.id, node.kind]),
     [
-      ['$user.input', 'step-1.input'],
-      ['step-1.output', 'step-2.input'],
-      ['step-2.output', 'step-3.input'],
-      ['step-3.output', 'output.input'],
+      ['step-1', 'cf-call'],
+      ['step-2', 'cf-call'],
+      ['step-3', 'cf-call'],
+      ['output', 'output'],
+    ],
+  )
+  assert.deepEqual(
+    proposal.flowDraft.edges.map((edge: { from: string; to: string }) => [edge.from, edge.to]),
+    [
+      ['$entry', 'step-1'],
+      ['step-1', 'step-2'],
+      ['step-2', 'step-3'],
+      ['step-3', 'output'],
     ],
   )
   await app.close()
@@ -601,7 +785,7 @@ test('clears a deleted default Resource Profile and enforces workspace Runtime c
     payload: { workspaceRoot: '.' },
   })
   assert.equal(relativeRoot.statusCode, 400)
-  assert.equal(relativeRoot.json().error, 'WORKSPACE_ROOT_INVALID')
+  assert.equal(relativeRoot.json().error, 'WORKSPACE_ROOT_SETTING_REMOVED')
   const outsideCwd = await app.inject({
     method: 'POST',
     url: '/api/runtimes',
@@ -622,13 +806,12 @@ test('clears a deleted default Resource Profile and enforces workspace Runtime c
       enabled: true,
     },
   })
-  assert.equal(outsideCwd.statusCode, 400)
-  assert.equal(outsideCwd.json().error, 'RUNTIME_CWD_OUTSIDE_WORKSPACE')
+  assert.equal(outsideCwd.statusCode, 200)
   await app.close()
   store.close()
 })
 
-test('returns flow-aware fallback guidance and reviewable recovery actions', async () => {
+test('returns flow-aware fallback guidance without inventing a revision', async () => {
   const store = new Store(`/tmp/cf-agent-chat-${randomUUID()}.sqlite`)
   const app = createTestApp(store)
   await app.ready()
@@ -643,12 +826,12 @@ test('returns flow-aware fallback guidance and reviewable recovery actions', asy
         revision: 2,
         name: 'Agent flow',
         objective: 'recover a failed flow',
+        workspaceRoot: process.cwd(),
         nodes: [
           { id: 'fetch', kind: 'cf-call', cfRef: { cfId: 'fetch', version: '1.0.0' } },
           { id: 'output', kind: 'output', outputId: 'result' },
         ],
         edges: [{ id: 'entry', from: '$entry', to: 'fetch' }],
-        bindings: [],
       },
       runDetail: {
         run: { status: 'failed', flow_version_id: 'test:run' },
@@ -659,8 +842,175 @@ test('returns flow-aware fallback guidance and reviewable recovery actions', asy
   assert.equal(response.statusCode, 200)
   assert.match(response.json().message, /fetch/)
   assert.equal(response.json().fallback, true)
-  assert.equal(response.json().actions[0].type, 'retry-node')
-  assert.equal(response.json().actions[0].nodeId, 'fetch')
+  assert.equal(response.json().intent, 'answer')
+  assert.deepEqual(response.json().stages, [])
+  assert.equal(response.json().actions, undefined)
   await app.close()
   store.close()
+})
+
+test('flow agent trusts the request snapshot, writes only revisions, and keeps the flow id', async (t) => {
+  const root = join('/tmp', `cf-agent-revision-${randomUUID()}`)
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(root, { recursive: true })
+  const executable = join(root, 'revision-runtime')
+  const capture = join(root, 'input.txt')
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+if (process.argv.includes('--version')) {
+  process.stdout.write('revision-runtime 1.0')
+  process.exit(0)
+}
+let input = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', chunk => input += chunk)
+process.stdin.on('end', () => {
+  require('node:fs').writeFileSync(${JSON.stringify(capture)}, input)
+  const answer = input.includes('QUESTION_ONLY')
+  process.stdout.write(JSON.stringify(answer
+    ? { message: '只回答当前稿', intent: 'answer', stages: [] }
+    : {
+        message: '已更新第二步',
+        intent: 'revise',
+        stages: [{
+          kind: 'cf-call',
+          name: '屏幕上的步骤',
+          does: '使用屏幕稿中的职责',
+          cfId: 'screen-cf',
+          input: '当前输入',
+          output: '当前输出',
+          process: '按当前要求处理'
+        }]
+      }))
+})
+`,
+  )
+  chmodSync(executable, 0o755)
+  const store = new Store(join(root, 'agent.sqlite'))
+  store.saveRuntimeProfile({
+    id: 'revision-runtime',
+    profileVersion: 1,
+    name: 'Revision runtime',
+    enabled: true,
+    backend: 'cli',
+    command: executable,
+    args: [],
+    versionArgs: ['--version'],
+    promptTransport: 'stdin',
+    outputMode: 'json',
+    timeoutMs: 30_000,
+    maxOutputBytes: 1_048_576,
+    envAllowlist: ['PATH'],
+    capabilities: [],
+    traits: {
+      backendKind: 'process',
+      sessionMode: 'stateless',
+      structuredOutput: true,
+      streaming: false,
+      toolEvents: false,
+      permissionPrompts: false,
+      tokenAccounting: 'unavailable',
+      cancellation: 'process-kill',
+      filesystemIsolation: 'host-permissions',
+      networkIsolation: 'unenforced',
+    },
+    adapterBuild: 'test',
+    createdAt: new Date(0).toISOString(),
+  } satisfies RuntimeProfile)
+  const databaseDraft = {
+    flowId: 'same-flow',
+    revision: 1,
+    name: 'database old',
+    objective: 'database old objective',
+    workspaceRoot: process.cwd(),
+    nodes: [{ id: 'output', kind: 'output' as const, outputId: 'result' }],
+    edges: [],
+  }
+  store.save('flow_drafts', databaseDraft.flowId, databaseDraft)
+  const app = createApp(store)
+  await app.ready()
+  t.after(() => app.close())
+  t.after(() => store.close())
+
+  const candidate = {
+    cfId: 'screen-cf',
+    revision: 1,
+    name: '屏幕上的步骤',
+    does: '屏幕稿职责',
+    input: '屏幕输入',
+    output: '屏幕输出',
+  }
+  const screenDraft = {
+    ...databaseDraft,
+    revision: 8,
+    name: 'screen answer draft',
+    objective: 'screen objective',
+    nodes: [
+      {
+        id: 'screen-step',
+        kind: 'cf-call' as const,
+        cfRef: { cfId: candidate.cfId, version: '1.0.0' },
+        executor: 'revision-runtime',
+      },
+      { id: 'output', kind: 'output' as const, outputId: 'result' },
+    ],
+    edges: [
+      { id: 'entry', from: '$entry' as const, to: 'screen-step' },
+      { id: 'done', from: 'screen-step', to: 'output' },
+    ],
+  }
+  const answer = await app.inject({
+    method: 'POST',
+    url: '/api/flow-agent/chat',
+    payload: {
+      message: 'QUESTION_ONLY 第二步做什么',
+      runtimeId: 'revision-runtime',
+      flowDraft: screenDraft,
+      cfDrafts: [candidate],
+    },
+  })
+  assert.equal(answer.statusCode, 200)
+  assert.equal(answer.json().intent, 'answer')
+  assert.equal(answer.json().flowDraft, undefined)
+  assert.equal(store.get<any>('flow_drafts', 'same-flow').revision, 1)
+  const answerInput = await import('node:fs/promises').then(({ readFile }) =>
+    readFile(capture, 'utf8'),
+  )
+  assert.match(answerInput, /"revision":8/)
+  assert.match(answerInput, /screen answer draft/)
+  assert.doesNotMatch(answerInput, /database old objective/)
+
+  const revise = await app.inject({
+    method: 'POST',
+    url: '/api/flow-agent/chat',
+    payload: {
+      message: '把第二步改成当前要求',
+      runtimeId: 'revision-runtime',
+      flowDraft: { ...screenDraft, revision: 5 },
+      cfDrafts: [candidate],
+      conversation: [
+        { role: 'user', body: '上一轮要求' },
+        { role: 'assistant', body: '上一轮结果' },
+      ],
+      selection: { nodeId: 'screen-step', edgeId: null },
+      check: { error: 'LAST_CHECK_ERROR' },
+    },
+  })
+  assert.equal(revise.statusCode, 200)
+  assert.equal(revise.json().intent, 'revise')
+  assert.equal(revise.json().flowDraft.flowId, 'same-flow')
+  assert.equal(revise.json().flowDraft.revision, 6)
+  assert.equal(revise.json().flowDraft.nodes[0].id, 'screen-step')
+  assert.equal(revise.json().flowDraft.nodes[0].onError, undefined)
+  assert.equal(revise.json().cfDrafts[0].revision, 2)
+  assert.equal(store.get<any>('flow_drafts', 'same-flow').revision, 6)
+  assert.equal(store.get<any>('cf_drafts', 'screen-cf').does, '使用屏幕稿中的职责')
+  const reviseInput = await import('node:fs/promises').then(({ readFile }) =>
+    readFile(capture, 'utf8'),
+  )
+  assert.match(reviseInput, /"revision":5/)
+  assert.match(reviseInput, /上一轮结果/)
+  assert.match(reviseInput, /LAST_CHECK_ERROR/)
+  assert.match(reviseInput, /"nodeId":"screen-step"/)
 })

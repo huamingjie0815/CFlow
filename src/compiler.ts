@@ -46,6 +46,7 @@ export function compileCF(draft: CFDraft): CFVersion {
   const outputContract = draft.outputContract ?? { type: 'object' }
   assertContractSchema(inputContract, 'CF_INPUT')
   assertContractSchema(outputContract, 'CF_OUTPUT')
+  assert(draft.does.trim().length > 0, 'CF_DOES_REQUIRED')
   const task = [
     draft.does.trim(),
     draft.input?.trim() ? `Input guidance: ${draft.input.trim()}` : undefined,
@@ -54,39 +55,13 @@ export function compileCF(draft: CFDraft): CFVersion {
   ]
     .filter(Boolean)
     .join('\n')
-  const program = draft.program ?? {
-    version: '0.1' as const,
+  const program = {
+    version: '0.2' as const,
     cfId: draft.cfId,
     sourceRevision: draft.revision,
-    entry: 0,
-    steps: [
-      { index: 0, kind: 'agent' as const, task, input: '$inputContext', next: 1 },
-      { index: 1, kind: 'return' as const, source: '$local.0.output' },
-    ],
-    limits: { maxStepExecutions: 8, maxExternalCalls: 2, maxOutputBytes: 65536 },
+    task,
   }
-  const indexes = new Set(program.steps.map((s) => s.index))
-  assert(program.steps.length > 0, 'CF_EMPTY_PROGRAM')
-  assert(program.limits.maxStepExecutions > 0, 'CF_INVALID_STEP_LIMIT')
-  assert(program.limits.maxExternalCalls >= 0, 'CF_INVALID_EXTERNAL_CALL_LIMIT')
-  assert(program.limits.maxOutputBytes > 0, 'CF_INVALID_OUTPUT_LIMIT')
-  assert(indexes.size === program.steps.length, 'CF_DUPLICATE_STEP')
-  assert(indexes.has(program.entry), 'CF_BAD_ENTRY')
-  const returns = program.steps.filter((s) => s.kind === 'return')
-  assert(returns.length > 0, 'CF_NO_RETURN')
-  const nextEdges = program.steps.flatMap((s) =>
-    s.kind === 'guard'
-      ? [
-          { from: s.index, to: s.then },
-          { from: s.index, to: s.else },
-        ]
-      : s.kind === 'return'
-        ? []
-        : [{ from: s.index, to: s.next! }],
-  )
-  for (const e of nextEdges) assert(indexes.has(e.to), 'CF_BAD_NEXT')
-  checkGraph([...indexes], nextEdges, [program.entry])
-  const normalizedDraft = { ...draft, inputContract, outputContract, program }
+  const normalizedDraft = { ...draft, inputContract, outputContract }
   return {
     cfId: draft.cfId,
     version: `${draft.revision}.0.0`,
@@ -97,6 +72,7 @@ export function compileCF(draft: CFDraft): CFVersion {
   }
 }
 export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>): FlowPlan {
+  assert(draft.workspaceRoot?.trim().length > 0, 'FLOW_WORKSPACE_REQUIRED')
   assert(draft.nodes.length > 0, 'FLOW_EMPTY')
   assert((draft.limits?.maxConcurrency ?? 2) > 0, 'FLOW_INVALID_CONCURRENCY')
   assert((draft.limits?.maxNodeDispatches ?? 32) > 0, 'FLOW_INVALID_DISPATCH_LIMIT')
@@ -184,20 +160,6 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       assert(requirement.type.trim().length > 0, `RESOURCE_TYPE_REQUIRED:${requirement.id}`)
     }
   }
-  const adjacency = new Map<number, number[]>()
-  for (const i of index.values()) adjacency.set(i, [])
-  for (const edge of edges)
-    if (typeof edge.from === 'number') adjacency.get(edge.from)!.push(edge.to)
-  const reaches = (from: number, to: number) => {
-    const seen = new Set<number>()
-    const visit = (n: number): boolean => {
-      if (n === to) return true
-      if (seen.has(n)) return false
-      seen.add(n)
-      return (adjacency.get(n) ?? []).some(visit)
-    }
-    return visit(from)
-  }
   const nodes = draft.nodes.map((n, i) => ({
     ...n,
     index: i,
@@ -206,10 +168,11 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       : {}),
   }))
   const base = {
-    version: '0.5' as const,
+    version: '0.6' as const,
     flowId: draft.flowId,
     flowVersion: `${draft.revision}.0.0`,
     objective: draft.objective,
+    workspaceRoot: draft.workspaceRoot,
     entries,
     nodes,
     edges,

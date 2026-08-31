@@ -6,6 +6,7 @@ import type {
   ResolvedResource,
   FlowNode,
   CapabilityEffect,
+  RuntimeExecutionError,
 } from './types.js'
 import { assertContract } from './contract.js'
 import { Store } from './db.js'
@@ -19,6 +20,7 @@ export interface Executor {
     signal: AbortSignal,
     resources?: ResolvedResource[],
     effects?: CapabilityEffect[],
+    context?: { workspaceRoot: string },
   ): Promise<Json>
 }
 export class ExecutorRegistry {
@@ -124,7 +126,7 @@ export class Engine {
         this.store.append(runId, 'run.cancelled')
         return
       }
-      const transitions = this.resolveTransitions(plan, state.statuses, state.values)
+      const transitions = this.settleTransitions(plan, state.statuses, state.values)
       for (const [index, status] of transitions) {
         if (status === 'inactive' || status === 'blocked') {
           state.statuses.set(index, status)
@@ -171,37 +173,7 @@ export class Engine {
       if (state.terminalCandidate) {
         const completion = await Promise.race(inFlight.values())
         inFlight.delete(completion.index)
-        const node = plan.nodes[completion.index]
-        if (completion.status === 'completed') {
-          state.statuses.set(completion.index, 'completed')
-          state.values.set(completion.index, completion.value ?? null)
-          this.store.append(runId, 'node.completed', completion.index, {
-            value: completion.value ?? null,
-          })
-          if (node.kind === 'output') {
-            state.terminalCandidate = {
-              outputId: node.outputId,
-              value: completion.value ?? null,
-            }
-            state.admissionOpen = false
-          }
-        } else {
-          if ((completion.details as any)?.effectState === 'unknown') {
-            this.store.setRun(runId, 'needs-reconciliation', {
-              nodes: [completion.index],
-              error: completion.details as any,
-            })
-            this.store.append(runId, 'run.needs-reconciliation', completion.index, {
-              error: completion.details as any,
-            })
-            return
-          }
-          state.statuses.set(completion.index, 'failed')
-          this.store.append(runId, 'node.failed', completion.index, {
-            error: completion.error ?? 'UNKNOWN_ERROR',
-            ...(completion.details ? { details: completion.details as any } : {}),
-          })
-        }
+        if (!this.applyCompletion(runId, plan, state, completion)) return
         continue
       }
       const ready = plan.nodes
@@ -282,38 +254,49 @@ export class Engine {
       }
       const completion = await Promise.race(inFlight.values())
       inFlight.delete(completion.index)
-      const node = plan.nodes[completion.index]
-      if (completion.status === 'completed') {
-        state.statuses.set(completion.index, 'completed')
-        state.values.set(completion.index, completion.value ?? null)
-        this.store.append(runId, 'node.completed', completion.index, {
-          value: completion.value ?? null,
-        })
-        if (node.kind === 'output') {
-          state.terminalCandidate = {
-            outputId: node.outputId,
-            value: completion.value ?? null,
-          }
-          state.admissionOpen = false
-        }
-      } else {
-        if ((completion.details as any)?.effectState === 'unknown') {
-          this.store.setRun(runId, 'needs-reconciliation', {
-            nodes: [completion.index],
-            error: completion.details as any,
-          })
-          this.store.append(runId, 'run.needs-reconciliation', completion.index, {
-            error: completion.details as any,
-          })
-          return
-        }
-        state.statuses.set(completion.index, 'failed')
-        this.store.append(runId, 'node.failed', completion.index, {
-          error: completion.error ?? 'UNKNOWN_ERROR',
-          ...(completion.details ? { details: completion.details as any } : {}),
-        })
-      }
+      if (!this.applyCompletion(runId, plan, state, completion)) return
     }
+  }
+  /**
+   * Records one settled node into the run state and Ledger.
+   * Returns false when the run must halt (unknown effect state needs a human).
+   */
+  private applyCompletion(
+    runId: string,
+    plan: FlowPlan,
+    state: EngineState,
+    completion: NodeCompletion,
+  ): boolean {
+    const node = plan.nodes[completion.index]
+    if (completion.status === 'completed') {
+      state.statuses.set(completion.index, 'completed')
+      state.values.set(completion.index, completion.value ?? null)
+      this.store.append(runId, 'node.completed', completion.index, {
+        value: completion.value ?? null,
+      })
+      if (node.kind === 'output') {
+        state.terminalCandidate = { outputId: node.outputId, value: completion.value ?? null }
+        state.admissionOpen = false
+      }
+      return true
+    }
+    const details = completion.details as RuntimeExecutionError | undefined
+    if (details?.effectState === 'unknown') {
+      this.store.setRun(runId, 'needs-reconciliation', {
+        nodes: [completion.index],
+        error: details as unknown as Json,
+      })
+      this.store.append(runId, 'run.needs-reconciliation', completion.index, {
+        error: details as unknown as Json,
+      })
+      return false
+    }
+    state.statuses.set(completion.index, 'failed')
+    this.store.append(runId, 'node.failed', completion.index, {
+      error: completion.error ?? 'UNKNOWN_ERROR',
+      ...(details ? { details: details as unknown as Json } : {}),
+    })
+    return true
   }
   private async executeWithPolicy(
     plan: FlowPlan,
@@ -440,13 +423,6 @@ export class Engine {
     }
     return out
   }
-  private resolveTransitions(
-    plan: FlowPlan,
-    statuses: Map<number, Status>,
-    values: Map<number, Json>,
-  ): Array<[number, Status]> {
-    return this.settleTransitions(plan, statuses, values)
-  }
   private isReady(
     index: number,
     plan: FlowPlan,
@@ -455,19 +431,17 @@ export class Engine {
   ) {
     const node = plan.nodes[index]
     const incoming = plan.edges.filter((edge) => edge.to === index)
+    if (!incoming.length) return false
     const states = incoming.map((edge) => this.edgeState(edge, statuses, values))
-    if (
-      !incoming.length ||
-      ((node.kind !== 'join' || node.mode !== 'any') &&
-        states.some((state) => state === 'pending')) ||
-      ((node.kind !== 'join' || node.mode !== 'any') && !states.includes('active')) ||
-      ((node.kind !== 'join' || node.mode !== 'any') &&
-        this.failedDependency(node, incoming, statuses, values))
-    )
-      return false
+    // A join in "any" mode fires on the first active upstream edge; every other
+    // node needs all upstream edges settled with at least one active.
     if (node.kind === 'join' && node.mode === 'any')
       return states.some((state) => state === 'active')
-    return true
+    return (
+      !states.some((state) => state === 'pending') &&
+      states.includes('active') &&
+      !this.failedDependency(node, incoming, statuses, values)
+    )
   }
   private async execute(
     plan: FlowPlan,
@@ -493,23 +467,7 @@ export class Engine {
         (value) => value.cfId === node.cfRef.cfId && value.version === node.cfRef.version,
       )
       if (!version) throw new Error('CF_VERSION_NOT_FOUND')
-      const context = input as any
-      if (
-        version.draft.input?.trim() &&
-        /原始文件|已知错误列表|required|must provide/i.test(version.draft.input) &&
-        (!context?.upstream || context.upstream.length === 0) &&
-        (!context?.flowInput ||
-          (typeof context.flowInput === 'object' && Object.keys(context.flowInput).length === 0))
-      ) {
-        const error = new Error('INPUT_UNRESOLVED')
-        ;(error as any).details = {
-          code: 'INPUT_UNRESOLVED',
-          missing: [version.draft.input.trim()],
-          availableSources: [],
-          reason: '上游结果中没有找到符合描述的数据',
-        }
-        throw error
-      }
+      if (version.program.version !== '0.2') throw new Error('CF_PROGRAM_VERSION_UNSUPPORTED')
       if (
         sha256({
           inputContract: version.draft.inputContract,
@@ -519,16 +477,15 @@ export class Engine {
       )
         throw new Error('PROGRAM_HASH_MISMATCH')
       assertContract(node.inputContract ?? version.draft.inputContract, input, 'CF_INPUT')
-      const output = await this.executeCF(
-        version,
-        input,
-        node.executorProfile
-          ? `${node.executorProfile.id}@${node.executorProfile.profileVersion}`
-          : (node.executor ?? version.draft.defaultExecutor ?? 'echo'),
-        signal,
-        resources,
-        version.draft.effects ?? [],
-      )
+      if (signal.aborted) throw new Error('ABORTED')
+      const executorId = node.executorProfile
+        ? `${node.executorProfile.id}@${node.executorProfile.profileVersion}`
+        : (node.executor ?? version.draft.defaultExecutor ?? 'echo')
+      const output = await this.executors
+        .get(executorId)
+        .execute(version.program.task, input, signal, resources, version.draft.effects ?? [], {
+          workspaceRoot: plan.workspaceRoot,
+        })
       assertContract(node.outputContract ?? version.draft.outputContract, output, 'CF_OUTPUT')
       return output
     }
@@ -542,52 +499,6 @@ export class Engine {
     }
     throw new Error('UNKNOWN_NODE')
   }
-  private async executeCF(
-    version: CFVersion,
-    input: Json,
-    executorId: string,
-    signal: AbortSignal,
-    resources: ResolvedResource[],
-    effects: import('./types.js').CapabilityEffect[] = [],
-  ): Promise<Json> {
-    let current = version.program.entry
-    const local: Record<string, Json> = {}
-    let count = 0
-    const steps = new Map(version.program.steps.map((step) => [step.index, step]))
-    while (count++ < version.program.limits.maxStepExecutions) {
-      if (signal.aborted) throw new Error('ABORTED')
-      const step = steps.get(current)
-      if (!step) throw new Error('BAD_STEP')
-      if (step.kind === 'return') return this.resolve(step.source ?? input, input, local)
-      if (step.kind === 'guard') {
-        current = this.evaluate(step.cond, input, local) ? step.then : step.else
-        continue
-      }
-      const executorIdForStep = step.kind === 'call' ? step.target.ref.id : executorId
-      const task = step.kind === 'call' ? JSON.stringify(step.target) : step.task
-      const stepInput = this.resolve(step.input ?? input, input, local)
-      const maxAttempts =
-        step.onError?.action === 'retry' ? Math.max(1, step.onError.maxAttempts) : 1
-      let output: Json | undefined
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        try {
-          output = await this.executors
-            .get(executorIdForStep)
-            .execute(task, stepInput, signal, resources, effects)
-          break
-        } catch (error) {
-          if (step.onError?.action === 'continue') {
-            output = step.onError.fallback
-            break
-          }
-          if (attempt === maxAttempts) throw error
-        }
-      }
-      local[String(step.index)] = output ?? null
-      current = step.next!
-    }
-    throw new Error('STEP_LIMIT_EXCEEDED')
-  }
   private inputContextFor(
     index: number,
     plan: FlowPlan,
@@ -595,21 +506,6 @@ export class Engine {
     runInput: Json,
   ): Json {
     const node = plan.nodes[index]
-    const legacyBindings = (plan as any).bindings as Array<any> | undefined
-    if (legacyBindings?.length) {
-      const legacy: Record<string, Json> = {}
-      for (const binding of legacyBindings.filter(
-        (value) => value.to?.startsWith(`${node.id}.`) || value.to?.startsWith(`$${index}.`),
-      )) {
-        const path = String(binding.from).slice('$user.'.length)
-        legacy[String(binding.to).split('.').pop()!] = String(binding.from).startsWith('$user.')
-          ? path === 'input'
-            ? runInput
-            : this.path(runInput, path.startsWith('input.') ? path.slice(6) : path)
-          : this.resolveRef(binding.from, plan, values)
-      }
-      if (Object.keys(legacy).length) return legacy
-    }
     const incoming = plan.edges.filter((edge) => edge.to === index && typeof edge.from === 'number')
     const upstream = incoming
       .filter((edge) => typeof edge.from === 'number' && values.has(edge.from))
@@ -633,35 +529,19 @@ export class Engine {
   private nodeName(node: FlowPlan['nodes'][number]) {
     return (node as any).name ?? (node.kind === 'cf-call' ? node.cfRef.cfId : node.kind)
   }
-  private resolveRef(ref: string, plan: FlowPlan, values: Map<number, Json>): Json {
-    const match = /^\$?([\w-]+)\.output(?:\.(.*))?$/.exec(ref)
-    if (!match) return ref as Json
-    const index = plan.nodes.findIndex(
-      (node) => node.id === match[1] || String(node.index) === match[1],
-    )
-    const value = values.get(index)
-    return match[2] ? this.path(value, match[2]) : (value ?? null)
-  }
-  private resolve(value: Json, input: Json, local: Record<string, Json>): Json {
-    if (typeof value !== 'string') return value
-    if (value === '$input' || value === '$inputContext') return input
-    const match = /^\$local\.(\d+)\.output(?:\.(.*))?$/.exec(value)
-    if (!match) return value
-    const output = local[match[1]]
-    return match[2] ? this.path(output, match[2]) : output
-  }
   private path(value: Json | undefined, path: string): Json {
     return path.split('.').reduce<any>((current, key) => current?.[key], value) ?? null
   }
-  private evaluate(expression: Json, input: Json, local: Record<string, Json> = {}): any {
+  /** Evaluates a branch condition against the node input context. */
+  private evaluate(expression: Json, input: Json): any {
     if (typeof expression === 'boolean' || typeof expression === 'number') return expression
-    if (typeof expression === 'string') return this.resolve(expression, input, local)
+    if (typeof expression === 'string')
+      return expression === '$input' || expression === '$inputContext' ? input : expression
     if (expression && typeof expression === 'object' && !Array.isArray(expression)) {
       const op = expression as any
-      if ('$eq' in op)
-        return this.evaluate(op.$eq[0], input, local) === this.evaluate(op.$eq[1], input, local)
-      if ('$and' in op) return op.$and.every((x: Json) => this.evaluate(x, input, local))
-      if ('$or' in op) return op.$or.some((x: Json) => this.evaluate(x, input, local))
+      if ('$eq' in op) return this.evaluate(op.$eq[0], input) === this.evaluate(op.$eq[1], input)
+      if ('$and' in op) return op.$and.every((x: Json) => this.evaluate(x, input))
+      if ('$or' in op) return op.$or.some((x: Json) => this.evaluate(x, input))
       if ('$get' in op) {
         const key = String(op.$get)
         const direct = this.path(input, key)
@@ -682,9 +562,10 @@ export class Engine {
   }
 }
 export function builtins() {
-  return new ExecutorRegistry()
-    .register({ id: 'echo', execute: async (task, input) => ({ task, input }) })
-    .register({ id: 'json.identity', execute: async (_task, input) => input })
+  return new ExecutorRegistry().register({
+    id: 'echo',
+    execute: async (task, input) => ({ task, input }),
+  })
 }
 export function newRunId() {
   return randomUUID()

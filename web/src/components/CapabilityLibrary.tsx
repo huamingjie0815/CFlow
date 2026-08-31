@@ -110,11 +110,7 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
   )
 }
 
-function LibraryGroup(props: {
-  title: string
-  count: number
-  children: ReactNode
-}) {
+function LibraryGroup(props: { title: string; count: number; children: ReactNode }) {
   return (
     <section className="library-group">
       <div className="library-group-header">
@@ -126,12 +122,7 @@ function LibraryGroup(props: {
   )
 }
 
-function LibraryCard(props: {
-  badge: string
-  name: string
-  summary: string
-  onAdd: () => void
-}) {
+function LibraryCard(props: { badge: string; name: string; summary: string; onAdd: () => void }) {
   return (
     <article className="library-card">
       <div className="library-card-row">

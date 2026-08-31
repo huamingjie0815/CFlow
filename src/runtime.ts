@@ -1,6 +1,5 @@
 import { spawn } from 'node:child_process'
-import { readdirSync, statSync } from 'node:fs'
-import { delimiter, isAbsolute, relative, resolve, sep } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import {
   client as acpClient,
@@ -19,8 +18,24 @@ import type {
 } from './types.js'
 import type { ExecutorRegistry } from './engine.js'
 import { Store } from './db.js'
+import { isWithinDirectory } from './workspace.js'
+import {
+  loadAgentManifestRecords,
+  type AgentManifestLoadOptions,
+  type AgentManifestRecord,
+} from './runtime-manifest.js'
+import {
+  canChangeWorkspace,
+  discoverAcpCommands,
+  existingAbsoluteDirectory,
+  needsWindowsShell,
+  parseJsonOutput,
+  resolveExecutable,
+  runtimeIdFromCommand,
+  runtimeNameFromCommand,
+} from './runtime-process.js'
 
-const ADAPTER_BUILD = 'cf-acp-adapter/1'
+const ADAPTER_BUILD = 'cf-runtime-adapter/3'
 export class RuntimeExecutionException extends Error {
   readonly details: import('./types.js').RuntimeExecutionError
   constructor(details: import('./types.js').RuntimeExecutionError) {
@@ -29,7 +44,10 @@ export class RuntimeExecutionException extends Error {
     this.details = details
   }
 }
-const KNOWN_RUNTIME_IDS = new Set(['codex', 'claude-code'])
+export type RuntimeAnalysisOptions = {
+  cwd: string
+  allowedRoot: string
+}
 const defaultTraits = (overrides: Partial<ExecutorRuntimeTraits> = {}): ExecutorRuntimeTraits => ({
   backendKind: 'acp',
   sessionMode: 'per-cf-call',
@@ -44,299 +62,199 @@ const defaultTraits = (overrides: Partial<ExecutorRuntimeTraits> = {}): Executor
   ...overrides,
 })
 
-export const defaultRuntimeProfiles = (): RuntimeProfile[] => {
+const profileFromManifest = (record: AgentManifestRecord): RuntimeProfile => {
   const createdAt = new Date(0).toISOString()
-  const discovered = new Set(discoverAcpCommands())
-  const profile = (
-    input: Pick<RuntimeProfile, 'id' | 'name' | 'description' | 'command' | 'envAllowlist'> &
-      Partial<RuntimeProfile>,
-  ): RuntimeProfile => ({
+  const manifest = record.manifest
+  const cli = manifest.backend === 'cli'
+  return {
+    id: manifest.id,
     profileVersion: 1,
+    name: manifest.name,
+    description: manifest.description,
     enabled: true,
-    backend: 'acp',
-    args: [],
-    versionArgs: [],
-    promptTransport: 'stdin',
-    outputMode: 'json',
-    timeoutMs: 300_000,
-    maxOutputBytes: 1_048_576,
-    capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
+    backend: manifest.backend,
+    command: manifest.command,
+    args: manifest.args ?? [],
+    versionArgs: manifest.versionArgs ?? (cli ? ['--version'] : []),
+    promptTransport: manifest.promptTransport ?? (cli ? 'argument' : 'stdin'),
+    outputMode: manifest.outputMode ?? 'json',
+    timeoutMs: manifest.timeoutMs ?? 300_000,
+    maxOutputBytes: manifest.maxOutputBytes ?? 1_048_576,
+    envAllowlist: manifest.envAllowlist ?? ['HOME', 'PATH', 'LANG', 'LC_ALL'],
+    capabilities: manifest.capabilities ?? [
+      'reasoning',
+      'code',
+      'structured-output',
+      'workspace-read',
+    ],
+    permissionArgs: manifest.permissionArgs,
+    discovery: {
+      source: record.source,
+      manifestPath: record.manifestPath,
+      manifestHash: record.manifestHash,
+    },
     traits: defaultTraits({
-      backendKind: 'acp',
+      backendKind: cli ? 'process' : 'acp',
       structuredOutput: true,
       streaming: false,
-      toolEvents: true,
+      toolEvents: !cli,
       permissionPrompts: false,
       tokenAccounting: 'unavailable',
-      cancellation: 'cooperative',
-      filesystemIsolation: 'sandboxed',
-      networkIsolation: 'adapter-declared',
+      cancellation: cli ? 'process-kill' : 'cooperative',
+      filesystemIsolation: cli ? 'host-permissions' : 'sandboxed',
+      networkIsolation: cli ? 'unenforced' : 'adapter-declared',
+      ...manifest.traits,
     }),
     adapterBuild: ADAPTER_BUILD,
     createdAt,
-    ...input,
-  })
-  const known = [
-    profile({
-      id: 'codex',
-      name: 'Codex',
-      description:
-        '用本机已登录的 Codex 来执行步骤。默认只读；能力声明 workspace 写入后可修改工作区文件。',
-      command: 'codex-acp',
-      envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL', 'CODEX_HOME', 'OPENAI_API_KEY'],
-      traits: defaultTraits({
-        backendKind: 'acp',
-        structuredOutput: true,
-        streaming: false,
-        toolEvents: true,
-        permissionPrompts: false,
-        tokenAccounting: 'approximate',
-        cancellation: 'cooperative',
-        filesystemIsolation: 'sandboxed',
-        networkIsolation: 'adapter-declared',
-      }),
-    }),
-    profile({
-      id: 'claude-code',
-      name: 'Claude Code',
-      description: '用本机已登录的 Claude Code 来执行步骤。',
-      command: 'claude-agent-acp',
-      envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL', 'ANTHROPIC_API_KEY'],
-    }),
-  ].filter((candidate) => discovered.has(candidate.command!))
-  const knownCommands = new Set(known.map((candidate) => candidate.command))
-  const generic = [...discovered]
-    .filter((command) => !knownCommands.has(command))
-    .sort()
-    .map((command) =>
-      profile({
-        id: runtimeIdFromCommand(command),
-        name: runtimeNameFromCommand(command),
-        description: `通过本机 ACP server ${command} 执行步骤。`,
-        command,
-        envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL'],
-      }),
-    )
-  return [...known, ...generic]
+  }
 }
+
+export type RuntimeDiscoveryOptions = AgentManifestLoadOptions
+
+export const discoverRuntimeProfiles = (options: RuntimeDiscoveryOptions = {}) => {
+  const loaded = loadAgentManifestRecords(options)
+  const declared = loaded.records.map(profileFromManifest)
+  const declaredCommands = new Set(declared.map((profile) => profile.command))
+  const generic = discoverAcpCommands(options.projectRoot)
+    .filter((command) => !declaredCommands.has(command))
+    .sort()
+    .map((command): RuntimeProfile => ({
+      id: runtimeIdFromCommand(command),
+      profileVersion: 1,
+      name: runtimeNameFromCommand(command),
+      description: `通过本机 ACP server ${command} 执行步骤。`,
+      enabled: true,
+      backend: 'acp',
+      command,
+      args: [],
+      versionArgs: [],
+      promptTransport: 'stdin',
+      outputMode: 'json',
+      timeoutMs: 300_000,
+      maxOutputBytes: 1_048_576,
+      envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL'],
+      capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
+      discovery: {
+        source: 'path-acp',
+        manifestHash: `path-acp:${command}`,
+      },
+      traits: defaultTraits({ structuredOutput: true, toolEvents: true }),
+      adapterBuild: ADAPTER_BUILD,
+      createdAt: new Date(0).toISOString(),
+    }))
+  const selected = new Map(generic.map((profile) => [profile.id, profile]))
+  for (const profile of declared) selected.set(profile.id, profile)
+  return { profiles: [...selected.values()], warnings: loaded.warnings }
+}
+
+export const defaultRuntimeProfiles = (): RuntimeProfile[] => discoverRuntimeProfiles().profiles
 
 export const defaultWorkspaceSettings = (defaultRuntimeId = 'codex'): WorkspaceSettings => ({
   defaultRuntimeId,
-  workspaceRoot: process.cwd(),
   autoSaveDrafts: true,
   testTimeoutMs: 300_000,
   locale: 'zh-CN',
   updatedAt: new Date().toISOString(),
 })
 
-const isWithinDirectory = (root: string, candidate: string) => {
-  const path = relative(resolve(root), resolve(candidate))
-  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path))
-}
-
-const existingAbsoluteDirectory = (value: string, errorCode: string) => {
-  if (!isAbsolute(value)) throw new Error(errorCode)
-  try {
-    if (!statSync(value).isDirectory()) throw new Error(errorCode)
-  } catch {
-    throw new Error(errorCode)
-  }
-  return resolve(value)
-}
-
-const existingExecutable = (value: string) => {
-  try {
-    if (statSync(value).isFile()) return value
-  } catch {
-    return undefined
-  }
-  return undefined
-}
-
-const executableExtensions = () => {
-  const raw = process.env.PATHEXT?.trim() || '.COM;.EXE;.BAT;.CMD;.PS1'
-  return [
-    ...new Set(
-      raw
-        .split(';')
-        .map((extension) => extension.trim().toLowerCase())
-        .filter((extension) => extension.startsWith('.')),
-    ),
-  ]
-}
-
-const stripExecutableExtension = (command: string) => {
-  const lower = command.toLowerCase()
-  const extension = executableExtensions()
-    .sort((a, b) => b.length - a.length)
-    .find((candidate) => lower.endsWith(candidate))
-  return extension ? command.slice(0, -extension.length) : command
-}
-
-const executableCandidates = (command: string) => {
-  const lower = command.toLowerCase()
-  if (executableExtensions().some((extension) => lower.endsWith(extension))) return [command]
-  return [command, ...executableExtensions().map((extension) => `${command}${extension}`)]
-}
-
-const normalizedAcpCommand = (command: string) => {
-  const normalized = stripExecutableExtension(command)
-  return isAcpCommandName(normalized) ? normalized : undefined
-}
-
-const discoverAcpCommands = () => {
-  const projectBin = resolve('node_modules', '.bin')
-  const directories = [
-    projectBin,
-    ...(process.env.PATH ?? '')
-      .split(delimiter)
-      .filter(Boolean)
-      .map((entry) => resolve(entry)),
-  ]
-  const commands = new Set<string>()
-  const seen = new Set<string>()
-  for (const directory of directories) {
-    if (seen.has(directory)) continue
-    seen.add(directory)
-    try {
-      for (const entry of readdirSync(directory)) {
-        const command = normalizedAcpCommand(entry)
-        if (!command) continue
-        if (existingExecutable(resolve(directory, entry))) commands.add(command)
-      }
-    } catch {
-      // Missing PATH entries are normal on developer machines.
-    }
-  }
-  return [...commands]
-}
-
-const isAcpCommandName = (command: string) =>
-  /^acp-[a-z0-9._-]+$/i.test(command) || /^[a-z0-9._-]+-acp$/i.test(command)
-
-const runtimeIdFromCommand = (command: string) =>
-  command
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 64)
-
-const runtimeNameFromCommand = (command: string) =>
-  command
-    .replace(/[-_.]+/g, ' ')
-    .replace(/\bacp\b/gi, 'ACP')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
-
-const resolveExecutable = (
-  command: string,
-  env: Record<string, string>,
-  options: { includeProjectBin?: boolean } = {},
-) => {
-  if (isAbsolute(command)) {
-    for (const candidate of executableCandidates(command)) {
-      const executable = existingExecutable(candidate)
-      if (executable) return executable
-    }
-    return undefined
-  }
-  if (command.includes(sep)) {
-    for (const candidate of executableCandidates(resolve(command))) {
-      const executable = existingExecutable(candidate)
-      if (executable) return executable
-    }
-    return undefined
-  }
-  const projectBin = resolve('node_modules', '.bin')
-  if (options.includeProjectBin) {
-    for (const candidate of executableCandidates(command)) {
-      const localExecutable = existingExecutable(resolve(projectBin, candidate))
-      if (localExecutable) return localExecutable
-    }
-  }
-  for (const dir of (env.PATH ?? process.env.PATH ?? '').split(delimiter)) {
-    if (!dir) continue
-    if (!options.includeProjectBin && resolve(dir) === projectBin) continue
-    for (const candidate of executableCandidates(command)) {
-      const executable = existingExecutable(resolve(dir, candidate))
-      if (executable) return executable
-    }
-  }
-  return undefined
-}
-
-const needsWindowsShell = (executable: string) =>
-  process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(executable)
-
-const parseJsonOutput = (text: string): Json => {
-  const trimmed = text.trim()
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(trimmed)?.[1] ?? trimmed
-  try {
-    return JSON.parse(fenced) as Json
-  } catch {
-    const start = Math.min(
-      ...['{', '['].map((token) => {
-        const index = fenced.indexOf(token)
-        return index < 0 ? Number.POSITIVE_INFINITY : index
-      }),
-    )
-    const end = Math.max(fenced.lastIndexOf('}'), fenced.lastIndexOf(']'))
-    if (Number.isFinite(start) && end > start) {
-      try {
-        return JSON.parse(fenced.slice(start, end + 1)) as Json
-      } catch {
-        // Fall through to a loud structured-output error.
-      }
-    }
-    throw new Error('RUNTIME_JSON_INVALID')
-  }
-}
-
 export class RuntimeManager {
-  private healthCache = new Map<string, { expires: number; value: RuntimeHealth }>()
-  constructor(private store: Store) {
+  private activeRuntimeIds = new Set<string>()
+  private lastDiscoveryWarnings: string[] = []
+  constructor(
+    private store: Store,
+    private discoveryOptions: RuntimeDiscoveryOptions = {},
+  ) {
     this.ensureDefaults()
   }
   ensureDefaults() {
-    const defaults = defaultRuntimeProfiles()
+    this.discover()
+    const preferredRuntimeId = this.activeRuntimeIds.has('codex')
+      ? 'codex'
+      : ([...this.activeRuntimeIds][0] ?? 'codex')
+    const settings = this.store.settings()
+    if (!settings) {
+      this.store.saveSettings(defaultWorkspaceSettings(preferredRuntimeId))
+    } else {
+      const { workspaceRoot: _removed, ...cleanSettings } = settings as WorkspaceSettings & {
+        workspaceRoot?: string
+      }
+      const current = this.store.runtimeProfile(settings.defaultRuntimeId)
+      if (!current || current.backend === 'builtin')
+        this.store.saveSettings({
+          ...cleanSettings,
+          defaultRuntimeId: preferredRuntimeId,
+          updatedAt: new Date().toISOString(),
+        })
+      else if (Object.prototype.hasOwnProperty.call(settings, 'workspaceRoot'))
+        this.store.saveSettings(cleanSettings)
+    }
+  }
+  discover() {
+    const discovery = discoverRuntimeProfiles(this.discoveryOptions)
+    const defaults = discovery.profiles
+    this.activeRuntimeIds = new Set(defaults.map((profile) => profile.id))
+    this.lastDiscoveryWarnings = discovery.warnings
+    const changed: RuntimeProfile[] = []
     for (const profile of defaults) {
       const current = this.store.runtimeProfile(profile.id)
-      if (!current) this.store.saveRuntimeProfile(profile)
-      else if (current.adapterBuild !== ADAPTER_BUILD)
-        this.store.saveRuntimeProfile({
+      if (!current) {
+        this.store.saveRuntimeProfile(profile)
+        changed.push(profile)
+      } else if (
+        current.adapterBuild !== ADAPTER_BUILD ||
+        current.discovery?.manifestHash !== profile.discovery?.manifestHash
+      ) {
+        const updated = {
           ...current,
           ...profile,
+          enabled: current.enabled,
+          model: current.model,
+          workingDirectory: current.workingDirectory,
           profileVersion: this.store.nextRuntimeProfileVersion(profile.id),
           createdAt: new Date().toISOString(),
-        })
+        }
+        this.store.saveRuntimeProfile(updated)
+        changed.push(updated)
+      }
     }
-    if (!this.store.settings())
-      this.store.saveSettings(defaultWorkspaceSettings(defaults[0]?.id ?? 'codex'))
+    return changed
+  }
+  discoveryWarnings() {
+    return this.lastDiscoveryWarnings
   }
   profiles() {
+    const defaultRuntimeId = this.store.settings()?.defaultRuntimeId
     return this.store
       .currentRuntimeProfiles()
-      .filter((profile) => profile.backend === 'acp' || KNOWN_RUNTIME_IDS.has(profile.id))
+      .filter(
+        (profile) =>
+          profile.backend !== 'builtin' &&
+          (this.activeRuntimeIds.has(profile.id) ||
+            profile.discovery?.source === 'manual' ||
+            profile.id === defaultRuntimeId),
+      )
   }
   profile(id: string) {
     return this.store.runtimeProfile(id)
   }
   settings() {
-    return this.store.settings() ?? defaultWorkspaceSettings()
+    const stored = this.store.settings()
+    if (!stored) return defaultWorkspaceSettings()
+    const { workspaceRoot: _removed, ...settings } = stored as WorkspaceSettings & {
+      workspaceRoot?: string
+    }
+    return settings
   }
   validateSettings(input: Partial<WorkspaceSettings>) {
+    if (Object.prototype.hasOwnProperty.call(input, 'workspaceRoot'))
+      throw new Error('WORKSPACE_ROOT_SETTING_REMOVED')
     const previous = this.settings()
-    const workspaceRoot = existingAbsoluteDirectory(
-      String(input.workspaceRoot ?? previous.workspaceRoot),
-      'WORKSPACE_ROOT_INVALID',
-    )
     const defaultRuntimeId = String(input.defaultRuntimeId ?? previous.defaultRuntimeId)
     const defaultRuntime = this.profile(defaultRuntimeId)
     if (!defaultRuntime) throw new Error('DEFAULT_RUNTIME_NOT_FOUND')
+    if (defaultRuntime.backend === 'builtin') throw new Error('DEFAULT_RUNTIME_NOT_SELECTABLE')
     if (!defaultRuntime.enabled) throw new Error('DEFAULT_RUNTIME_DISABLED')
-    for (const profile of this.profiles()) {
-      if (profile.workingDirectory && !isWithinDirectory(workspaceRoot, profile.workingDirectory))
-        throw new Error(`WORKSPACE_ROOT_RUNTIME_CONFLICT:${profile.id}`)
-    }
     const defaultResourceProfileId = Object.prototype.hasOwnProperty.call(
       input,
       'defaultResourceProfileId',
@@ -358,7 +276,6 @@ export class RuntimeManager {
       defaultResourceProfileId: defaultResourceProfileId
         ? String(defaultResourceProfileId)
         : undefined,
-      workspaceRoot,
       autoSaveDrafts: input.autoSaveDrafts ?? previous.autoSaveDrafts,
       testTimeoutMs,
       locale: String(input.locale ?? previous.locale).slice(0, 32),
@@ -376,10 +293,11 @@ export class RuntimeManager {
     if (!input.name?.trim() || input.name.trim().length > 80)
       throw new Error('RUNTIME_NAME_INVALID')
     const backend = input.backend ?? 'acp'
-    if (!['builtin', 'acp'].includes(backend)) throw new Error('RUNTIME_BACKEND_INVALID')
+    if (!['builtin', 'acp', 'cli'].includes(backend)) throw new Error('RUNTIME_BACKEND_INVALID')
     if (backend === 'builtin' && id !== 'echo') throw new Error('RUNTIME_BUILTIN_RESERVED')
     const command = input.command?.trim()
-    if (backend === 'acp' && !command) throw new Error('RUNTIME_COMMAND_REQUIRED')
+    if ((backend === 'acp' || backend === 'cli') && !command)
+      throw new Error('RUNTIME_COMMAND_REQUIRED')
     const timeoutMs = Number(input.timeoutMs ?? 300_000)
     const maxOutputBytes = Number(input.maxOutputBytes ?? 1_048_576)
     if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 3_600_000)
@@ -390,8 +308,6 @@ export class RuntimeManager {
     const workingDirectory = workingDirectoryInput
       ? existingAbsoluteDirectory(workingDirectoryInput, 'RUNTIME_CWD_INVALID')
       : undefined
-    if (workingDirectory && !isWithinDirectory(this.settings().workspaceRoot, workingDirectory))
-      throw new Error('RUNTIME_CWD_OUTSIDE_WORKSPACE')
     const safeList = (items: unknown, max: number) => {
       if (
         !Array.isArray(items) ||
@@ -408,6 +324,14 @@ export class RuntimeManager {
     )
     if (envAllowlist.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))
       throw new Error('RUNTIME_ENV_NAME_INVALID')
+    const permissionArgsInput = input.permissionArgs ?? previous?.permissionArgs
+    const permissionArgs = permissionArgsInput
+      ? Object.fromEntries(
+          (['none', 'read', 'write', 'full'] as const)
+            .map((mode) => [mode, safeList(permissionArgsInput[mode] ?? [], 30)] as const)
+            .filter(([, args]) => args.length),
+        )
+      : undefined
     return {
       id,
       profileVersion: this.store.nextRuntimeProfileVersion(id),
@@ -415,7 +339,8 @@ export class RuntimeManager {
       description: input.description?.trim().slice(0, 400),
       enabled: input.enabled ?? true,
       backend,
-      command: backend === 'acp' ? (command ?? previous?.command ?? id) : command,
+      command:
+        backend === 'acp' || backend === 'cli' ? (command ?? previous?.command ?? id) : command,
       args: safeList(input.args ?? previous?.args ?? [], 40),
       versionArgs: safeList(input.versionArgs ?? previous?.versionArgs ?? ['--version'], 10),
       model: input.model?.trim().slice(0, 120),
@@ -426,7 +351,21 @@ export class RuntimeManager {
       maxOutputBytes,
       envAllowlist: [...new Set(envAllowlist)],
       capabilities: safeList(input.capabilities ?? previous?.capabilities ?? [], 40),
-      traits: { ...defaultTraits(), ...(input.traits ?? previous?.traits ?? {}) },
+      permissionArgs,
+      discovery: previous?.discovery ?? { source: 'manual' },
+      traits: {
+        ...defaultTraits(
+          backend === 'cli'
+            ? {
+                backendKind: 'process',
+                cancellation: 'process-kill',
+                filesystemIsolation: 'host-permissions',
+                networkIsolation: 'unenforced',
+              }
+            : {},
+        ),
+        ...(input.traits ?? previous?.traits ?? {}),
+      },
       adapterBuild: ADAPTER_BUILD,
       createdAt: new Date().toISOString(),
     } satisfies RuntimeProfile
@@ -434,7 +373,7 @@ export class RuntimeManager {
   saveProfile(input: Partial<RuntimeProfile> & { id: string; name: string }) {
     const profile = this.validateProfile(input)
     this.store.saveRuntimeProfile(profile)
-    this.healthCache.delete(profile.id)
+    this.activeRuntimeIds.add(profile.id)
     return profile
   }
   register(registry: ExecutorRegistry, profile: RuntimeProfile, exactOnly = false) {
@@ -449,8 +388,8 @@ export class RuntimeManager {
     const executor = (id: string) =>
       registry.register({
         id,
-        execute: (task, input, signal, resources, effects) =>
-          this.executeProfile(profile, task, input, signal, resources, undefined, effects),
+        execute: (task, input, signal, resources, effects, context) =>
+          this.executeProfile(profile, task, input, signal, resources, undefined, effects, context),
       })
     executor(`${profile.id}@${profile.profileVersion}`)
     if (!exactOnly) executor(profile.id)
@@ -460,7 +399,7 @@ export class RuntimeManager {
     for (const profile of this.store.allRuntimeProfiles())
       this.register(registry, profile, current.get(profile.id) !== profile.profileVersion)
   }
-  async health(id: string, force = false): Promise<RuntimeHealth> {
+  async health(id: string): Promise<RuntimeHealth> {
     const profile = this.profile(id)
     if (!profile) throw new Error('RUNTIME_NOT_FOUND')
     if (!profile.enabled)
@@ -483,13 +422,16 @@ export class RuntimeManager {
     if (profile.backend === 'acp') {
       const started = Date.now()
       try {
+        const version = await this.probeAcp(profile)
         return {
           runtimeId: id,
           profileVersion: profile.profileVersion,
           status: 'available',
           checkedAt: new Date().toISOString(),
           latencyMs: Date.now() - started,
-          version: this.acpVersion(profile),
+          stage: 'protocol-ready',
+          authentication: 'unknown',
+          version,
         }
       } catch (error) {
         return {
@@ -498,6 +440,35 @@ export class RuntimeManager {
           status: 'unavailable',
           checkedAt: new Date().toISOString(),
           latencyMs: Date.now() - started,
+          stage: this.commandInstalled(profile, true) ? 'installed' : undefined,
+          authentication: 'unknown',
+          error: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+    if (profile.backend === 'cli') {
+      const started = Date.now()
+      try {
+        const version = await this.probeCli(profile)
+        return {
+          runtimeId: id,
+          profileVersion: profile.profileVersion,
+          status: 'available',
+          checkedAt: new Date().toISOString(),
+          latencyMs: Date.now() - started,
+          stage: 'adapter-ready',
+          authentication: 'unknown',
+          version,
+        }
+      } catch (error) {
+        return {
+          runtimeId: id,
+          profileVersion: profile.profileVersion,
+          status: 'unavailable',
+          checkedAt: new Date().toISOString(),
+          latencyMs: Date.now() - started,
+          stage: this.commandInstalled(profile) ? 'installed' : undefined,
+          authentication: 'unknown',
           error: error instanceof Error ? error.message : String(error),
         }
       }
@@ -511,10 +482,33 @@ export class RuntimeManager {
     signal: AbortSignal,
     resources: ResolvedResource[] = [],
     outputSchema?: Record<string, unknown>,
+    context?: { workspaceRoot: string },
   ): Promise<Json> {
     const profile = this.profile(id)
     if (!profile) throw new Error(`UNKNOWN_EXECUTOR:${id}`)
-    return this.executeProfile(profile, task, input, signal, resources, outputSchema)
+    return this.executeProfile(profile, task, input, signal, resources, outputSchema, [], context)
+  }
+  async executeAnalysis(
+    id: string,
+    task: string,
+    input: Json,
+    signal: AbortSignal,
+    options: RuntimeAnalysisOptions,
+    outputSchema?: Record<string, unknown>,
+  ): Promise<Json> {
+    const profile = this.profile(id)
+    if (!profile) throw new Error(`UNKNOWN_EXECUTOR:${id}`)
+    return this.executeProfile(
+      profile,
+      task,
+      input,
+      signal,
+      [],
+      outputSchema,
+      [],
+      undefined,
+      options,
+    )
   }
   private async executeProfile(
     profile: RuntimeProfile,
@@ -524,6 +518,8 @@ export class RuntimeManager {
     resources: ResolvedResource[] = [],
     outputSchema?: Record<string, unknown>,
     effects: CapabilityEffect[] = [],
+    context?: { workspaceRoot: string },
+    analysis?: RuntimeAnalysisOptions,
   ): Promise<Json> {
     if (!profile.enabled) throw new Error(`RUNTIME_DISABLED:${profile.id}`)
     if (profile.backend === 'builtin') return { task, input }
@@ -537,7 +533,7 @@ export class RuntimeManager {
       `Input JSON:\n${JSON.stringify(input)}`,
       'Input JSON contains flowInput and an upstream array with complete source outputs. Select and transform only data described by the capability input guidance.',
       effects.length
-        ? `Declared effects (authorized within workspace root ${this.settings().workspaceRoot}):\n${JSON.stringify(effects)}\nYou may perform these declared effects when required by the task; do not ask the user for a second authorization.`
+        ? `Declared effects (authorized within workspace root ${context?.workspaceRoot ?? analysis?.allowedRoot}):\n${JSON.stringify(effects)}\nYou may perform these declared effects when required by the task; do not ask the user for a second authorization.`
         : 'Declared effects: none. Do not perform file writes, reads, or commands.',
       outputSchema ? `Expected output JSON Schema:\n${JSON.stringify(outputSchema)}` : undefined,
       resources.length
@@ -548,26 +544,130 @@ export class RuntimeManager {
       .join('\n\n')
     const text =
       profile.backend === 'acp'
-        ? await this.runAcp(profile, prompt, signal, effects)
-        : await Promise.reject(new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`))
+        ? await this.runAcp(profile, prompt, signal, effects, context, analysis)
+        : profile.backend === 'cli'
+          ? await this.runCli(profile, prompt, signal, effects, context, analysis)
+          : await Promise.reject(new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`))
     return profile.outputMode === 'json' ? parseJsonOutput(text) : { content: text.trim() }
   }
-  private acpVersion(profile: RuntimeProfile) {
-    const bottom =
-      profile.id === 'codex'
-        ? `CODEX_PATH=${this.codexPath()}`
-        : profile.id === 'claude-code'
-          ? `CLAUDE_CODE_EXECUTABLE=${this.claudePath()}`
-          : undefined
-    return [`acp via ${this.acpCommand(profile)}`, bottom ? `(${bottom})` : undefined]
-      .filter(Boolean)
-      .join(' ')
+  private commandInstalled(profile: RuntimeProfile, includeProjectBin = false) {
+    if (!profile.command) return false
+    return Boolean(
+      resolveExecutable(profile.command, { ...process.env } as Record<string, string>, {
+        includeProjectBin,
+      }),
+    )
+  }
+  private async probeAcp(profile: RuntimeProfile) {
+    const command = this.acpCommand(profile)
+    const child = spawn(command, profile.args, {
+      cwd: profile.workingDirectory ?? process.cwd(),
+      env: this.acpEnvironment(profile),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: needsWindowsShell(command),
+      windowsHide: true,
+    })
+    let stderr = Buffer.alloc(0)
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = Buffer.concat([stderr, chunk])
+      if (stderr.length > 8_192) stderr = stderr.subarray(stderr.length - 8_192)
+    })
+    const terminate = () => {
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      if (!child.stdin || !child.stdout) throw new Error('ACP_SERVER_STDIO_UNAVAILABLE')
+      const stream = ndJsonStream(
+        Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
+        Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
+      )
+      const initialize = acpClient({ name: 'CFlow Health Check' }).connectWith(
+        stream,
+        async (ctx) =>
+          ctx.request(methods.agent.initialize, {
+            protocolVersion: PROTOCOL_VERSION,
+            clientInfo: { name: 'CFlow', version: ADAPTER_BUILD },
+            clientCapabilities: { plan: {}, session: {} },
+          }),
+      )
+      const childError = new Promise<never>((_, reject) => child.once('error', reject))
+      const timedOut = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          terminate()
+          reject(new Error('ACP_HANDSHAKE_TIMEOUT'))
+        }, 5_000)
+      })
+      const response = await Promise.race([initialize, childError, timedOut])
+      const agent = response.agentInfo
+        ? [response.agentInfo.name, response.agentInfo.version].filter(Boolean).join(' ')
+        : undefined
+      return [`ACP ${response.protocolVersion}`, agent, `via ${command}`]
+        .filter(Boolean)
+        .join(' · ')
+    } catch (error) {
+      const detail = stderr.toString('utf8').trim().slice(-800)
+      if (error instanceof Error && detail) throw new Error(`${error.message}:${detail}`)
+      throw error
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      terminate()
+    }
+  }
+  private async probeCli(profile: RuntimeProfile) {
+    const command = this.cliCommand(profile)
+    if (!profile.versionArgs.length) return `CLI via ${command}`
+    const child = spawn(command, profile.versionArgs, {
+      cwd: profile.workingDirectory ?? process.cwd(),
+      env: this.acpEnvironment(profile),
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: needsWindowsShell(command),
+      windowsHide: true,
+    })
+    const output: Buffer[] = []
+    const errors: Buffer[] = []
+    child.stdout.on('data', (chunk: Buffer) => output.push(chunk))
+    child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    const terminate = () => {
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
+    }
+    try {
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolveExit, reject) => {
+          child.once('error', reject)
+          child.once('exit', (code, signal) => resolveExit({ code, signal }))
+          timeout = setTimeout(() => {
+            terminate()
+            reject(new Error('CLI_HEALTHCHECK_TIMEOUT'))
+          }, 5_000)
+        },
+      )
+      const detail = Buffer.concat(errors).toString('utf8').trim().slice(-800)
+      if (result.code !== 0)
+        throw new Error(
+          `CLI_HEALTHCHECK_EXITED:${result.code ?? result.signal ?? 'unknown'}${detail ? `:${detail}` : ''}`,
+        )
+      const version = Buffer.concat(output).toString('utf8').trim().split(/\r?\n/, 1)[0]
+      return [version || profile.name, `via ${command}`].join(' · ')
+    } finally {
+      if (timeout) clearTimeout(timeout)
+      terminate()
+    }
   }
   private acpCommand(profile: RuntimeProfile) {
     if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
     const env = this.acpEnvironment(profile)
     const resolved = resolveExecutable(profile.command, env, { includeProjectBin: true })
     if (!resolved) throw new Error(`ACP_SERVER_NOT_FOUND:${profile.command}`)
+    return resolved
+  }
+  private cliCommand(profile: RuntimeProfile) {
+    if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
+    const resolved = resolveExecutable(profile.command, this.acpEnvironment(profile))
+    if (!resolved) throw new Error(`AGENT_CLI_NOT_FOUND:${profile.command}`)
     return resolved
   }
   private codexPath() {
@@ -586,7 +686,8 @@ export class RuntimeManager {
   }
   private acpEnvironment(profile: RuntimeProfile, effects: CapabilityEffect[] = []) {
     const env: Record<string, string> = {}
-    for (const [key, value] of Object.entries(process.env)) {
+    for (const key of profile.envAllowlist) {
+      const value = process.env[key]
       if (value !== undefined) env[key] = value
     }
     if (profile.id === 'codex') {
@@ -603,13 +704,100 @@ export class RuntimeManager {
     }
     return env
   }
+  private cliPermissionArgs(
+    profile: RuntimeProfile,
+    effects: CapabilityEffect[],
+    analysis?: RuntimeAnalysisOptions,
+  ) {
+    const canRead = Boolean(analysis) || effects.some((effect) => effect.type === 'file-read')
+    const canWrite = effects.some((effect) => effect.type === 'file-write')
+    const canRun = effects.some((effect) => effect.type === 'command')
+    const mode = canRun ? 'full' : canWrite ? 'write' : canRead ? 'read' : 'none'
+    return profile.permissionArgs?.[mode] ?? []
+  }
+  private async runCli(
+    profile: RuntimeProfile,
+    prompt: string,
+    signal: AbortSignal,
+    effects: CapabilityEffect[] = [],
+    context?: { workspaceRoot: string },
+    analysis?: RuntimeAnalysisOptions,
+  ) {
+    const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
+    const command = this.cliCommand(profile)
+    const args = [
+      ...profile.args,
+      ...this.cliPermissionArgs(profile, effects, analysis),
+      ...(profile.promptTransport === 'argument' ? [prompt] : []),
+    ]
+    const child = spawn(command, args, {
+      cwd,
+      env: this.acpEnvironment(profile, effects),
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: needsWindowsShell(command),
+      windowsHide: true,
+    })
+    const output: Buffer[] = []
+    const errors: Buffer[] = []
+    let outputBytes = 0
+    let outputLimitExceeded = false
+    const terminate = () => {
+      child.kill('SIGTERM')
+      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
+    }
+    const relayAbort = () => terminate()
+    signal.addEventListener('abort', relayAbort, { once: true })
+    child.stdout.on('data', (chunk: Buffer) => {
+      outputBytes += chunk.length
+      if (outputBytes > profile.maxOutputBytes) {
+        outputLimitExceeded = true
+        terminate()
+        return
+      }
+      output.push(chunk)
+    })
+    child.stderr.on('data', (chunk: Buffer) => {
+      errors.push(chunk)
+      if (Buffer.concat(errors).length > 65_536) errors.shift()
+    })
+    if (profile.promptTransport === 'stdin') child.stdin.end(prompt)
+    else child.stdin.end()
+    try {
+      const result = await new Promise<{ code: number | null; childSignal: NodeJS.Signals | null }>(
+        (resolveExit, reject) => {
+          child.once('error', reject)
+          child.once('exit', (code, childSignal) => resolveExit({ code, childSignal }))
+        },
+      )
+      if (signal.aborted)
+        throw new RuntimeExecutionException({
+          layer: 'runtime',
+          code: signal.reason?.name === 'TimeoutError' ? 'RUNTIME_TIMEOUT' : 'RUN_CANCELLED',
+          message: signal.reason?.name === 'TimeoutError' ? '运行超时' : '运行已取消',
+          retryable: signal.reason?.name === 'TimeoutError',
+          effectState: canChangeWorkspace(effects) ? 'unknown' : 'none',
+        })
+      if (outputLimitExceeded) throw new Error('RUNTIME_OUTPUT_LIMIT_EXCEEDED')
+      const stderr = Buffer.concat(errors).toString('utf8').trim().slice(-800)
+      if (result.code !== 0)
+        throw new Error(
+          `AGENT_CLI_EXITED:${result.code ?? result.childSignal ?? 'unknown'}${stderr ? `:${stderr}` : ''}`,
+        )
+      return Buffer.concat(output).toString('utf8')
+    } finally {
+      signal.removeEventListener('abort', relayAbort)
+      terminate()
+    }
+  }
   private async runAcp(
     profile: RuntimeProfile,
     prompt: string,
     signal: AbortSignal,
     effects: CapabilityEffect[] = [],
+    context?: { workspaceRoot: string },
+    analysis?: RuntimeAnalysisOptions,
   ) {
-    const cwd = profile.workingDirectory ?? this.settings().workspaceRoot
+    const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
     const command = this.acpCommand(profile)
     const child = spawn(command, profile.args, {
       cwd,
@@ -657,8 +845,11 @@ export class RuntimeManager {
                 : kind.includes('exec') || kind.includes('command') || kind.includes('terminal')
                   ? 'command'
                   : undefined
+          const root = analysis?.allowedRoot ?? context?.workspaceRoot
           const declared = effectType
-            ? effects.some((effect) => effect.type === effectType && effect.scope === 'workspace')
+            ? analysis && effectType === 'file-read'
+              ? true
+              : effects.some((effect) => effect.type === effectType && effect.scope === 'workspace')
             : false
           const locations = Array.isArray(tool.locations) ? [...tool.locations] : []
           const raw = tool.rawInput
@@ -668,7 +859,6 @@ export class RuntimeManager {
               if (typeof value === 'string') locations.push(value)
             }
           }
-          const root = this.settings().workspaceRoot
           const inWorkspace = locations.every((location: any) => {
             let value = typeof location === 'string' ? location : (location?.path ?? location?.uri)
             if (typeof value === 'string' && value.startsWith('file://')) {
@@ -678,9 +868,12 @@ export class RuntimeManager {
                 return false
               }
             }
-            return !value || isWithinDirectory(root, value)
+            if (analysis && typeof value === 'string' && !isAbsolute(value))
+              value = resolve(cwd, value)
+            return Boolean(root) && (!value || isWithinDirectory(root!, value))
           })
-          if (!declared || !inWorkspace) {
+          const scopedRead = !analysis || effectType !== 'file-read' || locations.length > 0
+          if (!declared || !inWorkspace || !scopedRead) {
             permissionDenied = true
             const option = ctx?.params?.options?.find((o: any) =>
               String(o.kind).startsWith('reject'),

@@ -1,14 +1,11 @@
 export type {
   CFDraft,
-  CapabilityEffect,
   CFVersion,
   FlowCompilationSnapshot,
-  FlowBinding,
   FlowDraft,
   FlowEdge,
   FlowNode,
   FlowPlan,
-  Json,
   LedgerEvent,
   ResourceProfile,
   RuntimeProfile,
@@ -31,7 +28,14 @@ export type RuntimeWithHealth = RuntimeProfile & {
     status: 'available' | 'unavailable' | 'disabled' | 'checking'
     version?: string
     error?: string
+    stage?: 'installed' | 'adapter-ready' | 'protocol-ready'
+    authentication?: 'unknown' | 'verified'
   }
+}
+
+export type RuntimeDiscoveryResult = {
+  runtimes: RuntimeWithHealth[]
+  warnings: string[]
 }
 
 export type RunSummary = {
@@ -48,29 +52,30 @@ export type RunDetail = {
   events: import('../../src/types').LedgerEvent[]
 }
 
-export type AgentChatAction = {
-  type: 'retry-node' | 'select-node' | 'open-activity' | 'update-node' | 'update-binding'
-  label: string
-  description: string
-  nodeId?: string
-  patch?: {
-    executor?: string
-    onError?: { action: 'stop' | 'retry'; maxAttempts?: number }
-  }
-  binding?: { id?: string; from: string; to: string; required?: boolean }
-}
-
 export type AgentChatMessage = {
   id: string
   role: 'user' | 'assistant'
   body: string
-  actions?: AgentChatAction[]
   meta?: string
+  /** Whether this turn came from the initial goal or from later chat. */
+  source?: 'goal' | 'agent'
+  at?: string
 }
 
 export type FlowAgentResponse = {
   message: string
-  actions: AgentChatAction[]
+  intent: 'answer' | 'revise'
+  stages: {
+    kind: 'cf-call'
+    name: string
+    does: string
+    cfId: string | null
+    input?: string
+    output?: string
+    process?: string
+  }[]
+  flowDraft?: FlowDraft
+  cfDrafts?: CFDraft[]
   runtimeId?: string
   fallback?: boolean
 }
@@ -82,6 +87,18 @@ export type FlowProposal = {
   flowDraft: FlowDraft | null
   cfDrafts?: CFDraft[]
   unresolvedSuggestions: string[]
+  attachmentSummary?: {
+    fileCount: number
+    skippedCount: number
+    entryFiles: string[]
+    archivePath: string
+  }
+}
+
+export type DirectoryListing = {
+  path: string
+  parentPath: string | null
+  directories: { name: string; path: string; hidden?: boolean }[]
 }
 
 export type CompilationPreview = {
@@ -96,6 +113,7 @@ export type BootstrapData = {
   flowCompilations: FlowCompilationSnapshot[]
   resources: ResourceProfile[]
   runtimes: RuntimeWithHealth[]
+  runtimeDiscoveryWarnings: string[]
   settings: WorkspaceSettings
   flowDrafts: FlowDraft[]
   cfDrafts: CFDraft[]

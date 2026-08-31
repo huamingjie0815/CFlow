@@ -10,6 +10,3 @@ function canonical(value: unknown): string {
 export function sha256(value: unknown): string {
   return `sha256:${createHash('sha256').update(canonical(value), 'utf8').digest('hex')}`
 }
-export function verifyHash(value: unknown, expected: string): boolean {
-  return sha256(value) === expected
-}

@@ -1,6 +1,53 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { draftSaveStatus, runStopControl } from '../web/src/workbench-ui.js'
+import {
+  canApplyAgentRevision,
+  draftSaveStatus,
+  nextSignalAction,
+  runStopControl,
+  snapshotFileList,
+} from '../web/src/workbench-ui.js'
+
+const ladder = {
+  hasDraft: true,
+  workspaceAvailable: true,
+  isRunning: false,
+  hasPreview: false,
+  testState: 'idle' as const,
+  hasPublishedPlan: false,
+}
+
+test('exactly one action is ever signalled, and it is the next real step', () => {
+  // No flow yet: the goal composer owns the only filled control.
+  assert.equal(nextSignalAction({ ...ladder, hasDraft: false }), 'goal')
+  // Draft with no check yet -> 检查 is genuinely next.
+  assert.equal(nextSignalAction(ladder), 'check')
+  // Checked but not tested -> 测试.
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true }), 'test')
+  // Tested -> 发布.
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, testState: 'passed' }), 'publish')
+  // Published -> 运行, but only once a published plan actually exists.
+  assert.equal(
+    nextSignalAction({
+      ...ladder,
+      hasPreview: true,
+      testState: 'published',
+      hasPublishedPlan: true,
+    }),
+    'run',
+  )
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, testState: 'published' }), null)
+})
+
+test('nothing is signalled while a run is in flight or the workspace is gone', () => {
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, isRunning: true }), null)
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, workspaceAvailable: false }), null)
+})
+
+test('a failed test still points back at 测试', () => {
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, testState: 'failed' }), 'test')
+  assert.equal(nextSignalAction({ ...ladder, hasPreview: true, testState: 'cancelled' }), 'test')
+})
 
 test('offers a stop action for both test and published runs', () => {
   assert.deepEqual(runStopControl('test', 'test-run'), {
@@ -23,4 +70,22 @@ test('hides the draft save status after autosave succeeds', () => {
   assert.equal(draftSaveStatus({ isPending: false, isError: true, dirty: false }), null)
   assert.equal(draftSaveStatus({ isPending: true, isError: false, dirty: true }), '保存中')
   assert.equal(draftSaveStatus({ isPending: false, isError: true, dirty: true }), '保存失败')
+})
+
+test('snapshots selected files before the browser input is cleared', () => {
+  const selected = { name: 'SKILL.md' }
+  const liveFileList: ArrayLike<typeof selected> = { 0: selected, length: 1 }
+
+  const snapshot = snapshotFileList(liveFileList)
+  liveFileList.length = 0
+
+  assert.deepEqual(snapshot, [selected])
+})
+
+test('agent revisions only apply to the exact flow revision that was sent', () => {
+  const sent = { flowId: 'flow-a', revision: 4 }
+  assert.equal(canApplyAgentRevision(sent, { flowId: 'flow-a', revision: 4 }), true)
+  assert.equal(canApplyAgentRevision(sent, { flowId: 'flow-a', revision: 5 }), false)
+  assert.equal(canApplyAgentRevision(sent, { flowId: 'flow-b', revision: 4 }), false)
+  assert.equal(canApplyAgentRevision(sent, null), false)
 })

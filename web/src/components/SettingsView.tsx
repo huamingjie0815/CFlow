@@ -1,15 +1,18 @@
-import { CheckCircle2, ChevronLeft, RefreshCw, Settings2 } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronLeft, RefreshCw, Settings2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { runtimeBlurb, runtimeHealthLabel } from '../copy'
+import { runtimeBlurb, runtimeDiscoveryLabel, runtimeHealthLabel } from '../copy'
 import type { RuntimeWithHealth, WorkspaceSettings } from '../types'
 
 type SettingsViewProps = {
   settings: WorkspaceSettings
   runtimes: RuntimeWithHealth[]
   isSaving: boolean
+  isDiscovering: boolean
+  discoveryWarnings: string[]
   testingRuntimeId: string | null
   onSave: (settings: Partial<WorkspaceSettings>) => void
   onTestRuntime: (id: string) => void
+  onDiscoverRuntimes: () => void
   onClose: () => void
 }
 
@@ -31,7 +34,7 @@ export function SettingsView(props: SettingsViewProps) {
         </div>
         <div>
           <h2 id="settings-title">工作台设置</h2>
-          <p>选择默认助手、本机工作文件夹，以及测试最多等多久。</p>
+          <p>选择默认助手，以及测试最多等多久。每条流程会单独锁定自己的工作目录。</p>
         </div>
         <button className="button" type="button" onClick={props.onClose}>
           <ChevronLeft size={15} />
@@ -85,31 +88,43 @@ export function SettingsView(props: SettingsViewProps) {
                 />
               </label>
             </div>
-            <label className="field">
-              <span>本机工作文件夹</span>
-              <input
-                value={draft.workspaceRoot}
-                onChange={(event) => setDraft({ ...draft, workspaceRoot: event.target.value })}
-              />
-              <small>
-                流程读写电脑文件时会用这个文件夹。请填写完整路径，例如 /Users/you/work。
-              </small>
-            </label>
-            <button className="button signal" type="submit" disabled={props.isSaving}>
-              {props.isSaving ? (
-                <RefreshCw className="spin" size={15} />
-              ) : (
-                <CheckCircle2 size={15} />
-              )}
-              {props.isSaving ? '正在保存' : '保存设置'}
-            </button>
+            <div className="settings-form-actions">
+              <button className="button signal" type="submit" disabled={props.isSaving}>
+                {props.isSaving ? (
+                  <RefreshCw className="spin" size={15} />
+                ) : (
+                  <CheckCircle2 size={15} />
+                )}
+                {props.isSaving ? '正在保存' : '保存设置'}
+              </button>
+            </div>
           </form>
         </section>
         <section className="settings-section-main">
-          <div className="settings-section-title">
-            <h3>本机助手</h3>
-            <p>看看每个助手有没有装好、能不能用。</p>
+          <div className="settings-section-heading">
+            <div className="settings-section-title">
+              <h3>本机助手</h3>
+              <p>这些是本机上已经装好、可以用来执行步骤的助手。新装了助手就点「重新识别」。</p>
+            </div>
+            <button
+              className="button"
+              type="button"
+              onClick={props.onDiscoverRuntimes}
+              disabled={props.isDiscovering}
+            >
+              <RefreshCw className={props.isDiscovering ? 'spin' : undefined} size={14} />
+              {props.isDiscovering ? '正在识别' : '重新识别'}
+            </button>
           </div>
+          {props.discoveryWarnings.length > 0 && (
+            <div className="runtime-discovery-warning" role="status">
+              <AlertTriangle size={14} />
+              <span>
+                有 {props.discoveryWarnings.length} 个助手配置无法读取，已跳过：
+                {props.discoveryWarnings[0]}
+              </span>
+            </div>
+          )}
           <div className="runtime-table">
             {props.runtimes.map((runtime) => (
               <article key={runtime.id}>
@@ -117,7 +132,13 @@ export function SettingsView(props: SettingsViewProps) {
                 <div>
                   <strong>{runtime.name}</strong>
                   <p>{runtimeBlurb(runtime)}</p>
-                  <small>配置版本 {runtime.profileVersion}</small>
+                  <small
+                    title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
+                  >
+                    {runtime.health?.authentication === 'unknown'
+                      ? '登录状态会在真正使用时确认'
+                      : '已确认可用'}
+                  </small>
                 </div>
                 <span className="runtime-health">{runtimeHealthLabel(runtime)}</span>
                 <button

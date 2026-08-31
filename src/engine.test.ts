@@ -23,17 +23,6 @@ test('runs a published Flow, validates contracts and records Ledger', async () =
     inputContract: { type: 'object' },
     outputContract: { type: 'object' },
     defaultExecutor: 'echo',
-    program: {
-      version: '0.1',
-      cfId: 'echo-runtime',
-      sourceRevision: 1,
-      entry: 0,
-      steps: [
-        { index: 0, kind: 'agent', task: 'echo', input: '$input', next: 1 },
-        { index: 1, kind: 'return', source: '$local.0.output' },
-      ],
-      limits: { maxStepExecutions: 4, maxExternalCalls: 1, maxOutputBytes: 4096 },
-    },
   }
   const version = compileCF(cf)
   const flow: FlowDraft = {
@@ -41,6 +30,7 @@ test('runs a published Flow, validates contracts and records Ledger', async () =
     revision: 1,
     name: 'Runtime',
     objective: 'echo',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -48,10 +38,6 @@ test('runs a published Flow, validates contracts and records Ledger', async () =
     edges: [
       { id: 'entry', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
-    ],
-    bindings: [
-      { id: 'input', from: '$user.input.message', to: 'call.input.message' },
-      { id: 'output', from: 'call.output', to: 'out.input' },
     ],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
@@ -67,7 +53,7 @@ test('runs a published Flow, validates contracts and records Ledger', async () =
   }
   const run = store.getRun(runId)
   assert.equal(run?.status, 'completed')
-  assert.equal((run?.value as any).value.input.input.message, 'hello')
+  assert.equal((run?.value as any).value.input.flowInput.message, 'hello')
   assert.ok(store.events(runId).some((event) => event.type === 'run.completed'))
   store.close()
 })
@@ -78,6 +64,7 @@ test('evaluates a restricted branch and marks the inactive path', async () => {
     revision: 1,
     name: 'Branch',
     objective: 'route',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'route', kind: 'branch', cond: { $get: 'risk' }, cases: ['high', 'normal'] },
       { id: 'high', kind: 'output', outputId: 'high' },
@@ -93,7 +80,6 @@ test('evaluates a restricted branch and marks the inactive path', async () => {
         when: { outcome: 'branch-case', caseId: 'normal' },
       },
     ],
-    bindings: [{ id: 'risk', from: '$user.input.risk', to: 'route.input.risk' }],
   }
   const plan = compileFlow(flow, new Map())
   const store = new Store(`/tmp/cf-branch-${randomUUID()}.sqlite`)
@@ -128,6 +114,7 @@ test('treats inactive branch descendants as inactive instead of blocking the run
     revision: 1,
     name: 'Inactive Branch',
     objective: 'route',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'route', kind: 'branch', cond: { $get: 'risk' }, cases: ['high', 'low'] },
       { id: 'high-step', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
@@ -137,15 +124,16 @@ test('treats inactive branch descendants as inactive instead of blocking the run
     ],
     edges: [
       { id: 'entry', from: '$entry', to: 'route' },
-      { id: 'high', from: 'route', to: 'high-step', when: { outcome: 'branch-case', caseId: 'high' } },
+      {
+        id: 'high',
+        from: 'route',
+        to: 'high-step',
+        when: { outcome: 'branch-case', caseId: 'high' },
+      },
       { id: 'low', from: 'route', to: 'low-step', when: { outcome: 'branch-case', caseId: 'low' } },
       { id: 'low-chain', from: 'low-step', to: 'low-audit' },
       { id: 'high-out', from: 'high-step', to: 'out' },
       { id: 'low-out', from: 'low-audit', to: 'out' },
-    ],
-    bindings: [
-      { id: 'risk', from: '$user.input.risk', to: 'route.input.risk' },
-      { id: 'high-output', from: 'high-step.output', to: 'out.input' },
     ],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
@@ -204,9 +192,20 @@ test('dispatches join-any as soon as one predecessor completes and drains in-fli
     revision: 1,
     name: 'Join Any',
     objective: 'join',
+    workspaceRoot: process.cwd(),
     nodes: [
-      { id: 'slow', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version }, executor: 'slow-executor' },
-      { id: 'fast', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version }, executor: 'fast-executor' },
+      {
+        id: 'slow',
+        kind: 'cf-call',
+        cfRef: { cfId: cf.cfId, version: version.version },
+        executor: 'slow-executor',
+      },
+      {
+        id: 'fast',
+        kind: 'cf-call',
+        cfRef: { cfId: cf.cfId, version: version.version },
+        executor: 'fast-executor',
+      },
       { id: 'join', kind: 'join', mode: 'any' },
       { id: 'out', kind: 'output', outputId: 'result' },
     ],
@@ -217,9 +216,6 @@ test('dispatches join-any as soon as one predecessor completes and drains in-fli
       { id: 'fast-join', from: 'fast', to: 'join' },
       { id: 'join-out', from: 'join', to: 'out' },
     ],
-    bindings: [
-      { id: 'join-output', from: 'join.output', to: 'out.input' },
-    ],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
   const store = new Store(`/tmp/cf-join-${randomUUID()}.sqlite`)
@@ -227,7 +223,9 @@ test('dispatches join-any as soon as one predecessor completes and drains in-fli
   store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`)
   new Engine(store, registry, () => [version]).start(runId, plan)
   await waitFor(() => calls.includes('fast-start') && calls.includes('slow-start'))
-  await waitFor(() => store.events(runId).some((event) => event.type === 'node.started' && event.node === 2))
+  await waitFor(() =>
+    store.events(runId).some((event) => event.type === 'node.started' && event.node === 2),
+  )
   assert.ok(calls.includes('fast-start'), 'fast branch should start immediately')
   assert.ok(
     store.events(runId).some((event) => event.type === 'node.started' && event.node === 2),
@@ -246,6 +244,7 @@ test('allows a shared downstream node after an exclusive branch', async () => {
     revision: 1,
     name: 'Shared',
     objective: 'route',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'route', kind: 'branch', cond: { $get: 'risk' }, cases: ['high', 'normal'] },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -260,7 +259,6 @@ test('allows a shared downstream node after an exclusive branch', async () => {
         when: { outcome: 'branch-case', caseId: 'normal' },
       },
     ],
-    bindings: [{ id: 'risk', from: '$user.input.risk', to: 'route.input.risk' }],
   }
   const plan = compileFlow(flow, new Map())
   const store = new Store(`/tmp/cf-shared-${randomUUID()}.sqlite`)
@@ -285,17 +283,6 @@ test('cancels an in-flight run and records cancellation', async () => {
     inputContract: { type: 'object' },
     outputContract: { type: 'object' },
     defaultExecutor: 'slow-executor',
-    program: {
-      version: '0.1',
-      cfId: 'slow',
-      sourceRevision: 1,
-      entry: 0,
-      steps: [
-        { index: 0, kind: 'agent', task: 'slow', next: 1 },
-        { index: 1, kind: 'return' },
-      ],
-      limits: { maxStepExecutions: 4, maxExternalCalls: 1, maxOutputBytes: 4096 },
-    },
   }
   const version = compileCF(cf)
   const flow: FlowDraft = {
@@ -303,6 +290,7 @@ test('cancels an in-flight run and records cancellation', async () => {
     revision: 1,
     name: 'Slow',
     objective: 'cancel',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -311,7 +299,6 @@ test('cancels an in-flight run and records cancellation', async () => {
       { id: 'start', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
     ],
-    bindings: [{ id: 'output', from: 'call.output', to: 'out.input' }],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
   const store = new Store(`/tmp/cf-cancel-${randomUUID()}.sqlite`)
@@ -354,17 +341,6 @@ test('retries a failed CF call only within its declared bound', async () => {
     inputContract: { type: 'object' },
     outputContract: { type: 'object' },
     defaultExecutor: 'flaky-executor',
-    program: {
-      version: '0.1',
-      cfId: 'flaky',
-      sourceRevision: 1,
-      entry: 0,
-      steps: [
-        { index: 0, kind: 'agent', task: 'flaky', next: 1 },
-        { index: 1, kind: 'return', source: '$local.0.output' },
-      ],
-      limits: { maxStepExecutions: 4, maxExternalCalls: 1, maxOutputBytes: 4096 },
-    },
   }
   const version = compileCF(cf)
   const flow: FlowDraft = {
@@ -372,6 +348,7 @@ test('retries a failed CF call only within its declared bound', async () => {
     revision: 1,
     name: 'Flaky',
     objective: 'retry',
+    workspaceRoot: process.cwd(),
     nodes: [
       {
         id: 'call',
@@ -385,7 +362,6 @@ test('retries a failed CF call only within its declared bound', async () => {
       { id: 'start', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
     ],
-    bindings: [{ id: 'output', from: 'call.output', to: 'out.input' }],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
   const store = new Store(`/tmp/cf-retry-${randomUUID()}.sqlite`)
@@ -418,6 +394,7 @@ test('pauses for approval and resumes on an explicit decision', async () => {
     revision: 1,
     name: 'Approval',
     objective: 'approve',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'review', kind: 'approval', policyRef: 'manual-review' },
       { id: 'approved', kind: 'output', outputId: 'approved' },
@@ -428,7 +405,6 @@ test('pauses for approval and resumes on an explicit decision', async () => {
       { id: 'yes', from: 'review', to: 'approved', when: { outcome: 'approved' } },
       { id: 'no', from: 'review', to: 'rejected', when: { outcome: 'rejected' } },
     ],
-    bindings: [],
   }
   const plan = compileFlow(flow, new Map())
   const store = new Store(`/tmp/cf-approval-${randomUUID()}.sqlite`)
@@ -470,6 +446,7 @@ test('does not auto-replay a ledger node that started but never committed', asyn
     revision: 1,
     name: 'Uncommitted',
     objective: 'recover',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -478,7 +455,6 @@ test('does not auto-replay a ledger node that started but never committed', asyn
       { id: 'start', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
     ],
-    bindings: [{ id: 'output', from: 'call.output', to: 'out.input' }],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
   const store = new Store(`/tmp/cf-uncommitted-${randomUUID()}.sqlite`)
@@ -504,17 +480,6 @@ test('fails closed on contract and plan integrity violations', async () => {
     inputContract: { type: 'object' },
     outputContract: { type: 'object' },
     defaultExecutor: 'bad-output',
-    program: {
-      version: '0.1',
-      cfId: 'integrity',
-      sourceRevision: 1,
-      entry: 0,
-      steps: [
-        { index: 0, kind: 'agent', task: 'bad', next: 1 },
-        { index: 1, kind: 'return', source: '$local.0.output' },
-      ],
-      limits: { maxStepExecutions: 4, maxExternalCalls: 1, maxOutputBytes: 4096 },
-    },
   }
   const version = compileCF(cf)
   const flow: FlowDraft = {
@@ -522,6 +487,7 @@ test('fails closed on contract and plan integrity violations', async () => {
     revision: 1,
     name: 'Integrity',
     objective: 'fail',
+    workspaceRoot: process.cwd(),
     nodes: [
       { id: 'call', kind: 'cf-call', cfRef: { cfId: cf.cfId, version: version.version } },
       { id: 'out', kind: 'output', outputId: 'result' },
@@ -530,7 +496,6 @@ test('fails closed on contract and plan integrity violations', async () => {
       { id: 'start', from: '$entry', to: 'call' },
       { id: 'finish', from: 'call', to: 'out' },
     ],
-    bindings: [{ id: 'output', from: 'call.output', to: 'out.input' }],
   }
   const plan = compileFlow(flow, new Map([[`${cf.cfId}@${version.version}`, version]]))
   const store = new Store(`/tmp/cf-integrity-${randomUUID()}.sqlite`)

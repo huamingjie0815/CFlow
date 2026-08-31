@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "pi",
+  "name": "Pi",
+  "description": "通过项目 manifest 接入本机 Pi coding agent。",
+  "backend": "cli",
+  "command": "pi",
+  "args": ["--print", "--no-session", "--mode", "text", "--no-context-files"],
+  "versionArgs": ["--version"],
+  "promptTransport": "argument",
+  "outputMode": "json",
+  "envAllowlist": [
+    "HOME",
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "PI_CODING_AGENT_DIR",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "XAI_API_KEY",
+    "OPENROUTER_API_KEY"
+  ],
+  "capabilities": [
+    "reasoning",
+    "code",
+    "structured-output",
+    "workspace-read",
+    "workspace-write",
+    "command"
+  ],
+  "permissionArgs": {
+    "none": ["--no-tools"],
+    "read": ["--tools", "read,grep,find,ls"],
+    "write": ["--tools", "read,grep,find,ls,edit,write"],
+    "full": ["--tools", "read,grep,find,ls,edit,write,bash"]
+  }
+}

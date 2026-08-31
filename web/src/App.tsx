@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ChevronLeft,
-  ChevronRight,
   CirclePlay,
   CircleStop,
   GitBranch,
@@ -10,27 +8,35 @@ import {
   Library,
   ListChecks,
   LoaderCircle,
-  MessageSquareText,
-  PanelRightClose,
-  PanelRightOpen,
   Plus,
-  Save,
-  Send,
+  ScrollText,
   ShieldCheck,
-  Split,
-  Workflow,
   Upload,
+  Workflow,
+  X,
 } from 'lucide-react'
 import { api, readableError } from './api'
+import { BottomDrawer } from './components/BottomDrawer'
 import { CapabilityLibrary } from './components/CapabilityLibrary'
-import { CompilerPreviewView } from './components/CompilerPreview'
+import { CheckPanel } from './components/CheckPanel'
+import { DetailPanel } from './components/DetailPanel'
+import { DirectoryPicker } from './components/DirectoryPicker'
+import { FlowAgentChat } from './components/FlowAgentChat'
 import { FlowCanvas } from './components/FlowCanvas'
-import { FlowSidebar } from './components/FlowSidebar'
-import { Inspector } from './components/Inspector'
+import { GoalComposer } from './components/GoalComposer'
+import { RunLogPanel } from './components/RunLogPanel'
 import { SettingsView } from './components/SettingsView'
-import { testStateLabel } from './copy'
+import { TopBar } from './components/TopBar'
+import type { FlowListRow } from './flow-list'
 import { deriveNodeRunStates, type NodeRunState } from './run'
-import { draftSaveStatus, runStopControl } from './workbench-ui'
+import {
+  draftSaveStatus,
+  mergeAttachments,
+  nextSignalAction,
+  runStopControl,
+  type DrawerTab,
+  type TestState,
+} from './workbench-ui'
 import type {
   CanvasPosition,
   CFDraft,
@@ -39,44 +45,66 @@ import type {
   FlowDraft,
   FlowNode,
   FlowPlan,
-  AgentChatAction,
   AgentChatMessage,
+  BootstrapData,
 } from './types'
 
-type WorkView = 'chat' | 'canvas' | 'compiler'
-type TestState = 'idle' | 'running' | 'passed' | 'failed' | 'cancelled' | 'published'
-type Message = { id: string; role: 'user' | 'assistant'; body: string; meta?: string }
+const workspaceKey = 'cf-platform-react-workbench-v2'
+const legacyWorkspaceKeys = ['cf-platform-react-workbench-v1']
 
-const workspaceKey = 'cf-platform-react-workbench-v1'
+type StoredWorkspace = {
+  version?: number
+  draft?: FlowDraft | null
+  positions?: Record<string, CanvasPosition>
+  candidateCfs?: CFDraft[]
+  conversation?: AgentChatMessage[]
+  runId?: string | null
+  runMode?: 'test' | 'live' | null
+  inspectedRunId?: string | null
+  drawerTab?: DrawerTab | null
+  leftCollapsed?: boolean
+  rightCollapsed?: boolean
+}
 
-function readStoredWorkspace() {
+type AgentUndo = {
+  flowDraft: FlowDraft
+  cfDrafts: CFDraft[]
+  appliedFlowId: string
+  appliedRevision: number
+  messageId: string
+}
+
+function readStoredWorkspace(): StoredWorkspace {
+  // v1 stored the goal transcript and the assistant transcript as two arrays
+  // with no timestamps, so they cannot be interleaved faithfully. Rather than
+  // invent an order, v2 starts clean; drafts are autosaved server-side.
+  for (const key of legacyWorkspaceKeys) {
+    try {
+      localStorage.removeItem(key)
+    } catch {
+      // Private-mode storage can throw; nothing to recover here.
+    }
+  }
   try {
     const value = localStorage.getItem(workspaceKey)
-    return value
-      ? (JSON.parse(value) as {
-          draft?: FlowDraft
-          positions?: Record<string, CanvasPosition>
-          candidateCfs?: CFDraft[]
-          messages?: Message[]
-          agentMessages?: AgentChatMessage[]
-          runId?: string | null
-          runMode?: 'test' | 'live' | null
-          inspectedRunId?: string | null
-          inspectorTab?: 'details' | 'activity' | 'agent'
-        })
-      : {}
+    if (!value) return {}
+    const parsed = JSON.parse(value) as StoredWorkspace
+    return parsed?.version === 2 ? parsed : {}
   } catch {
     return {}
   }
 }
 
+const initialStoredWorkspace = readStoredWorkspace()
+
 function planToDraft(plan: FlowPlan): FlowDraft {
   const idByIndex = new Map(plan.nodes.map((node) => [node.index, node.id]))
   return {
     flowId: plan.flowId,
-    revision: Number.parseInt(plan.flowVersion, 10) + 1,
+    revision: Number.parseInt(plan.flowVersion, 10),
     name: plan.objective,
     objective: plan.objective,
+    workspaceRoot: plan.workspaceRoot,
     nodes: plan.nodes.map((node) => {
       const {
         index: _index,
@@ -96,32 +124,26 @@ function planToDraft(plan: FlowPlan): FlowDraft {
   }
 }
 
-function runtimeStatus(runtime: { enabled: boolean; health?: { status: string } }) {
-  if (!runtime.enabled) return 'disabled'
-  return runtime.health?.status ?? 'checking'
-}
-
 function uniqueId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 }
 
 export function App() {
   const queryClient = useQueryClient()
-  const stored = useRef(readStoredWorkspace()).current
-  const [draft, setDraft] = useState<FlowDraft | null>(stored.draft ?? null)
+  const stored = useRef(initialStoredWorkspace).current
+  const supportedStoredDraft = stored.draft?.workspaceRoot ? stored.draft : undefined
+  const [draft, setDraft] = useState<FlowDraft | null>(supportedStoredDraft ?? null)
   const [positions, setPositions] = useState<Record<string, CanvasPosition>>(stored.positions ?? {})
   const [candidateCfs, setCandidateCfs] = useState<CFDraft[]>(stored.candidateCfs ?? [])
-  const [messages, setMessages] = useState<Message[]>(stored.messages ?? [])
-  const [agentMessages, setAgentMessages] = useState<AgentChatMessage[]>(stored.agentMessages ?? [])
-  const [view, setView] = useState<WorkView>(stored.draft ? 'canvas' : 'chat')
-  const [inspectorTab, setInspectorTab] = useState<'details' | 'activity' | 'agent'>(
-    stored.inspectorTab ?? 'details',
-  )
+  // One transcript: the goal turn is simply the first turn of the same chat.
+  const [conversation, setConversation] = useState<AgentChatMessage[]>(stored.conversation ?? [])
+  const [agentUndo, setAgentUndo] = useState<AgentUndo | null>(null)
+  const [drawerTab, setDrawerTab] = useState<DrawerTab | null>(stored.drawerTab ?? null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-  const [leftCollapsed, setLeftCollapsed] = useState(false)
-  const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [leftCollapsed, setLeftCollapsed] = useState(stored.leftCollapsed ?? false)
+  const [rightCollapsed, setRightCollapsed] = useState(stored.rightCollapsed ?? false)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [dirty, setDirty] = useState(Boolean(stored.draft))
   const [testState, setTestState] = useState<TestState>('idle')
@@ -138,20 +160,33 @@ export function App() {
     detail: string
   } | null>(null)
   const [goal, setGoal] = useState('')
-  const [runtimeId, setRuntimeId] = useState('echo')
-  const [compileRuntimeId, setCompileRuntimeId] = useState('echo')
+  const [newWorkspaceRoot, setNewWorkspaceRoot] = useState<string | null>(
+    supportedStoredDraft?.workspaceRoot ?? null,
+  )
+  const [skillAttachments, setSkillAttachments] = useState<File[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const [runtimeId, setRuntimeId] = useState('')
+  const [compileRuntimeId, setCompileRuntimeId] = useState('')
   const [testingRuntimeId, setTestingRuntimeId] = useState<string | null>(null)
 
   const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap })
   const data = bootstrap.data
+  const workspaceStatus = useQuery({
+    queryKey: ['workspace-status', draft?.workspaceRoot],
+    queryFn: () => api.validateDirectory(draft!.workspaceRoot),
+    enabled: Boolean(draft?.workspaceRoot),
+    retry: false,
+    refetchInterval: 10_000,
+  })
+  const workspaceAvailable = Boolean(draft?.workspaceRoot) && workspaceStatus.isSuccess
   const handledRunStateRef = useRef<string | null>(null)
 
   useEffect(() => {
-    if (data?.settings.defaultRuntimeId && runtimeId === 'echo')
-      setRuntimeId(data.settings.defaultRuntimeId)
+    if (data?.settings.defaultRuntimeId && !runtimeId) setRuntimeId(data.settings.defaultRuntimeId)
   }, [data?.settings.defaultRuntimeId, runtimeId])
   useEffect(() => {
-    if (data?.settings.defaultRuntimeId && compileRuntimeId === 'echo')
+    if (data?.settings.defaultRuntimeId && !compileRuntimeId)
       setCompileRuntimeId(data.settings.defaultRuntimeId)
   }, [compileRuntimeId, data?.settings.defaultRuntimeId])
   useEffect(() => {
@@ -176,28 +211,35 @@ export function App() {
   }, [data?.cfs, candidateCfs.length])
 
   useEffect(() => {
-    localStorage.setItem(
-      workspaceKey,
-      JSON.stringify({
-        draft,
-        positions,
-        candidateCfs,
-        messages,
-        agentMessages,
-        runId,
-        runMode,
-        inspectedRunId,
-        inspectorTab,
-      }),
-    )
+    try {
+      localStorage.setItem(
+        workspaceKey,
+        JSON.stringify({
+          version: 2,
+          draft,
+          positions,
+          candidateCfs,
+          conversation,
+          runId,
+          runMode,
+          inspectedRunId,
+          drawerTab,
+          leftCollapsed,
+          rightCollapsed,
+        } satisfies StoredWorkspace),
+      )
+    } catch {
+      // Storage can be unavailable (private mode, quota); the app still works.
+    }
   }, [
-    agentMessages,
     candidateCfs,
+    conversation,
     draft,
+    drawerTab,
     inspectedRunId,
-    inspectorTab,
-    messages,
+    leftCollapsed,
     positions,
+    rightCollapsed,
     runId,
     runMode,
   ])
@@ -224,6 +266,29 @@ export function App() {
       return { plan: snapshot.plan, programs: snapshot.programs }
     })
   }, [data?.flowCompilations, draft?.flowId, draft?.revision])
+
+  const clearWorkspace = () => {
+    setDraft(null)
+    setCandidateCfs([])
+    setPositions({})
+    setConversation([])
+    setAgentUndo(null)
+    setGoal('')
+    setNewWorkspaceRoot(null)
+    setSkillAttachments([])
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setDirty(false)
+    setTestState('idle')
+    setRunId(null)
+    setRunMode(null)
+    setInspectedRunId(null)
+    setDrawerTab(null)
+    setPreview(null)
+    setPreviewError(null)
+    setSettingsOpen(false)
+    localStorage.removeItem(workspaceKey)
+  }
 
   const saveMutation = useMutation({
     mutationFn: api.saveDraft,
@@ -255,6 +320,37 @@ export function App() {
     onError: (error) =>
       setNotice({ tone: 'error', title: '删除失败', detail: readableError(error) }),
   })
+  const deletePlanMutation = useMutation({
+    mutationFn: ({ flowId, flowVersion }: { flowId: string; flowVersion: string }) =>
+      api.deletePublishedFlow(flowId, flowVersion),
+    onSuccess: (_, target) => {
+      queryClient.setQueryData<typeof data>(['bootstrap'], (current) =>
+        current
+          ? {
+              ...current,
+              plans: current.plans.filter(
+                (item) =>
+                  !(item.flowId === target.flowId && item.flowVersion === target.flowVersion),
+              ),
+            }
+          : current,
+      )
+      if (
+        testState === 'published' &&
+        preview?.plan.flowId === target.flowId &&
+        preview.plan.flowVersion === target.flowVersion
+      )
+        clearWorkspace()
+      setNotice({
+        tone: 'success',
+        title: '已发布版本已删除',
+        detail: `版本 v${target.flowVersion} 已从工作台移除。`,
+      })
+      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '删除失败', detail: readableError(error) }),
+  })
   useEffect(() => {
     if (!dirty || !draft) return
     const timer = window.setTimeout(() => saveMutation.mutate(draft), 900)
@@ -276,17 +372,27 @@ export function App() {
       const detail = readableError(error)
       setPreview(null)
       setPreviewError(detail)
-      setNotice({ tone: 'error', title: '检查未通过', detail })
+      // 检查视图已经内联显示这条错误，顶部横幅只在别的视图里补充提示。
+      if (drawerTab !== 'check') setNotice({ tone: 'error', title: '检查未通过', detail })
     },
   })
   const isRunning = Boolean(runMode)
 
   const proposalMutation = useMutation({
-    mutationFn: ({ objective, runtime }: { objective: string; runtime: string }) =>
-      api.propose(objective, runtime),
+    mutationFn: ({
+      objective,
+      runtime,
+      workspaceRoot,
+      attachments,
+    }: {
+      objective: string
+      runtime: string
+      workspaceRoot: string
+      attachments: File[]
+    }) => api.propose(objective, runtime, workspaceRoot, attachments),
     onSuccess: (proposal, variables) => {
       if (!proposal.flowDraft) {
-        setMessages((current) => [
+        setConversation((current) => [
           ...current,
           {
             id: uniqueId('message'),
@@ -297,25 +403,29 @@ export function App() {
         return
       }
       setDraft(proposal.flowDraft)
+      setNewWorkspaceRoot(proposal.flowDraft.workspaceRoot)
       setCandidateCfs(proposal.cfDrafts ?? [])
+      setAgentUndo(null)
+      setSkillAttachments([])
       setPositions({})
-      setMessages((current) => [
+      setConversation((current) => [
         ...current,
         {
           id: uniqueId('message'),
           role: 'assistant',
-          body: proposal.assistantMessage ?? '已经生成一份可以调整的流程草案。',
+          body: proposal.attachmentSummary
+            ? `${proposal.assistantMessage ?? '已经生成一份可以调整的流程草案。'} 已只读分析 ${proposal.attachmentSummary.fileCount} 个附件${proposal.attachmentSummary.skippedCount ? `，跳过 ${proposal.attachmentSummary.skippedCount} 个不支持的文件` : ''}，并归档到 ${proposal.attachmentSummary.archivePath}。`
+            : (proposal.assistantMessage ?? '已经生成一份可以调整的流程草案。'),
           meta: variables.runtime,
         },
       ])
       setDirty(true)
       setTestState('idle')
       setPreview(null)
-      setView('canvas')
     },
     onError: (error) => {
       const detail = readableError(error)
-      setMessages((current) => [
+      setConversation((current) => [
         ...current,
         { id: uniqueId('message'), role: 'assistant', body: `生成失败：${detail}` },
       ])
@@ -448,7 +558,6 @@ export function App() {
     } else if (status === 'cancelled') {
       handledRunStateRef.current = runStateKey
       if (runMode === 'test') setTestState('cancelled')
-      setInspectorTab('agent')
       setNotice({
         tone: 'info',
         title: runMode === 'test' ? '测试已停止' : '运行已停止',
@@ -459,11 +568,10 @@ export function App() {
     } else if (status === 'failed') {
       handledRunStateRef.current = runStateKey
       if (runMode === 'test') setTestState('failed')
-      setInspectorTab('agent')
       setNotice({
         tone: 'error',
         title: runMode === 'test' ? '测试未通过' : '运行失败',
-        detail: '这次运行没有完成，可以查看右侧活动了解原因。',
+        detail: '这次运行没有完成。打开画布下方的「日志」可以按步骤查看原因。',
       })
       setRunMode(null)
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
@@ -511,6 +619,27 @@ export function App() {
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     },
   })
+  const runtimeDiscoveryMutation = useMutation({
+    mutationFn: api.discoverRuntimes,
+    onSuccess: (result) => {
+      queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) =>
+        current
+          ? {
+              ...current,
+              runtimes: result.runtimes,
+              runtimeDiscoveryWarnings: result.warnings,
+            }
+          : current,
+      )
+      setNotice({
+        tone: 'success',
+        title: '识别完成',
+        detail: `发现 ${result.runtimes.filter((runtime) => runtime.health?.status === 'available').length} 个可用助手${result.warnings.length ? `，跳过 ${result.warnings.length} 个无效 manifest` : ''}。`,
+      })
+    },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '识别失败', detail: readableError(error) }),
+  })
 
   const currentDrafts = useMemo(() => {
     const drafts = [...(data?.flowDrafts ?? [])]
@@ -549,33 +678,16 @@ export function App() {
     })
   }
 
-  const openCompiler = () => {
+  const openCheck = () => {
     if (!draft) return
-    setView('compiler')
+    setDrawerTab('check')
     if (!preview && !compileMutation.isPending) compileMutation.mutate()
   }
 
   const newFlow = () => {
     if (draft && dirty && !window.confirm('当前流程还没保存。确定要新建吗？未保存的修改会丢失。'))
       return
-    setDraft(null)
-    setCandidateCfs([])
-    setPositions({})
-    setMessages([])
-    setAgentMessages([])
-    setGoal('')
-    setSelectedNodeId(null)
-    setSelectedEdgeId(null)
-    setDirty(false)
-    setTestState('idle')
-    setRunId(null)
-    setRunMode(null)
-    setInspectedRunId(null)
-    setInspectorTab('details')
-    setPreview(null)
-    setView('chat')
-    setSettingsOpen(false)
-    localStorage.removeItem(workspaceKey)
+    clearWorkspace()
   }
 
   const deleteDraft = (target: FlowDraft) => {
@@ -586,32 +698,23 @@ export function App() {
     )
       return
     if (draft?.flowId === target.flowId) {
-      setDraft(null)
-      setCandidateCfs([])
-      setPositions({})
-      setMessages([])
-      setAgentMessages([])
-      setGoal('')
-      setSelectedNodeId(null)
-      setSelectedEdgeId(null)
-      setDirty(false)
-      setTestState('idle')
-      setRunId(null)
-      setRunMode(null)
-      setInspectedRunId(null)
-      setInspectorTab('details')
-      setPreview(null)
-      setPreviewError(null)
-      setView('chat')
-      localStorage.removeItem(workspaceKey)
+      clearWorkspace()
     }
     deleteDraftMutation.mutate(target.flowId)
+  }
+
+  const deletePlan = (target: FlowPlan) => {
+    if (!window.confirm(`确定删除已发布版本 v${target.flowVersion}「${target.objective}」吗？`))
+      return
+    deletePlanMutation.mutate({ flowId: target.flowId, flowVersion: target.flowVersion })
   }
 
   const selectDraft = (next: FlowDraft) => {
     setSettingsOpen(false)
     setDraft(structuredClone(next))
-    setAgentMessages([])
+    setNewWorkspaceRoot(next.workspaceRoot)
+    setConversation([])
+    setAgentUndo(null)
     setCandidateCfs(
       (data?.cfDrafts ?? []).filter((cf) =>
         next.nodes.some(
@@ -631,14 +734,15 @@ export function App() {
     setRunId(null)
     setRunMode(null)
     setInspectedRunId(null)
-    setInspectorTab('details')
+    setDrawerTab(null)
     setPreview(null)
-    setView('canvas')
   }
   const selectPlan = (plan: FlowPlan) => {
     setSettingsOpen(false)
     setDraft(planToDraft(plan))
-    setAgentMessages([])
+    setNewWorkspaceRoot(plan.workspaceRoot)
+    setConversation([])
+    setAgentUndo(null)
     setCandidateCfs([])
     setPositions({})
     setDirty(false)
@@ -646,7 +750,7 @@ export function App() {
     setRunId(null)
     setRunMode(null)
     setInspectedRunId(null)
-    setInspectorTab('details')
+    setDrawerTab(null)
     setPreview({
       plan,
       programs: (data?.cfs ?? []).filter((cf) =>
@@ -658,7 +762,7 @@ export function App() {
         ),
       ),
     })
-    setView('canvas')
+    setDrawerTab(null)
   }
 
   const addNode = (node: FlowNode) => {
@@ -690,135 +794,45 @@ export function App() {
     })
   }
 
-  const submitGoal = (event: React.FormEvent) => {
-    event.preventDefault()
+  const submitGoal = () => {
     const objective = goal.trim()
-    if (!objective) return
-    setMessages((current) => [
+    if (!objective || !newWorkspaceRoot) return
+    setConversation((current) => [
       ...current,
       { id: uniqueId('message'), role: 'user', body: objective },
     ])
     setGoal('')
-    proposalMutation.mutate({ objective, runtime: runtimeId })
+    proposalMutation.mutate({
+      objective,
+      runtime: runtimeId,
+      workspaceRoot: newWorkspaceRoot,
+      attachments: skillAttachments,
+    })
   }
 
-  const applyAgentAction = (action: AgentChatAction) => {
-    if (action.type === 'open-activity') {
-      setInspectorTab('activity')
+  const undoAgentRevision = () => {
+    if (
+      !agentUndo ||
+      draft?.flowId !== agentUndo.appliedFlowId ||
+      draft.revision !== agentUndo.appliedRevision
+    )
       return
-    }
-    if (action.type === 'select-node') {
-      if (!action.nodeId) return
-      setSelectedEdgeId(null)
-      setSelectedNodeId(action.nodeId)
-      setView('canvas')
-      return
-    }
-    if (action.type === 'update-binding') {
-      const binding = action.binding
-      if (!draft || !binding?.from || !binding.to) return
-      if (testState === 'published') {
-        setNotice({
-          tone: 'error',
-          title: '已发布版本不能修改',
-          detail: '请从草稿开始调整，已发布版本会保持不变。',
-        })
-        return
-      }
-      const nodeIds = new Set(draft.nodes.map((node) => node.id))
-      const rootOf = (value: string) => value.split('.')[0]
-      const validFrom = binding.from.startsWith('$user.') || nodeIds.has(rootOf(binding.from))
-      const validTo = nodeIds.has(rootOf(binding.to)) || rootOf(binding.to) === 'output'
-      if (!validFrom || !validTo) {
-        setNotice({
-          tone: 'error',
-          title: '绑定目标无效',
-          detail: '助手建议的输入或输出字段不在当前流程中，请先让助手重新核对节点编号。',
-        })
-        return
-      }
-      const existing = (draft.bindings ?? []).find(
-        (item) => item.id === binding.id || item.to === binding.to,
-      )
-      const nextBinding = {
-        id: existing?.id ?? binding.id ?? uniqueId('binding'),
-        from: binding.from,
-        to: binding.to,
-        ...(binding.required === undefined ? {} : { required: binding.required }),
-      }
-      updateDraft({
-        ...draft,
-        revision: draft.revision + 1,
-        bindings: [
-          ...(draft.bindings ?? []).filter(
-            (item) => item.id !== existing?.id && item.to !== binding.to,
-          ),
-          nextBinding,
-        ],
-      })
-      setSelectedNodeId(null)
-      setSelectedEdgeId(null)
-      setView('canvas')
-      setNotice({
-        tone: 'success',
-        title: '已应用输入输出绑定',
-        detail: `已将 ${binding.from} 连接到 ${binding.to}，请重新检查并测试流程。`,
-      })
-      return
-    }
-    if (!draft || !action.nodeId) return
-    const node = draft.nodes.find((item) => item.id === action.nodeId)
-    if (!node || node.kind !== 'cf-call') return
-    if (testState === 'published') {
-      setNotice({
-        tone: 'error',
-        title: '已发布版本不能修改',
-        detail: '请从草稿开始调整，已发布版本会保持不变。',
-      })
-      return
-    }
-    const nextPatch =
-      action.type === 'retry-node'
-        ? {
-            onError: {
-              action: 'retry' as const,
-              maxAttempts:
-                node.onError?.action === 'retry'
-                  ? Math.max(2, (node.onError.maxAttempts ?? 1) + 1)
-                  : 2,
-            },
-          }
-        : action.patch
-    if (!nextPatch) return
-    if (nextPatch.executor) {
-      const runtime = (data?.runtimes ?? []).find((item) => item.id === nextPatch.executor)
-      if (!runtime || !runtime.enabled || runtime.health?.status !== 'available') {
-        setNotice({
-          tone: 'error',
-          title: '执行器不可用',
-          detail: '助手建议的执行器当前不可用，请先在设置中检查 Runtime。',
-        })
-        return
-      }
-    }
-    const nextNode = { ...node, ...nextPatch }
-    updateDraft({
-      ...draft,
-      revision: draft.revision + 1,
-      nodes: draft.nodes.map((item) => (item.id === node.id ? nextNode : item)),
-    })
-    setSelectedEdgeId(null)
-    setSelectedNodeId(node.id)
-    setView('canvas')
+    updateDraft(structuredClone(agentUndo.flowDraft))
+    setCandidateCfs(structuredClone(agentUndo.cfDrafts))
+    setAgentUndo(null)
+    setConversation((current) => [
+      ...current,
+      {
+        id: uniqueId('message'),
+        role: 'assistant',
+        body: '已撤销上次助手修改，当前草稿已恢复到修改前。',
+        meta: '当前草稿',
+      },
+    ])
     setNotice({
       tone: 'success',
-      title: '已应用助手建议',
-      detail:
-        nextPatch.onError?.action === 'retry'
-          ? `「${node.id}」失败时将最多重试 ${nextPatch.onError.maxAttempts ?? 2} 次，请重新检查并测试流程。`
-          : nextPatch.executor
-            ? `「${node.id}」将改由 ${nextPatch.executor} 执行，请重新检查并测试流程。`
-            : `已更新「${node.id}」的流程配置，请重新检查并测试。`,
+      title: '已撤销助手修改',
+      detail: '画布和候选能力已恢复到上一次助手修订前。',
     })
   }
 
@@ -842,172 +856,89 @@ export function App() {
     )
 
   const runtimes = data?.runtimes ?? []
-  const selectedRuntime = runtimes.find((runtime) => runtime.id === runtimeId)
+  const signal = nextSignalAction({
+    hasDraft: Boolean(draft),
+    workspaceAvailable,
+    isRunning,
+    hasPreview: Boolean(preview),
+    testState,
+    hasPublishedPlan: Boolean(latestPlan),
+  })
+  const deletingKey = deleteDraftMutation.variables
+    ? deleteDraftMutation.variables
+    : deletePlanMutation.variables
+      ? `${deletePlanMutation.variables.flowId}@${deletePlanMutation.variables.flowVersion}`
+      : null
+
+  const selectFlowRow = (row: FlowListRow) => {
+    if (row.kind === 'draft') {
+      const target = currentDrafts.find((item) => item.flowId === row.flowId)
+      if (target) selectDraft(target)
+      return
+    }
+    const target = (data?.plans ?? []).find(
+      (plan) => plan.flowId === row.flowId && plan.flowVersion === row.flowVersion,
+    )
+    if (target) selectPlan(target)
+  }
+  const deleteFlowRow = (row: FlowListRow) => {
+    if (row.kind === 'draft') {
+      const target = currentDrafts.find((item) => item.flowId === row.flowId)
+      if (target) deleteDraft(target)
+      return
+    }
+    const target = (data?.plans ?? []).find(
+      (plan) => plan.flowId === row.flowId && plan.flowVersion === row.flowVersion,
+    )
+    if (target) deletePlan(target)
+  }
+
+  const runLive = () => {
+    if (!latestPlan) return
+    const writes = latestPlan.nodes.some((node) => {
+      if (node.kind !== 'cf-call') return false
+      const capability = ([...(data?.cfs ?? []), ...candidateCfs] as any[]).find(
+        (cf: any) =>
+          cf.cfId === node.cfRef.cfId &&
+          `${cf.revision ?? cf.draft?.revision}.0.0` === node.cfRef.version,
+      )
+      return (
+        capability?.effects?.some((effect: any) => effect.type === 'file-write') ||
+        capability?.draft?.effects?.some((effect: any) => effect.type === 'file-write')
+      )
+    })
+    if (
+      writes &&
+      !window.confirm('这条流程会修改工作区内的文件。修改范围：用户工作区。继续运行吗？')
+    )
+      return
+    liveRunMutation.mutate(latestPlan)
+  }
 
   return (
-    <div
-      className={`app-shell${leftCollapsed ? ' left-collapsed' : ''}${rightCollapsed ? ' right-collapsed' : ''}${settingsOpen ? ' settings-open' : ''}`}
-    >
-      <FlowSidebar
-        collapsed={leftCollapsed}
-        currentFlowId={draft?.flowId ?? null}
+    <div className={`app-frame${settingsOpen ? ' settings-open' : ''}`}>
+      <TopBar
         drafts={currentDrafts}
         plans={data?.plans ?? []}
+        draft={draft}
+        testState={testState}
+        saveStatus={saveStatus}
+        isSaving={saveMutation.isPending}
+        saveFailed={saveMutation.isError}
         isRefreshing={bootstrap.isFetching}
-        onToggle={() => setLeftCollapsed((value) => !value)}
-        onNew={newFlow}
-        onSelectDraft={selectDraft}
-        onSelectPlan={selectPlan}
-        onDeleteDraft={deleteDraft}
-        deletingDraftId={deleteDraftMutation.variables ?? null}
+        deletingKey={deletingKey}
+        leftCollapsed={leftCollapsed}
+        rightCollapsed={rightCollapsed}
+        onSelectFlow={selectFlowRow}
+        onDeleteFlow={deleteFlowRow}
+        onNewFlow={newFlow}
         onRefresh={() => bootstrap.refetch()}
         onSettings={() => setSettingsOpen(true)}
+        onToggleLeft={() => setLeftCollapsed((value) => !value)}
+        onToggleRight={() => setRightCollapsed((value) => !value)}
       />
-      <main className="workspace">
-        <header className="workspace-header">
-          <div className="workspace-title">
-            <span className={`route-state is-${testState}`} />
-            <div>
-              <h1>{draft?.name ?? '未命名流程'}</h1>
-              <p>
-                {draft
-                  ? `第 ${draft.revision} 稿 · ${draft.nodes.length} 个步骤 · ${testStateLabel(testState)}`
-                  : '先写下你想完成的事'}
-              </p>
-            </div>
-          </div>
-          <nav className="view-tabs" aria-label="工作区视图">
-            <button
-              type="button"
-              className={view === 'chat' ? 'is-active' : ''}
-              onClick={() => setView('chat')}
-            >
-              <MessageSquareText size={15} />
-              目标
-            </button>
-            <button
-              type="button"
-              className={view === 'canvas' ? 'is-active' : ''}
-              onClick={() => draft && setView('canvas')}
-              disabled={!draft}
-            >
-              <GitBranch size={15} />
-              画布
-            </button>
-            <button
-              type="button"
-              className={view === 'compiler' ? 'is-active' : ''}
-              onClick={openCompiler}
-              disabled={!draft}
-            >
-              <ListChecks size={15} />
-              检查 DSL
-            </button>
-          </nav>
-          <div className="workspace-actions">
-            {saveStatus && (
-              <span
-                className={`save-state${dirty ? ' is-dirty' : ''}${saveMutation.isError ? ' is-error' : ''}`}
-              >
-                {saveMutation.isPending ? (
-                  <LoaderCircle className="spin" size={13} />
-                ) : (
-                  <Save size={13} />
-                )}
-                {saveStatus}
-              </span>
-            )}
-            {runMode === 'test' && stopControl ? (
-              <button
-                className="button danger"
-                type="button"
-                disabled={stopControl.disabled || cancellationRequested}
-                onClick={() => runId && cancelMutation.mutate(runId)}
-              >
-                <CircleStop size={15} />
-                {cancellationRequested ? '正在停止' : stopControl.label}
-              </button>
-            ) : (
-              <button
-                className="button"
-                type="button"
-                disabled={!draft || isRunning || testMutation.isPending}
-                title="会自动编译成 DSL 并保存后再测试"
-                onClick={() => testMutation.mutate()}
-              >
-                <CirclePlay size={15} />
-                测试
-              </button>
-            )}
-            {runMode === 'live' && stopControl ? (
-              <button
-                className="button danger"
-                type="button"
-                disabled={stopControl.disabled || cancellationRequested}
-                onClick={() => runId && cancelMutation.mutate(runId)}
-              >
-                <CircleStop size={15} />
-                {cancellationRequested ? '正在停止' : stopControl.label}
-              </button>
-            ) : (
-              <button
-                className="button"
-                type="button"
-                disabled={!latestPlan || isRunning || liveRunMutation.isPending}
-                onClick={() => {
-                  if (!latestPlan) return
-                  const writes = latestPlan.nodes.some((node) => {
-                    if (node.kind !== 'cf-call') return false
-                    const capability = ([...(data?.cfs ?? []), ...candidateCfs] as any[]).find(
-                      (cf: any) =>
-                        cf.cfId === node.cfRef.cfId &&
-                        `${cf.revision ?? cf.draft?.revision}.0.0` === node.cfRef.version,
-                    )
-                    return (
-                      (capability as any)?.effects?.some(
-                        (effect: any) => effect.type === 'file-write',
-                      ) ||
-                      (capability as any)?.draft?.effects?.some(
-                        (effect: any) => effect.type === 'file-write',
-                      )
-                    )
-                  })
-                  if (
-                    writes &&
-                    !window.confirm(
-                      '这条流程会修改工作区内的文件。修改范围：用户工作区。继续运行吗？',
-                    )
-                  )
-                    return
-                  liveRunMutation.mutate(latestPlan)
-                }}
-              >
-                <CirclePlay size={15} />
-                运行已发布版本
-              </button>
-            )}
-            <button
-              className="button publish"
-              type="button"
-              disabled={!draft || testState !== 'passed' || publishMutation.isPending}
-              onClick={() =>
-                window.confirm('发布后，当前流程会被锁定，不能再修改。确定发布吗？') &&
-                publishMutation.mutate()
-              }
-            >
-              <Upload size={15} />
-              发布
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              title={rightCollapsed ? '展开详情' : '收起详情'}
-              onClick={() => setRightCollapsed((value) => !value)}
-            >
-              {rightCollapsed ? <PanelRightOpen size={16} /> : <PanelRightClose size={16} />}
-            </button>
-          </div>
-        </header>
+
+      <div className="notice-stack">
         {notice && (
           <div className={`operation-notice ${notice.tone}`} role="status">
             <span className="status-lamp" />
@@ -1015,9 +946,18 @@ export function App() {
               <strong>{notice.title}</strong>
               <p>{notice.detail}</p>
             </div>
-            <button type="button" aria-label="关闭通知" onClick={() => setNotice(null)}>
-              ×
+            <button type="button" onClick={() => setNotice(null)} aria-label="关闭提示">
+              <X size={14} />
             </button>
+          </div>
+        )}
+        {draft && workspaceStatus.isError && (
+          <div className="workspace-unavailable-notice" role="alert">
+            <span className="status-lamp" />
+            <div>
+              <strong>工作目录当前不可用</strong>
+              <p>请恢复原路径及读写权限。草稿仍可编辑保存，但助手、测试、发布和运行已暂停。</p>
+            </div>
           </div>
         )}
         {runMode === 'live' &&
@@ -1031,7 +971,7 @@ export function App() {
               </div>
               <div>
                 <button
-                  className="button publish"
+                  className="button signal"
                   type="button"
                   disabled={approvalMutation.isPending}
                   onClick={() => approvalMutation.mutate('approved')}
@@ -1049,101 +989,64 @@ export function App() {
               </div>
             </div>
           )}
-        <div className={`workspace-body${draft ? ' has-canvas' : ''}`}>
-          {view === 'chat' && (
-            <section className="conversation-view">
-              <div className="conversation-scroll">
-                {!messages.length && (
-                  <div className="conversation-intro">
-                    <div className="signal-emblem">
-                      <Split size={24} />
-                    </div>
-                    <span className="view-kicker">从一句话开始</span>
-                    <h2>先说你想完成什么</h2>
-                    <p>
-                      本机助手会把目标拆成可调整的步骤。你在画布上改好后，再检查、测试，最后发布。
-                    </p>
-                  </div>
-                )}
-                <div className="messages">
-                  {messages.map((message) => (
-                    <article className={`message is-${message.role}`} key={message.id}>
-                      <span className="message-avatar">
-                        {message.role === 'user' ? '你' : 'CF'}
-                      </span>
-                      <div>
-                        <strong>{message.role === 'user' ? '目标' : '助手'}</strong>
-                        <p>{message.body}</p>
-                        {message.meta && <small>{message.meta}</small>}
-                      </div>
-                    </article>
-                  ))}
-                  {proposalMutation.isPending && (
-                    <article className="message is-assistant">
-                      <span className="message-avatar">CF</span>
-                      <div>
-                        <strong>助手</strong>
-                        <p className="thinking">
-                          <LoaderCircle className="spin" size={14} />
-                          正在根据你的目标挑选步骤…
-                        </p>
-                      </div>
-                    </article>
-                  )}
-                </div>
-              </div>
-              <form className="goal-composer" onSubmit={submitGoal}>
-                <textarea
-                  value={goal}
-                  onChange={(event) => setGoal(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault()
-                      event.currentTarget.form?.requestSubmit()
-                    }
-                  }}
-                  placeholder="例如：审核代码变更，运行测试，整理风险，并在合并前请人确认"
-                  aria-label="你想完成的目标"
-                />
-                <div className="composer-footer">
-                  <label
-                    className={`runtime-select is-${selectedRuntime ? runtimeStatus(selectedRuntime) : 'checking'}`}
-                  >
-                    <span className="status-lamp" />
-                    <select
-                      value={runtimeId}
-                      onChange={(event) => setRuntimeId(event.target.value)}
-                    >
-                      {runtimes.map((runtime) => (
-                        <option
-                          key={runtime.id}
-                          value={runtime.id}
-                          disabled={runtimeStatus(runtime) !== 'available'}
-                        >
-                          {runtime.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <span>
-                    {selectedRuntime?.health?.status === 'available'
-                      ? `${selectedRuntime.name} 可以使用`
-                      : '请选择一个可用的助手'}
-                  </span>
-                  <button
-                    className="send-button"
-                    type="submit"
-                    disabled={!goal.trim() || proposalMutation.isPending}
-                    aria-label="根据目标生成流程"
-                  >
-                    <Send size={16} />
-                  </button>
-                </div>
-              </form>
-            </section>
-          )}
-          {draft && (
-            <section className={`canvas-view${view === 'canvas' ? '' : ' is-idle'}`}>
+      </div>
+
+      <div
+        className={`workbench${leftCollapsed ? ' left-collapsed' : ''}${rightCollapsed ? ' right-collapsed' : ''}${draft ? '' : ' is-empty'}`}
+      >
+        {draft && (
+          <aside className="detail-panel" aria-label="详情">
+            {leftCollapsed ? (
+              <button
+                className="panel-rail"
+                type="button"
+                onClick={() => setLeftCollapsed(false)}
+                aria-label="展开详情"
+                title="展开详情"
+              >
+                <span>详情</span>
+              </button>
+            ) : (
+              <DetailPanel
+                draft={draft}
+                selectedNodeId={selectedNodeId}
+                selectedEdgeId={selectedEdgeId}
+                preview={preview}
+                cfs={data?.cfs ?? []}
+                candidateCfs={candidateCfs}
+                runtimes={runtimes}
+                workspaceAvailable={workspaceAvailable}
+                onDraftChange={updateDraft}
+                onCandidateCfChange={updateCandidateCf}
+                onSelectNode={setSelectedNodeId}
+                onSelectEdge={setSelectedEdgeId}
+                onOpenCheck={openCheck}
+              />
+            )}
+          </aside>
+        )}
+
+        <main className="center-column">
+          {!draft ? (
+            !newWorkspaceRoot ? (
+              <DirectoryPicker onConfirm={setNewWorkspaceRoot} />
+            ) : (
+              <GoalComposer
+                messages={conversation}
+                isPending={proposalMutation.isPending}
+                goal={goal}
+                attachments={skillAttachments}
+                runtimes={runtimes}
+                runtimeId={runtimeId}
+                canSubmit={Boolean(goal.trim() && newWorkspaceRoot)}
+                onGoalChange={setGoal}
+                onAttachmentsChange={setSkillAttachments}
+                onRuntimeChange={setRuntimeId}
+                onSubmit={submitGoal}
+              />
+            )
+          ) : (
+            <>
               <div className="canvas-toolbar">
                 <button
                   type="button"
@@ -1159,24 +1062,24 @@ export function App() {
                   className="button"
                   type="button"
                   onClick={addCapabilityNode}
-                  title="添加空能力节点"
+                  title="添加一个空步骤"
                 >
                   <Workflow size={15} />
                   能力
                 </button>
                 <span className="toolbar-divider" />
                 <button
-                  className="button"
                   type="button"
                   onClick={() =>
                     addNode({ id: uniqueId('approval'), kind: 'approval', policyRef: 'manual' })
                   }
+                  className="button is-icon"
+                  title="添加审批步骤"
+                  aria-label="添加审批步骤"
                 >
                   <ShieldCheck size={15} />
-                  审批
                 </button>
                 <button
-                  className="button"
                   type="button"
                   onClick={() =>
                     addNode({
@@ -1184,36 +1087,117 @@ export function App() {
                       kind: 'branch',
                       cond: { $get: 'route' },
                       cases: ['case-1', 'case-2'],
-                      caseConditions: {
-                        'case-1': '',
-                        'case-2': '',
-                      },
+                      caseConditions: { 'case-1': '', 'case-2': '' },
                     })
                   }
+                  className="button is-icon"
+                  title="添加分支步骤"
+                  aria-label="添加分支步骤"
                 >
                   <GitBranch size={15} />
-                  分支
                 </button>
                 <button
-                  className="button"
                   type="button"
                   onClick={() => addNode({ id: uniqueId('join'), kind: 'join', mode: 'all' })}
+                  className="button is-icon"
+                  title="添加汇合步骤"
+                  aria-label="添加汇合步骤"
                 >
                   <GitMerge size={15} />
-                  汇合
                 </button>
                 <button
-                  className="button"
                   type="button"
                   onClick={() =>
                     addNode({ id: uniqueId('output'), kind: 'output', outputId: 'result' })
                   }
+                  className="button is-icon"
+                  title="添加输出步骤"
+                  aria-label="添加输出步骤"
                 >
                   <Plus size={15} />
-                  输出
                 </button>
-                <span className="canvas-help">从圆点拖出连线；选中后可改接，或按 Delete 删除</span>
+                <span className="toolbar-spacer" />
+                <button
+                  className={`button${drawerTab === 'log' ? ' is-active' : ''}`}
+                  type="button"
+                  onClick={() => setDrawerTab(drawerTab === 'log' ? null : 'log')}
+                  title="按步骤查看这次运行发生了什么"
+                >
+                  <ScrollText size={15} />
+                  日志
+                </button>
+                <button
+                  className={`button${signal === 'check' && drawerTab !== 'check' ? ' signal' : ''}${
+                    drawerTab === 'check' ? ' is-active' : ''
+                  }`}
+                  type="button"
+                  onClick={openCheck}
+                >
+                  <ListChecks size={15} />
+                  检查
+                </button>
+                <span className="toolbar-divider" />
+                {runMode === 'test' && stopControl ? (
+                  <button
+                    className="button danger"
+                    type="button"
+                    disabled={stopControl.disabled || cancellationRequested}
+                    onClick={() => runId && cancelMutation.mutate(runId)}
+                  >
+                    <CircleStop size={15} />
+                    {cancellationRequested ? '正在停止' : stopControl.label}
+                  </button>
+                ) : (
+                  <button
+                    className={`button${signal === 'test' ? ' signal' : ''}`}
+                    type="button"
+                    disabled={!workspaceAvailable || isRunning || testMutation.isPending}
+                    title="会先检查并保存流程，再试运行一次"
+                    onClick={() => testMutation.mutate()}
+                  >
+                    <CirclePlay size={15} />
+                    测试
+                  </button>
+                )}
+                {runMode === 'live' && stopControl ? (
+                  <button
+                    className="button danger"
+                    type="button"
+                    disabled={stopControl.disabled || cancellationRequested}
+                    onClick={() => runId && cancelMutation.mutate(runId)}
+                  >
+                    <CircleStop size={15} />
+                    {cancellationRequested ? '正在停止' : stopControl.label}
+                  </button>
+                ) : (
+                  <button
+                    className={`button${signal === 'run' ? ' signal' : ''}`}
+                    type="button"
+                    disabled={
+                      !latestPlan || !workspaceAvailable || isRunning || liveRunMutation.isPending
+                    }
+                    onClick={runLive}
+                  >
+                    <CirclePlay size={15} />
+                    运行
+                  </button>
+                )}
+                <button
+                  className={`button publish${signal === 'publish' ? ' signal' : ''}`}
+                  type="button"
+                  disabled={
+                    !workspaceAvailable || testState !== 'passed' || publishMutation.isPending
+                  }
+                  onClick={() =>
+                    window.confirm('发布后，当前流程会被锁定，不能再修改。确定发布吗？') &&
+                    publishMutation.mutate()
+                  }
+                >
+                  <Upload size={15} />
+                  发布
+                </button>
               </div>
+
               <div className="canvas-workspace">
                 <CapabilityLibrary
                   published={data?.cfs ?? []}
@@ -1238,6 +1222,8 @@ export function App() {
                   }
                 />
                 <FlowCanvas
+                  key={draft.flowId}
+                  compact={Boolean(drawerTab)}
                   draft={draft}
                   positions={positions}
                   cfs={data?.cfs ?? []}
@@ -1252,87 +1238,130 @@ export function App() {
                   onSelectEdge={setSelectedEdgeId}
                 />
               </div>
-            </section>
+
+              {drawerTab && (
+                <BottomDrawer
+                  tab={drawerTab}
+                  onTabChange={(tab) => {
+                    setDrawerTab(tab)
+                    if (tab === 'check' && !preview && !compileMutation.isPending)
+                      compileMutation.mutate()
+                  }}
+                  onClose={() => setDrawerTab(null)}
+                >
+                  {drawerTab === 'log' ? (
+                    <RunLogPanel
+                      draft={draft}
+                      runDetail={viewedRun}
+                      runs={data?.runs ?? []}
+                      selectedRunId={inspectedRunId}
+                      cfs={data?.cfs ?? []}
+                      candidateCfs={candidateCfs}
+                      onSelectRun={setInspectedRunId}
+                      onSelectNode={(id) => {
+                        setSelectedEdgeId(null)
+                        setSelectedNodeId(id)
+                        setLeftCollapsed(false)
+                      }}
+                    />
+                  ) : (
+                    <CheckPanel
+                      draft={draft}
+                      preview={preview}
+                      error={previewError}
+                      isPending={compileMutation.isPending}
+                      runtimes={runtimes}
+                      runtimeId={compileRuntimeId}
+                      cfs={data?.cfs ?? []}
+                      candidateCfs={candidateCfs}
+                      onRuntimeChange={(id) => {
+                        setCompileRuntimeId(id)
+                        setPreview(null)
+                        setPreviewError(null)
+                      }}
+                      onCompile={() => compileMutation.mutate()}
+                    />
+                  )}
+                </BottomDrawer>
+              )}
+            </>
           )}
-          {view === 'compiler' && draft && (
-            <CompilerPreviewView
-              draft={draft}
-              preview={preview}
-              error={previewError}
-              isPending={compileMutation.isPending}
-              runtimes={data?.runtimes ?? []}
-              runtimeId={compileRuntimeId}
-              onRuntimeChange={(id) => {
-                setCompileRuntimeId(id)
-                setPreview(null)
-                setPreviewError(null)
-              }}
-              onCompile={() => compileMutation.mutate()}
-            />
-          )}
-        </div>
-      </main>
-      <aside className={`inspector${rightCollapsed ? ' is-collapsed' : ''}`} aria-label="详情">
-        {rightCollapsed ? (
-          <button
-            className="inspector-rail-button"
-            type="button"
-            onClick={() => setRightCollapsed(false)}
-            title="展开详情"
-          >
-            <ChevronLeft size={16} />
-            <span>详情</span>
-          </button>
-        ) : (
-          <>
-            <button
-              className="inspector-collapse"
-              type="button"
-              title="收起详情"
-              onClick={() => setRightCollapsed(true)}
-            >
-              <ChevronRight size={16} />
-            </button>
-            <Inspector
-              draft={draft}
-              selectedNodeId={selectedNodeId}
-              selectedEdgeId={selectedEdgeId}
-              runs={data?.runs ?? []}
-              runDetail={viewedRun}
-              selectedRunId={inspectedRunId}
-              preview={preview}
-              cfs={data?.cfs ?? []}
-              candidateCfs={candidateCfs}
-              runtimes={data?.runtimes ?? []}
-              tab={inspectorTab}
-              agentMessages={agentMessages}
-              runtimeId={runtimeId}
-              onDraftChange={updateDraft}
-              onCandidateCfChange={updateCandidateCf}
-              onTabChange={setInspectorTab}
-              onAgentMessagesChange={setAgentMessages}
-              onApplyAgentAction={applyAgentAction}
-              onSelectNode={setSelectedNodeId}
-              onSelectEdge={setSelectedEdgeId}
-              onSelectRun={(id) => {
-                setInspectedRunId(id)
-                setInspectorTab('activity')
-              }}
-              onOpenCompiler={openCompiler}
-            />
-          </>
+        </main>
+
+        {draft && (
+          <aside className="agent-panel" aria-label="AI 助手">
+            {rightCollapsed ? (
+              <button
+                className="panel-rail"
+                type="button"
+                onClick={() => setRightCollapsed(false)}
+                aria-label="展开助手"
+                title="展开助手"
+              >
+                <span>AI 助手</span>
+              </button>
+            ) : (
+              <FlowAgentChat
+                draft={draft}
+                cfDrafts={candidateCfs}
+                runDetail={viewedRun}
+                messages={conversation}
+                runtimes={runtimes}
+                runtimeId={runtimeId}
+                selectedNodeId={selectedNodeId}
+                selectedEdgeId={selectedEdgeId}
+                checkError={previewError}
+                attachments={skillAttachments}
+                undoMessageId={
+                  agentUndo &&
+                  agentUndo.appliedFlowId === draft.flowId &&
+                  agentUndo.appliedRevision === draft.revision
+                    ? agentUndo.messageId
+                    : undefined
+                }
+                disabled={!workspaceAvailable}
+                onMessagesChange={setConversation}
+                onAttachmentsChange={setSkillAttachments}
+                onRevision={(result) => {
+                  updateDraft(result.flowDraft)
+                  setCandidateCfs(result.cfDrafts)
+                  setAgentUndo({
+                    flowDraft: result.previousDraft,
+                    cfDrafts: result.previousCfDrafts,
+                    appliedFlowId: result.flowDraft.flowId,
+                    appliedRevision: result.flowDraft.revision,
+                    messageId: result.messageId,
+                  })
+                  setNotice({
+                    tone: 'success',
+                    title: '已按你的要求更新流程',
+                    detail: `当前画布已切换到第 ${result.flowDraft.revision} 稿，可以撤销这次助手修改。`,
+                  })
+                  void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+                }}
+                onUndoRevision={undoAgentRevision}
+              />
+            )}
+          </aside>
         )}
-      </aside>
+      </div>
+
       {settingsOpen && data && (
-        <div className="settings-layer">
+        <div className="settings-layer" role="dialog" aria-modal="true" aria-label="工作台设置">
           <SettingsView
             settings={data.settings}
-            runtimes={data.runtimes}
+            runtimes={runtimes}
+            discoveryWarnings={data.runtimeDiscoveryWarnings ?? []}
             isSaving={settingsMutation.isPending}
+            isDiscovering={runtimeDiscoveryMutation.isPending}
             testingRuntimeId={testingRuntimeId}
-            onSave={(settings) => settingsMutation.mutate(settings)}
-            onTestRuntime={(id) => runtimeMutation.mutate(id)}
             onClose={() => setSettingsOpen(false)}
+            onSave={(next) => settingsMutation.mutate(next)}
+            onTestRuntime={(id) => {
+              setTestingRuntimeId(id)
+              runtimeMutation.mutate(id)
+            }}
+            onDiscoverRuntimes={() => runtimeDiscoveryMutation.mutate()}
           />
         </div>
       )}

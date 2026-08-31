@@ -29,11 +29,32 @@ export function testStateLabel(state: string) {
   )
 }
 
-export function runtimeHealthLabel(runtime: { enabled: boolean; health?: { status?: string } }) {
+export function runtimeHealthLabel(runtime: {
+  enabled: boolean
+  health?: { status?: string; stage?: string }
+}) {
   if (!runtime.enabled || runtime.health?.status === 'disabled') return '已停用'
-  if (runtime.health?.status === 'available') return '可用'
+  if (runtime.health?.status === 'available') {
+    if (runtime.health.stage === 'protocol-ready') return '已连接'
+    if (runtime.health.stage === 'adapter-ready') return '已就绪'
+    return '可用'
+  }
   if (runtime.health?.status === 'checking') return '正在检查'
-  return '未安装或未登录'
+  if (runtime.health?.stage === 'installed') return '已安装，但连不上'
+  return '本机没有找到'
+}
+
+export function runtimeDiscoveryLabel(source?: string) {
+  return (
+    {
+      builtin: '内置支持',
+      'path-acp': '系统路径中发现',
+      'package-manifest': '安装包自带配置',
+      'user-manifest': '你的个人配置',
+      'project-manifest': '项目配置',
+      manual: '手动配置',
+    }[source ?? ''] ?? '本机配置'
+  )
 }
 
 export function runStatusLabel(status: string) {
@@ -45,7 +66,6 @@ export function runStatusLabel(status: string) {
       failed: '未完成',
       cancelled: '已取消',
       'needs-reconciliation': '待处理',
-      awaiting_approval: '等待审批',
       'waiting-approval': '等待审批',
     }[status] ?? status
   )
