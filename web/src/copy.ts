@@ -57,6 +57,28 @@ export function runtimeDiscoveryLabel(source?: string) {
   )
 }
 
+export function runtimeHealthErrorSummary(error?: string) {
+  if (!error) return '连接握手没有完成，请展开技术详情查看原因。'
+  if (/BUNDLED_.*NOT_FOUND/.test(error)) return '随 CFlow 安装的助手组件不完整，请重新安装 CFlow。'
+  if (/NOT_FOUND|ENOENT/.test(error)) return '没有找到可启动的程序，请确认助手已经正确安装。'
+  if (/HANDSHAKE_TIMEOUT/.test(error)) return '助手已经启动，但没有在限定时间内回应。'
+  if (/HEALTHCHECK_TIMEOUT/.test(error)) return '助手启动检查超时，请稍后重试。'
+  if (/EXITED/.test(error)) return '助手启动后立即退出，可能需要先完成登录或本机配置。'
+  return '助手没有完成连接握手，请查看技术详情。'
+}
+
+export function runtimeLaunchDetail(runtime: {
+  command?: string
+  args?: string[]
+  health?: { error?: string; version?: string }
+}) {
+  const failed = runtime.health?.error?.match(/\[launch=([^\]]+)\]/)?.[1]
+  if (failed) return failed
+  const ready = runtime.health?.version?.match(/(?:^| · )via (.+)$/)?.[1]
+  if (ready) return ready
+  return `尚未解析 · ${[runtime.command, ...(runtime.args ?? [])].filter(Boolean).join(' ')}`
+}
+
 export function runStatusLabel(status: string) {
   return (
     {
@@ -72,7 +94,7 @@ export function runStatusLabel(status: string) {
 }
 
 export function runtimeBlurb(runtime: { id: string; description?: string }) {
-  if (runtime.id === 'codex') return '用本机已登录的 Codex 来执行步骤。默认只读，不会改你的文件。'
-  if (runtime.id === 'claude-code') return '用本机已登录的 Claude Code 来执行步骤。'
+  if (runtime.id === 'codex') return '用 CFlow 随附的 Codex 来执行步骤。默认只读，不会改你的文件。'
+  if (runtime.id === 'claude-code') return '用 CFlow 随附的 Claude Code 来执行步骤。'
   return runtime.description || '使用本机当前配置'
 }

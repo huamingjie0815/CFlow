@@ -1,9 +1,16 @@
 import { AlertTriangle, CheckCircle2, ChevronLeft, RefreshCw, Settings2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { runtimeBlurb, runtimeDiscoveryLabel, runtimeHealthLabel } from '../copy'
+import {
+  runtimeBlurb,
+  runtimeDiscoveryLabel,
+  runtimeHealthErrorSummary,
+  runtimeHealthLabel,
+  runtimeLaunchDetail,
+} from '../copy'
 import type { RuntimeWithHealth, WorkspaceSettings } from '../types'
 
 type SettingsViewProps = {
+  workspaceRoot: string
   settings: WorkspaceSettings
   runtimes: RuntimeWithHealth[]
   isSaving: boolean
@@ -34,7 +41,7 @@ export function SettingsView(props: SettingsViewProps) {
         </div>
         <div>
           <h2 id="settings-title">工作台设置</h2>
-          <p>选择默认助手，以及测试最多等多久。每条流程会单独锁定自己的工作目录。</p>
+          <p>查看当前工作区，并设置默认助手和测试最长等待时间。</p>
         </div>
         <button className="button" type="button" onClick={props.onClose}>
           <ChevronLeft size={15} />
@@ -42,6 +49,16 @@ export function SettingsView(props: SettingsViewProps) {
         </button>
       </header>
       <div className="settings-scroll">
+        <section className="settings-section-main">
+          <div className="settings-section-title">
+            <h3>当前工作区</h3>
+            <p>CFlow 只加载这个启动目录中的流程、设置、运行记录和附件。</p>
+          </div>
+          <label className="field workspace-field">
+            <span>启动目录</span>
+            <input className="workspace-path" value={props.workspaceRoot} readOnly />
+          </label>
+        </section>
         <section className="settings-section-main">
           <div className="settings-section-title">
             <h3>默认助手</h3>
@@ -129,7 +146,7 @@ export function SettingsView(props: SettingsViewProps) {
             {props.runtimes.map((runtime) => (
               <article key={runtime.id}>
                 <span className={`status-lamp is-${runtime.health?.status ?? 'checking'}`} />
-                <div>
+                <div className="runtime-info">
                   <strong>{runtime.name}</strong>
                   <p>{runtimeBlurb(runtime)}</p>
                   <small
@@ -139,6 +156,26 @@ export function SettingsView(props: SettingsViewProps) {
                       ? '登录状态会在真正使用时确认'
                       : '已确认可用'}
                   </small>
+                  {runtime.health?.status === 'unavailable' && (
+                    <>
+                      <p className="runtime-error-summary" role="alert">
+                        {runtimeHealthErrorSummary(runtime.health.error)}
+                      </p>
+                      <details className="runtime-technical-details">
+                        <summary>技术详情</summary>
+                        <dl>
+                          <div>
+                            <dt>启动方式</dt>
+                            <dd>{runtimeLaunchDetail(runtime)}</dd>
+                          </div>
+                          <div>
+                            <dt>原始错误</dt>
+                            <dd>{runtime.health.error ?? '未返回错误信息'}</dd>
+                          </div>
+                        </dl>
+                      </details>
+                    </>
+                  )}
                 </div>
                 <span className="runtime-health">{runtimeHealthLabel(runtime)}</span>
                 <button

@@ -20,13 +20,13 @@ import { BottomDrawer } from './components/BottomDrawer'
 import { CapabilityLibrary } from './components/CapabilityLibrary'
 import { CheckPanel } from './components/CheckPanel'
 import { DetailPanel } from './components/DetailPanel'
-import { DirectoryPicker } from './components/DirectoryPicker'
 import { FlowAgentChat } from './components/FlowAgentChat'
 import { FlowCanvas } from './components/FlowCanvas'
 import { GoalComposer } from './components/GoalComposer'
 import { RunLogPanel } from './components/RunLogPanel'
 import { SettingsView } from './components/SettingsView'
 import { TopBar } from './components/TopBar'
+import { runtimeHealthErrorSummary } from './copy'
 import type { FlowListRow } from './flow-list'
 import { deriveNodeRunStates, type NodeRunState } from './run'
 import {
@@ -49,8 +49,8 @@ import type {
   BootstrapData,
 } from './types'
 
-const workspaceKey = 'cf-platform-react-workbench-v2'
-const legacyWorkspaceKeys = ['cf-platform-react-workbench-v1']
+const workspaceKeyPrefix = 'cf-platform-react-workbench-v3:'
+const legacyWorkspaceKeys = ['cf-platform-react-workbench-v1', 'cf-platform-react-workbench-v2']
 
 type StoredWorkspace = {
   version?: number
@@ -74,10 +74,14 @@ type AgentUndo = {
   messageId: string
 }
 
-function readStoredWorkspace(): StoredWorkspace {
+function workspaceStorageKey(root: string) {
+  return `${workspaceKeyPrefix}${root}`
+}
+
+function readStoredWorkspace(root: string): StoredWorkspace {
   // v1 stored the goal transcript and the assistant transcript as two arrays
   // with no timestamps, so they cannot be interleaved faithfully. Rather than
-  // invent an order, v2 starts clean; drafts are autosaved server-side.
+  // invent an order, the workspace-scoped cache starts clean; drafts are autosaved server-side.
   for (const key of legacyWorkspaceKeys) {
     try {
       localStorage.removeItem(key)
@@ -86,16 +90,14 @@ function readStoredWorkspace(): StoredWorkspace {
     }
   }
   try {
-    const value = localStorage.getItem(workspaceKey)
+    const value = localStorage.getItem(workspaceStorageKey(root))
     if (!value) return {}
     const parsed = JSON.parse(value) as StoredWorkspace
-    return parsed?.version === 2 ? parsed : {}
+    return parsed?.version === 3 ? parsed : {}
   } catch {
     return {}
   }
 }
-
-const initialStoredWorkspace = readStoredWorkspace()
 
 function planToDraft(plan: FlowPlan): FlowDraft {
   const idByIndex = new Map(plan.nodes.map((node) => [node.index, node.id]))
@@ -130,28 +132,24 @@ function uniqueId(prefix: string) {
 
 export function App() {
   const queryClient = useQueryClient()
-  const stored = useRef(initialStoredWorkspace).current
-  const supportedStoredDraft = stored.draft?.workspaceRoot ? stored.draft : undefined
-  const [draft, setDraft] = useState<FlowDraft | null>(supportedStoredDraft ?? null)
-  const [positions, setPositions] = useState<Record<string, CanvasPosition>>(stored.positions ?? {})
-  const [candidateCfs, setCandidateCfs] = useState<CFDraft[]>(stored.candidateCfs ?? [])
+  const [draft, setDraft] = useState<FlowDraft | null>(null)
+  const [positions, setPositions] = useState<Record<string, CanvasPosition>>({})
+  const [candidateCfs, setCandidateCfs] = useState<CFDraft[]>([])
   // One transcript: the goal turn is simply the first turn of the same chat.
-  const [conversation, setConversation] = useState<AgentChatMessage[]>(stored.conversation ?? [])
+  const [conversation, setConversation] = useState<AgentChatMessage[]>([])
   const [agentUndo, setAgentUndo] = useState<AgentUndo | null>(null)
-  const [drawerTab, setDrawerTab] = useState<DrawerTab | null>(stored.drawerTab ?? null)
+  const [drawerTab, setDrawerTab] = useState<DrawerTab | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
-  const [leftCollapsed, setLeftCollapsed] = useState(stored.leftCollapsed ?? false)
-  const [rightCollapsed, setRightCollapsed] = useState(stored.rightCollapsed ?? false)
+  const [leftCollapsed, setLeftCollapsed] = useState(false)
+  const [rightCollapsed, setRightCollapsed] = useState(false)
   const [libraryOpen, setLibraryOpen] = useState(false)
-  const [dirty, setDirty] = useState(Boolean(stored.draft))
+  const [dirty, setDirty] = useState(false)
   const [testState, setTestState] = useState<TestState>('idle')
-  const [runId, setRunId] = useState<string | null>(stored.runId ?? null)
-  const [runMode, setRunMode] = useState<'test' | 'live' | null>(stored.runMode ?? null)
-  const [inspectedRunId, setInspectedRunId] = useState<string | null>(
-    stored.inspectedRunId ?? stored.runId ?? null,
-  )
+  const [runId, setRunId] = useState<string | null>(null)
+  const [runMode, setRunMode] = useState<'test' | 'live' | null>(null)
+  const [inspectedRunId, setInspectedRunId] = useState<string | null>(null)
   const [preview, setPreview] = useState<CompilationPreview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [notice, setNotice] = useState<{
@@ -160,27 +158,39 @@ export function App() {
     detail: string
   } | null>(null)
   const [goal, setGoal] = useState('')
-  const [newWorkspaceRoot, setNewWorkspaceRoot] = useState<string | null>(
-    supportedStoredDraft?.workspaceRoot ?? null,
-  )
   const [skillAttachments, setSkillAttachments] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
   const [testingRuntimeId, setTestingRuntimeId] = useState<string | null>(null)
+  const hydratedWorkspaceRef = useRef<string | null>(null)
+  const [workspaceHydrated, setWorkspaceHydrated] = useState(false)
 
   const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap })
   const data = bootstrap.data
-  const workspaceStatus = useQuery({
-    queryKey: ['workspace-status', draft?.workspaceRoot],
-    queryFn: () => api.validateDirectory(draft!.workspaceRoot),
-    enabled: Boolean(draft?.workspaceRoot),
-    retry: false,
-    refetchInterval: 10_000,
-  })
-  const workspaceAvailable = Boolean(draft?.workspaceRoot) && workspaceStatus.isSuccess
+  const workspaceAvailable = Boolean(data?.workspace.root)
   const handledRunStateRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    const root = data?.workspace.root
+    if (!root || hydratedWorkspaceRef.current === root) return
+    const stored = readStoredWorkspace(root)
+    const storedDraft = stored.draft ? { ...stored.draft, workspaceRoot: root } : null
+    setDraft(storedDraft)
+    setPositions(stored.positions ?? {})
+    setCandidateCfs(stored.candidateCfs ?? [])
+    setConversation(stored.conversation ?? [])
+    setRunId(stored.runId ?? null)
+    setRunMode(stored.runMode ?? null)
+    setInspectedRunId(stored.inspectedRunId ?? stored.runId ?? null)
+    setDrawerTab(stored.drawerTab ?? null)
+    setLeftCollapsed(stored.leftCollapsed ?? false)
+    setRightCollapsed(stored.rightCollapsed ?? false)
+    setDirty(Boolean(storedDraft))
+    hydratedWorkspaceRef.current = root
+    setWorkspaceHydrated(true)
+  }, [data?.workspace.root])
 
   useEffect(() => {
     if (data?.settings.defaultRuntimeId && !runtimeId) setRuntimeId(data.settings.defaultRuntimeId)
@@ -211,11 +221,13 @@ export function App() {
   }, [data?.cfs, candidateCfs.length])
 
   useEffect(() => {
+    const root = data?.workspace.root
+    if (!root || !workspaceHydrated || hydratedWorkspaceRef.current !== root) return
     try {
       localStorage.setItem(
-        workspaceKey,
+        workspaceStorageKey(root),
         JSON.stringify({
-          version: 2,
+          version: 3,
           draft,
           positions,
           candidateCfs,
@@ -242,6 +254,8 @@ export function App() {
     rightCollapsed,
     runId,
     runMode,
+    data?.workspace.root,
+    workspaceHydrated,
   ])
 
   useEffect(() => {
@@ -274,7 +288,6 @@ export function App() {
     setConversation([])
     setAgentUndo(null)
     setGoal('')
-    setNewWorkspaceRoot(null)
     setSkillAttachments([])
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
@@ -287,7 +300,7 @@ export function App() {
     setPreview(null)
     setPreviewError(null)
     setSettingsOpen(false)
-    localStorage.removeItem(workspaceKey)
+    if (data?.workspace.root) localStorage.removeItem(workspaceStorageKey(data.workspace.root))
   }
 
   const saveMutation = useMutation({
@@ -382,14 +395,12 @@ export function App() {
     mutationFn: ({
       objective,
       runtime,
-      workspaceRoot,
       attachments,
     }: {
       objective: string
       runtime: string
-      workspaceRoot: string
       attachments: File[]
-    }) => api.propose(objective, runtime, workspaceRoot, attachments),
+    }) => api.propose(objective, runtime, attachments),
     onSuccess: (proposal, variables) => {
       if (!proposal.flowDraft) {
         setConversation((current) => [
@@ -403,7 +414,6 @@ export function App() {
         return
       }
       setDraft(proposal.flowDraft)
-      setNewWorkspaceRoot(proposal.flowDraft.workspaceRoot)
       setCandidateCfs(proposal.cfDrafts ?? [])
       setAgentUndo(null)
       setSkillAttachments([])
@@ -614,10 +624,35 @@ export function App() {
   const runtimeMutation = useMutation({
     mutationFn: api.testRuntime,
     onMutate: (id) => setTestingRuntimeId(id),
-    onSettled: () => {
-      setTestingRuntimeId(null)
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    onSuccess: (health, id) => {
+      const runtime = data?.runtimes.find((item) => item.id === id)
+      queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) =>
+        current
+          ? {
+              ...current,
+              runtimes: current.runtimes.map((item) =>
+                item.id === id ? { ...item, health } : item,
+              ),
+            }
+          : current,
+      )
+      setNotice(
+        health?.status === 'available'
+          ? {
+              tone: 'success',
+              title: '连接测试通过',
+              detail: `${runtime?.name ?? '助手'} 已完成连接握手，可以使用。`,
+            }
+          : {
+              tone: 'error',
+              title: '连接测试未通过',
+              detail: runtimeHealthErrorSummary(health?.error),
+            },
+      )
     },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '连接测试失败', detail: readableError(error) }),
+    onSettled: () => setTestingRuntimeId(null),
   })
   const runtimeDiscoveryMutation = useMutation({
     mutationFn: api.discoverRuntimes,
@@ -712,7 +747,6 @@ export function App() {
   const selectDraft = (next: FlowDraft) => {
     setSettingsOpen(false)
     setDraft(structuredClone(next))
-    setNewWorkspaceRoot(next.workspaceRoot)
     setConversation([])
     setAgentUndo(null)
     setCandidateCfs(
@@ -740,7 +774,6 @@ export function App() {
   const selectPlan = (plan: FlowPlan) => {
     setSettingsOpen(false)
     setDraft(planToDraft(plan))
-    setNewWorkspaceRoot(plan.workspaceRoot)
     setConversation([])
     setAgentUndo(null)
     setCandidateCfs([])
@@ -796,7 +829,7 @@ export function App() {
 
   const submitGoal = () => {
     const objective = goal.trim()
-    if (!objective || !newWorkspaceRoot) return
+    if (!objective || !workspaceAvailable) return
     setConversation((current) => [
       ...current,
       { id: uniqueId('message'), role: 'user', body: objective },
@@ -805,7 +838,6 @@ export function App() {
     proposalMutation.mutate({
       objective,
       runtime: runtimeId,
-      workspaceRoot: newWorkspaceRoot,
       attachments: skillAttachments,
     })
   }
@@ -836,7 +868,7 @@ export function App() {
     })
   }
 
-  if (bootstrap.isPending && !data)
+  if ((bootstrap.isPending && !data) || (data && !workspaceHydrated))
     return (
       <div className="boot-screen">
         <span className="brand-mark">CF</span>
@@ -951,15 +983,6 @@ export function App() {
             </button>
           </div>
         )}
-        {draft && workspaceStatus.isError && (
-          <div className="workspace-unavailable-notice" role="alert">
-            <span className="status-lamp" />
-            <div>
-              <strong>工作目录当前不可用</strong>
-              <p>请恢复原路径及读写权限。草稿仍可编辑保存，但助手、测试、发布和运行已暂停。</p>
-            </div>
-          </div>
-        )}
         {runMode === 'live' &&
           liveRunQuery.data?.run.status === 'waiting-approval' &&
           waitingApprovalNode != null && (
@@ -1015,7 +1038,6 @@ export function App() {
                 cfs={data?.cfs ?? []}
                 candidateCfs={candidateCfs}
                 runtimes={runtimes}
-                workspaceAvailable={workspaceAvailable}
                 onDraftChange={updateDraft}
                 onCandidateCfChange={updateCandidateCf}
                 onSelectNode={setSelectedNodeId}
@@ -1028,23 +1050,19 @@ export function App() {
 
         <main className="center-column">
           {!draft ? (
-            !newWorkspaceRoot ? (
-              <DirectoryPicker onConfirm={setNewWorkspaceRoot} />
-            ) : (
-              <GoalComposer
-                messages={conversation}
-                isPending={proposalMutation.isPending}
-                goal={goal}
-                attachments={skillAttachments}
-                runtimes={runtimes}
-                runtimeId={runtimeId}
-                canSubmit={Boolean(goal.trim() && newWorkspaceRoot)}
-                onGoalChange={setGoal}
-                onAttachmentsChange={setSkillAttachments}
-                onRuntimeChange={setRuntimeId}
-                onSubmit={submitGoal}
-              />
-            )
+            <GoalComposer
+              messages={conversation}
+              isPending={proposalMutation.isPending}
+              goal={goal}
+              attachments={skillAttachments}
+              runtimes={runtimes}
+              runtimeId={runtimeId}
+              canSubmit={Boolean(goal.trim() && workspaceAvailable)}
+              onGoalChange={setGoal}
+              onAttachmentsChange={setSkillAttachments}
+              onRuntimeChange={setRuntimeId}
+              onSubmit={submitGoal}
+            />
           ) : (
             <>
               <div className="canvas-toolbar">
@@ -1349,6 +1367,7 @@ export function App() {
       {settingsOpen && data && (
         <div className="settings-layer" role="dialog" aria-modal="true" aria-label="工作台设置">
           <SettingsView
+            workspaceRoot={data.workspace.root}
             settings={data.settings}
             runtimes={runtimes}
             discoveryWarnings={data.runtimeDiscoveryWarnings ?? []}

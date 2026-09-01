@@ -14,3 +14,9 @@ declare module 'better-sqlite3' {
   const Database: { new (file: string): Database }
   export default Database
 }
+
+declare module 'cross-spawn' {
+  import type { ChildProcess, SpawnOptions } from 'node:child_process'
+  const spawn: (command: string, args?: readonly string[], options?: SpawnOptions) => ChildProcess
+  export default spawn
+}

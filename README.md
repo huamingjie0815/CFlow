@@ -4,12 +4,12 @@ CFlow 是一个以 **Flow** 为核心的本机多 Agent 编排工作台。用户
 
 ## 当前设计
 
-CFlow 不以 Project 为一级对象。每个 Flow 固定一个本机工作目录，代码仓库、文件集和外部资源都作为 Flow 的运行时上下文或 Resource Profile 使用。
+CFlow 不以 Project 为一级对象。启动 `cflow` 的当前目录就是工作区；同一工作区可以创建并切换多个 Flow，代码、文件集和外部资源都以该目录作为运行时上下文或 Resource Profile 使用。从其他目录启动时，CFlow 会加载该目录自己的流程和运行数据。
 
 完整工作流为：
 
 ```text
-选择工作目录 → 描述目标/附加 skill → 生成草稿 → 画布编辑
+在目标目录启动 cflow → 描述目标/附加 skill → 生成草稿 → 画布编辑
 → 检查 → 测试 → 发布不可变版本 → 运行 → 查看日志或继续询问助手
 ```
 
@@ -31,7 +31,7 @@ CFlow 的关键约束：
 
 - Flow 是可审阅、可版本化的 DAG；CF 是一个有边界的 Agent 能力，内部不再维护第二套控制流。
 - Agent 可以提出或修订草稿，但不能改变已发布图、审批结果、权限或运行事实。
-- 检查、测试、发布、运行是独立阶段；测试使用临时编译快照，发布会固定 CF、Runtime Profile、资源和工作目录。
+- 检查、测试、发布、运行是独立阶段；测试使用临时编译快照，发布会固定 CF、Runtime Profile、资源和当前工作区。
 - 数据沿连线传递完整 Flow 输入与已激活的上游输出，不维护字段级 Binding。
 - Run Ledger、Job Lease 与 SSE 事件记录执行事实，支持条件分支、共享汇合、审批、重试和取消。
 
@@ -53,6 +53,7 @@ npx @hmj-ai/cflow
 
 ```bash
 npm install -g @hmj-ai/cflow
+cd /path/to/your/workspace
 cflow
 ```
 
@@ -64,19 +65,19 @@ npm run build
 npm start
 ```
 
-打开 `http://127.0.0.1:3000`。默认数据库写入 `data/cf.sqlite`，可通过 `CF_DB=/path/to/file.sqlite` 指定其他位置；开发模式使用 `npm run dev`。
+打开 `http://127.0.0.1:3000`。持久业务数据写入启动目录下的 `.cflow/cflow.sqlite`，流程附件写入 `.cflow/flows/`。CFlow 会维护 `.cflow/.gitignore` 以忽略数据库和附件，同时保留 `.cflow/agents.d` 供项目提交。`CF_DB` 已不再支持，设置后程序会在监听端口前退出，以保证启动目录始终是唯一数据作用域；旧版 `data/cf.sqlite` 不会自动读取、迁移或删除。开发模式使用 `npm run dev`。
 
 服务默认只监听 `127.0.0.1`，因为 Runtime 设置可以启动本机受控进程。只有在已经配置外部认证与网络访问控制时，才应通过显式 `HOST` 改为其他监听地址。
 
 ## Runtime 与设置
 
-工作台内置 Codex 与 Claude Code，并通过声明式 manifest 接入 Grok Build、Pi 等本机 Agent。普通用户只需选择默认 Agent 和工作目录：
+工作台内置 Codex 与 Claude Code，并通过声明式 manifest 接入 Grok Build、Pi 等本机 Agent。普通用户只需在目标目录启动 CFlow 并选择默认 Agent：
 
 - 页面加载与设置页“重新识别”会合并 PATH ACP、npm 包、用户 manifest 和项目 manifest；来源与无效 manifest 警告会明确展示。
 - Codex 与 Claude Code 通过内置 ACP Adapter 执行；Grok Build 与 Pi 是普通项目 manifest。所有命令均使用 argv 数组启动，不拼接 shell 命令字符串。
 - ACP 必须完成真实 `initialize` 握手才标记为可用；CLI 必须通过无副作用的版本探测。认证状态不会用可能计费的模型请求猜测。
 - Runtime 配置每次保存都会生成不可变 Profile 版本；发布 Flow 时会 pin 精确 Profile 版本，Run Ledger 记录实际执行版本。
-- 设置页只暴露默认 Agent、本地工作目录和测试最长等待时间；资源绑定按需放在折叠的高级区域。
+- 设置页只读展示当前工作区，并提供默认 Agent 和测试最长等待时间；资源绑定按需放在折叠的高级区域。
 - Runtime 必须返回符合 CF output contract 的 JSON，否则 Flow fail closed。
 - Flow/CF 草稿会保存到 SQLite；Resource Profile 可在设置中创建、编辑与删除。
 

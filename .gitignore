@@ -5,3 +5,4 @@ data/*.sqlite-shm
 data/*.sqlite-wal
 test-results/
 .playwright-cli/
+.impeccable/

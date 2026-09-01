@@ -38,6 +38,9 @@ importers:
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      cross-spawn:
+        specifier: ^7.0.6
+        version: 7.0.6
       fastify:
         specifier: ^5.12.1
         version: 5.12.1

@@ -37,6 +37,24 @@ export type AgentManifestRecord = {
   manifestHash: string
 }
 
+export type AdapterDescriptor = {
+  manifest: AgentManifest
+  commandAliases?: string[]
+  bundled: boolean
+  modelEnvironment?: string
+  nativeCommand?: {
+    adapterEnvironment: string
+    overrideEnvironment: string
+    bundled: 'codex' | 'adapter'
+  }
+  permissionMode?: {
+    environment: string
+    readOnly: string
+    workspaceWrite: string
+  }
+  staticEnvironment?: Record<string, string>
+}
+
 export type AgentManifestLoadOptions = {
   projectRoot?: string
   userManifestDirectory?: string | false
@@ -45,30 +63,101 @@ export type AgentManifestLoadOptions = {
   includeBuiltins?: boolean
 }
 
-const builtinManifests: AgentManifest[] = [
+export const builtinAdapterDescriptors: AdapterDescriptor[] = [
   {
-    schemaVersion: 1,
-    id: 'codex',
-    name: 'Codex',
-    description:
-      '用本机已登录的 Codex 来执行步骤。默认只读；能力声明 workspace 写入后可修改工作区文件。',
-    backend: 'acp',
-    command: 'codex-acp',
-    envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL', 'CODEX_HOME', 'OPENAI_API_KEY'],
-    capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
-    traits: { tokenAccounting: 'approximate' },
+    manifest: {
+      schemaVersion: 1,
+      id: 'codex',
+      name: 'Codex',
+      description:
+        '用 CFlow 随包提供的 Codex 来执行步骤。默认只读；能力声明 workspace 写入后可修改工作区文件。',
+      backend: 'acp',
+      command: 'codex-acp',
+      envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'CODEX_HOME', 'OPENAI_API_KEY'],
+      capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
+      traits: { tokenAccounting: 'approximate' },
+    },
+    commandAliases: ['codex-acp'],
+    bundled: true,
+    modelEnvironment: 'CODEX_CONFIG',
+    nativeCommand: {
+      adapterEnvironment: 'CODEX_PATH',
+      overrideEnvironment: 'CFLOW_CODEX_PATH',
+      bundled: 'codex',
+    },
+    permissionMode: {
+      environment: 'INITIAL_AGENT_MODE',
+      readOnly: 'read-only',
+      workspaceWrite: 'workspace-write',
+    },
+    staticEnvironment: { NO_BROWSER: '1' },
   },
   {
-    schemaVersion: 1,
-    id: 'claude-code',
-    name: 'Claude Code',
-    description: '用本机已登录的 Claude Code 来执行步骤。',
-    backend: 'acp',
-    command: 'claude-agent-acp',
-    envAllowlist: ['HOME', 'PATH', 'LANG', 'LC_ALL', 'ANTHROPIC_API_KEY'],
-    capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
+    manifest: {
+      schemaVersion: 1,
+      id: 'claude-code',
+      name: 'Claude Code',
+      description: '用 CFlow 随包提供的 Claude Code 来执行步骤。',
+      backend: 'acp',
+      command: 'claude-agent-acp',
+      envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'ANTHROPIC_API_KEY'],
+      capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
+    },
+    commandAliases: ['claude-agent-acp'],
+    bundled: true,
+    modelEnvironment: 'CLAUDE_MODEL_CONFIG',
+    nativeCommand: {
+      adapterEnvironment: 'CLAUDE_CODE_EXECUTABLE',
+      overrideEnvironment: 'CFLOW_CLAUDE_PATH',
+      bundled: 'adapter',
+    },
   },
 ]
+
+export const externalAdapterDescriptors: AdapterDescriptor[] = [
+  {
+    manifest: {
+      schemaVersion: 1,
+      id: 'amp',
+      name: 'Amp',
+      description: '通过本机安装的 Amp ACP adapter 执行步骤。',
+      backend: 'acp',
+      command: 'amp-acp',
+    },
+    commandAliases: ['amp-acp'],
+    bundled: false,
+  },
+  {
+    manifest: {
+      schemaVersion: 1,
+      id: 'pi',
+      name: 'Pi',
+      description: '通过本机安装的 Pi ACP adapter 执行步骤。',
+      backend: 'acp',
+      command: 'pi-acp',
+    },
+    commandAliases: ['pi-acp'],
+    bundled: false,
+  },
+  {
+    manifest: {
+      schemaVersion: 1,
+      id: 'github-copilot',
+      name: 'GitHub Copilot',
+      description: '通过本机安装的 GitHub Copilot ACP 模式执行步骤。',
+      backend: 'acp',
+      command: 'copilot',
+      args: ['--acp'],
+    },
+    commandAliases: ['copilot'],
+    bundled: false,
+  },
+]
+
+const adapterDescriptors = [...builtinAdapterDescriptors, ...externalAdapterDescriptors]
+
+export const adapterDescriptorForId = (id: string) =>
+  adapterDescriptors.find((descriptor) => descriptor.manifest.id === id)
 
 const manifestHash = (manifest: AgentManifest) =>
   createHash('sha256').update(JSON.stringify(manifest)).digest('hex').slice(0, 16)
@@ -214,6 +303,11 @@ const record = (
   return { manifest, source, manifestPath, manifestHash: manifestHash(manifest) }
 }
 
+export const adapterDescriptorRecord = (
+  descriptor: AdapterDescriptor,
+  source: RuntimeDiscoverySource,
+) => record(descriptor.manifest, source, `descriptor:${descriptor.manifest.id}`)
+
 const manifestFiles = (directory: string | false) => {
   if (!directory || !existsSync(directory)) return []
   return readdirSync(directory)
@@ -260,8 +354,8 @@ export function loadAgentManifestRecords(options: AgentManifestLoadOptions = {})
   const records: AgentManifestRecord[] = []
   const warnings: string[] = []
   if (options.includeBuiltins !== false)
-    for (const manifest of builtinManifests)
-      records.push(record(manifest, 'builtin', `builtin:${manifest.id}`))
+    for (const descriptor of builtinAdapterDescriptors)
+      records.push(adapterDescriptorRecord(descriptor, 'builtin'))
 
   const addValues = (
     values: unknown,

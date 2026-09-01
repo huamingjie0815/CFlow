@@ -12,7 +12,6 @@ import type {
   RuntimeWithHealth,
   RuntimeDiscoveryResult,
   WorkspaceSettings,
-  DirectoryListing,
 } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,24 +32,35 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   async bootstrap(): Promise<BootstrapData> {
-    const [cfs, plans, runs, resources, runtimeDiscovery, settings, flowDrafts, cfDrafts] =
-      await Promise.all([
-        request<BootstrapData['cfs']>('/api/cfs'),
-        request<BootstrapData['plans']>('/api/flows'),
-        request<BootstrapData['runs']>('/api/runs'),
-        request<BootstrapData['resources']>('/api/resources'),
-        request<RuntimeDiscoveryResult>('/api/runtimes/discover', {
-          method: 'POST',
-          body: '{}',
-        }),
-        request<BootstrapData['settings']>('/api/settings'),
-        request<BootstrapData['flowDrafts']>('/api/flow-drafts'),
-        request<BootstrapData['cfDrafts']>('/api/cf-drafts'),
-      ])
+    const [
+      workspace,
+      cfs,
+      plans,
+      runs,
+      resources,
+      runtimeDiscovery,
+      settings,
+      flowDrafts,
+      cfDrafts,
+    ] = await Promise.all([
+      request<BootstrapData['workspace']>('/api/workspace'),
+      request<BootstrapData['cfs']>('/api/cfs'),
+      request<BootstrapData['plans']>('/api/flows'),
+      request<BootstrapData['runs']>('/api/runs'),
+      request<BootstrapData['resources']>('/api/resources'),
+      request<RuntimeDiscoveryResult>('/api/runtimes/discover', {
+        method: 'POST',
+        body: '{}',
+      }),
+      request<BootstrapData['settings']>('/api/settings'),
+      request<BootstrapData['flowDrafts']>('/api/flow-drafts'),
+      request<BootstrapData['cfDrafts']>('/api/cf-drafts'),
+    ])
     const flowCompilations = await request<BootstrapData['flowCompilations']>(
       '/api/flow-compilations',
     ).catch(() => [])
     return {
+      workspace,
       cfs,
       plans,
       runs,
@@ -63,27 +73,15 @@ export const api = {
       cfDrafts,
     }
   },
-  listDirectories(path?: string) {
-    return request<DirectoryListing>(
-      `/api/directories${path ? `?path=${encodeURIComponent(path)}` : ''}`,
-    )
-  },
-  validateDirectory(path: string) {
-    return request<{ path: string }>('/api/directories/validate', {
-      method: 'POST',
-      body: JSON.stringify({ path }),
-    })
-  },
-  propose(objective: string, runtimeId: string, workspaceRoot: string, attachments: File[] = []) {
+  propose(objective: string, runtimeId: string, attachments: File[] = []) {
     if (!attachments.length)
       return request<FlowProposal>('/api/flow-proposals', {
         method: 'POST',
-        body: JSON.stringify({ objective, runtimeId, workspaceRoot }),
+        body: JSON.stringify({ objective, runtimeId }),
       })
     const body = new FormData()
     body.set('objective', objective)
     body.set('runtimeId', runtimeId)
-    body.set('workspaceRoot', workspaceRoot)
     attachments.forEach((file) =>
       body.append(
         'attachments',
@@ -228,11 +226,8 @@ export function readableError(error: unknown) {
     RUNTIME_PROPOSAL_UNGROUNDED:
       '生成结果无法与附件原文对应，已拦截这份草案。请重试，或在目标中说明要执行文件内描述的流程。',
     FLOW_VERSION_NOT_FOUND: '这条已发布版本已经不存在，请刷新工作台。',
-    FLOW_WORKSPACE_REQUIRED: '请先选择这条流程的本机工作目录。',
-    FLOW_WORKSPACE_IMMUTABLE: '这条流程的工作目录已经锁定，不能更改。',
-    FLOW_WORKSPACE_UNAVAILABLE: '工作目录不存在或不可读写，请恢复原路径后再试。',
-    DIRECTORY_NOT_READABLE: '无法读取这个目录，请检查路径和权限。',
-    DIRECTORY_NOT_READ_WRITE: '这个目录不可读写，请选择其他目录。',
+    FLOW_WORKSPACE_REQUIRED: '当前流程缺少工作区信息，请刷新工作台。',
+    FLOW_WORKSPACE_MISMATCH: '这条流程不属于当前启动目录，请从对应目录启动 CFlow。',
     UNKNOWN_CF: '有步骤还没有填写内容，或者它引用的说明已经不在了。请打开这个步骤补齐。',
     FLOW_DUPLICATE_NODE: '有两个步骤用了同一个编号，请删掉多余的那个。',
     FLOW_DUPLICATE_EDGE: '有两条重复的连线，请删掉一条。',

@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import type {
   Json,
   FlowCompilationSnapshot,
@@ -12,7 +12,7 @@ import type {
 } from './types.js'
 export class Store {
   readonly db: Database
-  constructor(file = process.env.CF_DB ?? './data/cf.sqlite') {
+  constructor(file = join(process.cwd(), '.cflow', 'cflow.sqlite')) {
     mkdirSync(dirname(file), { recursive: true })
     this.db = new Database(file)
     this.db.pragma('journal_mode = WAL')

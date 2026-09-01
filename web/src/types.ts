@@ -9,6 +9,7 @@ export type {
   LedgerEvent,
   ResourceProfile,
   RuntimeProfile,
+  WorkspaceInfo,
   WorkspaceSettings,
 } from '../../src/types'
 
@@ -20,6 +21,7 @@ import type {
   FlowPlan,
   ResourceProfile,
   RuntimeProfile,
+  WorkspaceInfo,
   WorkspaceSettings,
 } from '../../src/types'
 
@@ -95,18 +97,13 @@ export type FlowProposal = {
   }
 }
 
-export type DirectoryListing = {
-  path: string
-  parentPath: string | null
-  directories: { name: string; path: string; hidden?: boolean }[]
-}
-
 export type CompilationPreview = {
   plan: FlowPlan
   programs: CFVersion[]
 }
 
 export type BootstrapData = {
+  workspace: WorkspaceInfo
   cfs: CFVersion[]
   plans: FlowPlan[]
   runs: RunSummary[]

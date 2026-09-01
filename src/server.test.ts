@@ -1,14 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { createApp, isDirectExecution } from './server.js'
 import { Store } from './db.js'
 import type { RuntimeProfile } from './types.js'
 
-const createTestApp = (store: Store) => {
+const createTestApp = (store: Store, workspaceRoot = process.cwd()) => {
   store.saveRuntimeProfile({
     id: 'echo',
     profileVersion: 1,
@@ -38,7 +38,7 @@ const createTestApp = (store: Store) => {
     adapterBuild: 'test',
     createdAt: new Date(0).toISOString(),
   } satisfies RuntimeProfile)
-  return createApp(store)
+  return createApp(store, workspaceRoot)
 }
 
 test('recognizes the npm bin symlink as direct execution', (t) => {
@@ -49,6 +49,42 @@ test('recognizes the npm bin symlink as direct execution', (t) => {
   symlinkSync(fileURLToPath(new URL('./server.ts', import.meta.url)), bin)
   assert.equal(isDirectExecution(bin), true)
   assert.equal(isDirectExecution(join(root, 'missing')), false)
+})
+
+test('reports and enforces the launch workspace', async (t) => {
+  const root = join('/tmp', `cflow-api-workspace-${randomUUID()}`)
+  mkdirSync(root, { recursive: true })
+  const store = new Store(join(root, 'api.sqlite'))
+  const app = createTestApp(store, root)
+  t.after(async () => {
+    await app.close()
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  await app.ready()
+
+  const workspace = await app.inject({ method: 'GET', url: '/api/workspace' })
+  assert.equal(workspace.statusCode, 200)
+  assert.deepEqual(workspace.json(), { root: realpathSync(root) })
+  assert.equal((await app.inject({ method: 'GET', url: '/api/directories' })).statusCode, 404)
+
+  const draft = {
+    flowId: 'scoped-flow',
+    revision: 1,
+    name: 'Scoped Flow',
+    objective: 'stay in the launch workspace',
+    workspaceRoot: '/tmp',
+    nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
+    edges: [],
+  }
+  const saved = await app.inject({
+    method: 'PUT',
+    url: '/api/flow-drafts/scoped-flow',
+    payload: draft,
+  })
+  assert.equal(saved.statusCode, 200)
+  assert.equal(saved.json().workspaceRoot, realpathSync(root))
+  assert.equal(store.get<any>('flow_drafts', draft.flowId)?.workspaceRoot, realpathSync(root))
 })
 
 test('HTTP API publishes and runs a Flow', async () => {
@@ -139,10 +175,6 @@ test('requires an ACP runtime for skill attachment analysis', async () => {
     '',
     'echo',
     `--${boundary}`,
-    'Content-Disposition: form-data; name="workspaceRoot"',
-    '',
-    process.cwd(),
-    `--${boundary}`,
     'Content-Disposition: form-data; name="attachments"; filename="SKILL.md"',
     'Content-Type: text/markdown',
     '',
@@ -218,7 +250,7 @@ process.stdin.on('end', () => {
     adapterBuild: 'test',
     createdAt: new Date(0).toISOString(),
   } satisfies RuntimeProfile)
-  const app = createApp(store)
+  const app = createApp(store, root)
   await app.ready()
   t.after(() => app.close())
   t.after(() => store.close())
@@ -232,10 +264,6 @@ process.stdin.on('end', () => {
     'Content-Disposition: form-data; name="runtimeId"',
     '',
     'content-runtime',
-    `--${boundary}`,
-    'Content-Disposition: form-data; name="workspaceRoot"',
-    '',
-    root,
     `--${boundary}`,
     'Content-Disposition: form-data; name="attachments"; filename="SKILL.md"',
     'Content-Type: text/markdown',

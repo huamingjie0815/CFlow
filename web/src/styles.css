@@ -536,151 +536,6 @@ pre {
   font-size: 10px;
 }
 
-.directory-picker {
-  display: flex;
-  width: min(760px, calc(100% - 64px));
-  min-height: 0;
-  margin: 34px auto;
-  flex: 1;
-  flex-direction: column;
-  overflow: hidden;
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 12px;
-}
-.directory-picker-heading {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--border);
-}
-.directory-picker-mark {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  flex: 0 0 auto;
-  place-items: center;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border-radius: 10px;
-}
-.directory-picker-heading h2,
-.directory-picker-heading p {
-  margin: 0;
-}
-.directory-picker-heading h2 {
-  font-size: 17px;
-  letter-spacing: -0.008em;
-}
-.directory-picker-heading p {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.directory-jump {
-  padding: 14px 18px 10px;
-}
-.directory-jump-row {
-  display: flex;
-  gap: 7px;
-}
-.directory-breadcrumbs {
-  display: flex;
-  gap: 3px;
-  padding: 0 18px 10px;
-  overflow-x: auto;
-}
-.directory-breadcrumbs button {
-  flex: 0 0 auto;
-  padding: 3px 6px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 10px;
-}
-.directory-breadcrumbs button:hover {
-  color: var(--text);
-  background: var(--paper-deep);
-}
-.directory-list {
-  min-height: 180px;
-  flex: 1;
-  margin: 0 18px;
-  overflow-y: auto;
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.directory-list > button {
-  display: grid;
-  width: 100%;
-  grid-template-columns: 20px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  padding: 9px 11px;
-  text-align: left;
-  background: transparent;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-}
-.directory-list > button:hover {
-  background: var(--paper);
-}
-.directory-list > button span,
-.directory-list > button strong,
-.directory-list > button small {
-  display: block;
-  min-width: 0;
-}
-.directory-list > button strong {
-  font-size: 11px;
-}
-.directory-list > button small {
-  margin-top: 2px;
-  overflow: hidden;
-  color: var(--muted);
-  font:
-    9px 'SFMono-Regular',
-    monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.directory-empty {
-  display: flex;
-  min-height: 140px;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.directory-error {
-  margin: 8px 18px 0;
-  color: var(--red);
-  font-size: 10px;
-}
-.directory-picker-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 18px;
-  border-top: 1px solid var(--border);
-}
-.directory-picker-footer > span {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font:
-    10px 'SFMono-Regular',
-    monospace;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .signal-emblem {
   display: grid;
   width: 58px;
@@ -1769,18 +1624,8 @@ pre {
   font-size: 9px;
   line-height: 1.5;
 }
-.workspace-path-row {
-  display: flex;
-  gap: 6px;
-}
-.workspace-path-row input {
+.field input.workspace-path {
   font-family: 'SFMono-Regular', Consolas, monospace;
-}
-.field small.workspace-ok {
-  color: var(--green);
-}
-.field small.workspace-error {
-  color: var(--red);
 }
 .agent-disabled-note {
   margin: 0 0 8px;
@@ -2261,10 +2106,18 @@ pre {
 .runtime-table article {
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr) 88px 104px;
-  align-items: center;
+  align-items: start;
   gap: 10px;
   padding: 12px 10px;
   border-bottom: 1px solid var(--border);
+}
+.runtime-table article > .status-lamp,
+.runtime-table article > .runtime-health,
+.runtime-table article > .button {
+  margin-top: 4px;
+}
+.runtime-info {
+  min-width: 0;
 }
 .runtime-table strong {
   font-size: 11px;
@@ -2278,6 +2131,45 @@ pre {
 .runtime-table small {
   color: var(--faint);
   font-size: 9px;
+}
+.runtime-table .runtime-error-summary {
+  margin: 7px 0 0;
+  color: var(--red);
+  font-size: 10px;
+}
+.runtime-technical-details {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.runtime-technical-details summary {
+  width: fit-content;
+  cursor: pointer;
+  font-weight: 600;
+}
+.runtime-technical-details dl {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding: 8px;
+  background: var(--inset);
+  border-radius: 7px;
+}
+.runtime-technical-details dl > div {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+.runtime-technical-details dt {
+  color: var(--muted);
+  font-weight: 600;
+}
+.runtime-technical-details dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  overflow-wrap: anywhere;
 }
 .runtime-health {
   color: var(--muted);
@@ -2383,41 +2275,6 @@ pre {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.5;
-}
-
-/* --- 目录选择：安静的选项行 --- */
-.directory-options {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 20px 0;
-}
-.quiet-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 11px;
-}
-.quiet-toggle input {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: var(--accent);
-}
-.link-button {
-  padding: 0;
-  color: var(--accent);
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font-size: 11px;
-  font-weight: 600;
-}
-.link-button:hover {
-  text-decoration: underline;
 }
 
 /* --- 设置：保存动作靠右，不做通栏实心条 --- */

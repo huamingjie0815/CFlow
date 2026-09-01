@@ -1,4 +1,4 @@
-import { Copy, Link2, ListChecks, Plus, Trash2 } from 'lucide-react'
+import { Link2, ListChecks, Plus, Trash2 } from 'lucide-react'
 import { nodeKindLabel } from '../copy'
 import { describeNode } from '../flow-labels'
 import type {
@@ -19,7 +19,6 @@ type DetailPanelProps = {
   cfs?: CFVersion[]
   candidateCfs?: CFDraft[]
   runtimes?: RuntimeWithHealth[]
-  workspaceAvailable: boolean
   onDraftChange: (next: FlowDraft) => void
   onCandidateCfChange?: (next: CFDraft) => void
   onSelectNode: (id: string | null) => void
@@ -68,7 +67,6 @@ export function DetailPanel(props: DetailPanelProps) {
     cfs = [],
     candidateCfs = [],
     runtimes = [],
-    workspaceAvailable,
     onDraftChange,
     onCandidateCfChange = () => undefined,
     onSelectEdge,
@@ -600,25 +598,6 @@ export function DetailPanel(props: DetailPanelProps) {
                   onDraftChange({ ...draft, objective, revision: draft.revision + 1 })
                 }
               />
-              <div className="field workspace-field">
-                <span>本机工作目录</span>
-                <div className="workspace-path-row">
-                  <input value={draft.workspaceRoot ?? ''} readOnly />
-                  <button
-                    className="icon-button"
-                    type="button"
-                    title="复制完整路径"
-                    onClick={() => void navigator.clipboard.writeText(draft.workspaceRoot)}
-                  >
-                    <Copy size={14} />
-                  </button>
-                </div>
-                <small className={workspaceAvailable ? 'workspace-ok' : 'workspace-error'}>
-                  {workspaceAvailable
-                    ? '目录可读写 · 流程创建后路径保持不变'
-                    : '目录不存在或权限不足 · 请恢复原路径'}
-                </small>
-              </div>
               <div className="property-list">
                 <div>
                   <span>草稿次数</span>

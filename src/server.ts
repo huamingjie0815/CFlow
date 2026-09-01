@@ -3,16 +3,15 @@ import Fastify from 'fastify'
 import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
 import { fileURLToPath } from 'node:url'
-import { constants, existsSync, mkdirSync, realpathSync } from 'node:fs'
-import { cp, mkdir, readdir, realpath, rm, stat, access } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve, sep } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { cp, mkdir, rm } from 'node:fs/promises'
+import { dirname, join, sep } from 'node:path'
 import { Store } from './db.js'
 import { compileCF, compileFlow } from './compiler.js'
 import { Engine, builtins, newRunId } from './engine.js'
 import { RuntimeManager } from './runtime.js'
 import { sha256 } from './hash.js'
-import { requireWorkspaceRoot, validateWorkspaceRoot } from './workspace.js'
+import { initializeWorkspace, validateWorkspaceRoot } from './workspace.js'
 import {
   collectGroundingFailures,
   groundingError,
@@ -47,10 +46,11 @@ import type {
   WorkspaceSettings,
 } from './types.js'
 
-export function createApp(store = new Store()) {
+export function createApp(store = new Store(), requestedWorkspaceRoot = process.cwd()) {
+  const workspaceRoot = validateWorkspaceRoot(requestedWorkspaceRoot, 'WORKSPACE_UNAVAILABLE')
   const versions = () => store.list<CFVersion>('cf_versions')
   const flowCompilations = () => store.flowCompilations()
-  const runtimes = new RuntimeManager(store)
+  const runtimes = new RuntimeManager(store, { projectRoot: workspaceRoot })
   const testPlans = new Map<string, FlowPlan>()
   const testCatalogs = new Map<string, CFVersion[]>()
   const executorRegistry = builtins()
@@ -59,38 +59,7 @@ export function createApp(store = new Store()) {
     ...versions(),
     ...[...testCatalogs.values()].flat(),
   ])
-  const storedFlowWorkspace = (flowId: string) => {
-    const draft = store.get<FlowDraft>('flow_drafts', flowId)
-    if (draft) return requireWorkspaceRoot(draft.workspaceRoot)
-    const plan = store.list<FlowPlan>('flow_versions').find((value) => value.flowId === flowId)
-    return plan ? requireWorkspaceRoot(plan.workspaceRoot) : undefined
-  }
-  const assertFlowWorkspaceImmutable = (draft: FlowDraft) => {
-    const requested = requireWorkspaceRoot(draft.workspaceRoot)
-    const stored = storedFlowWorkspace(draft.flowId)
-    if (stored !== undefined && stored !== requested) {
-      try {
-        if (validateWorkspaceRoot(requested) !== stored) throw new Error('FLOW_WORKSPACE_IMMUTABLE')
-      } catch {
-        throw new Error('FLOW_WORKSPACE_IMMUTABLE')
-      }
-    }
-    return stored ?? requested
-  }
-  const operationalWorkspace = (draft: FlowDraft) => {
-    const requested = assertFlowWorkspaceImmutable(draft)
-    const normalized = validateWorkspaceRoot(requested)
-    if (normalized !== requested) throw new Error('FLOW_WORKSPACE_IMMUTABLE')
-    return normalized
-  }
-  const normalizeNewFlowWorkspace = (draft: FlowDraft): FlowDraft => {
-    const stored = storedFlowWorkspace(draft.flowId)
-    if (stored) {
-      assertFlowWorkspaceImmutable(draft)
-      return draft
-    }
-    return { ...draft, workspaceRoot: validateWorkspaceRoot(draft.workspaceRoot) }
-  }
+  const scopeFlowDraft = (draft: FlowDraft): FlowDraft => ({ ...draft, workspaceRoot })
   const app = Fastify({ logger: true })
   app.register(fastifyMultipart, {
     // Do not silently truncate large skill bundles; files are streamed to disk.
@@ -197,7 +166,7 @@ export function createApp(store = new Store()) {
       if (attachments) await rm(attachments.root, { recursive: true, force: true })
       return proposal
     }
-    const draft = normalizeNewFlowWorkspace(proposal.flowDraft)
+    const draft = scopeFlowDraft(proposal.flowDraft)
     let archivePath: string | undefined
     if (attachments) {
       archivePath = join('.cflow', 'flows', draft.flowId, 'attachments')
@@ -227,50 +196,11 @@ export function createApp(store = new Store()) {
   }
   app.register(fastifyStatic, { root: runtimePublicRoot })
   app.get('/', async (_, reply) => reply.sendFile('index.html'))
+  app.get('/api/workspace', async () => ({ root: workspaceRoot }))
   app.get('/api/settings', async () => runtimes.settings())
   app.put<{ Body: Partial<WorkspaceSettings> }>('/api/settings', async (req) =>
     runtimes.updateSettings(req.body ?? {}),
   )
-  app.get<{ Querystring: { path?: string } }>('/api/directories', async (req) => {
-    const requested = req.query.path?.trim() || homedir()
-    if (!isAbsolute(requested)) throw new Error('DIRECTORY_PATH_NOT_ABSOLUTE')
-    let path: string
-    try {
-      path = await realpath(requested)
-      if (!(await stat(path)).isDirectory()) throw new Error('DIRECTORY_NOT_FOUND')
-      await access(path, constants.R_OK)
-    } catch {
-      throw new Error('DIRECTORY_NOT_READABLE')
-    }
-    const children = await readdir(path, { withFileTypes: true })
-    const directories = (
-      await Promise.all(
-        children.map(async (entry) => {
-          const candidate = join(path, entry.name)
-          try {
-            const normalized = await realpath(candidate)
-            if (!(await stat(normalized)).isDirectory()) return null
-            await access(normalized, constants.R_OK)
-            // Flag dotfiles so the picker can hide developer directories by default.
-            return { name: entry.name, path: normalized, hidden: entry.name.startsWith('.') }
-          } catch {
-            return null
-          }
-        }),
-      )
-    )
-      .filter((entry): entry is { name: string; path: string; hidden: boolean } => Boolean(entry))
-      .sort((a, b) => a.name.localeCompare(b.name))
-    const parentCandidate = dirname(path)
-    return {
-      path,
-      parentPath: parentCandidate === path ? null : await realpath(parentCandidate),
-      directories,
-    }
-  })
-  app.post<{ Body: { path?: string } }>('/api/directories/validate', async (req) => ({
-    path: validateWorkspaceRoot(req.body?.path, 'DIRECTORY_NOT_READ_WRITE'),
-  }))
   const runtimeCatalog = () =>
     Promise.all(
       runtimes.profiles().map(async (profile) => ({
@@ -327,7 +257,7 @@ export function createApp(store = new Store()) {
     if (req.params.id !== req.body.flowId) throw new Error('FLOW_DRAFT_ID_MISMATCH')
     if (!req.body.flowId?.trim() || !req.body.name?.trim() || !req.body.objective?.trim())
       throw new Error('FLOW_DRAFT_INVALID')
-    const draft = normalizeNewFlowWorkspace(req.body)
+    const draft = scopeFlowDraft(req.body)
     store.save('flow_drafts', draft.flowId, draft)
     return draft
   })
@@ -355,7 +285,7 @@ export function createApp(store = new Store()) {
   app.post<{
     Body: { flowDraft: FlowDraft; cfDrafts?: CFDraft[]; runtimeId?: string }
   }>('/api/flow-compilations', async (req) => {
-    assertFlowWorkspaceImmutable(req.body.flowDraft)
+    const scopedDraft = scopeFlowDraft(req.body.flowDraft)
     const candidates = (req.body.cfDrafts ?? []).map(compileCF)
     const catalog = new Map(
       [...versions(), ...candidates].map((version) => [
@@ -363,7 +293,7 @@ export function createApp(store = new Store()) {
         version,
       ]),
     )
-    const selectedDraft = applyCompileRuntime(req.body.flowDraft, req.body.runtimeId)
+    const selectedDraft = applyCompileRuntime(scopedDraft, req.body.runtimeId)
     const compiled = compileFlow(selectedDraft, catalog)
     const plan = req.body.runtimeId
       ? await pinRuntimeProfiles(compiled, [...versions(), ...candidates])
@@ -393,7 +323,7 @@ export function createApp(store = new Store()) {
       ),
     }
   })
-  app.post<{ Body: { objective: string; runtimeId?: string; workspaceRoot: string } }>(
+  app.post<{ Body: { objective: string; runtimeId?: string } }>(
     '/api/flow-proposals',
     async (req) => {
       const multipart =
@@ -408,7 +338,6 @@ export function createApp(store = new Store()) {
         return new Error(code)
       }
       const body = multipart?.fields ?? (req.body as any)
-      const workspaceRoot = validateWorkspaceRoot(body.workspaceRoot, 'FLOW_WORKSPACE_UNAVAILABLE')
       const objective = String(body.objective ?? '').trim()
       if (!objective) throw await failing('OBJECTIVE_REQUIRED')
       const catalog = versions()
@@ -555,13 +484,16 @@ export function createApp(store = new Store()) {
   app.post<{ Body: AgentRequest }>('/api/flow-agent/chat', async (req) => {
     const message = req.body.message?.trim()
     if (!message) throw new Error('AGENT_MESSAGE_REQUIRED')
+    const request = {
+      ...req.body,
+      flowDraft: req.body.flowDraft ? scopeFlowDraft(req.body.flowDraft) : null,
+    }
     const catalog = versions()
-    const fallback = flowAgentFallback({ ...req.body, message }, catalog)
-    const runtimeId = req.body.runtimeId?.trim() || runtimes.settings().defaultRuntimeId
+    const fallback = flowAgentFallback({ ...request, message }, catalog)
+    const runtimeId = request.runtimeId?.trim() || runtimes.settings().defaultRuntimeId
     const profile = runtimeId ? runtimes.profile(runtimeId) : undefined
     if (!profile || profile.backend === 'builtin') return { ...fallback, fallback: true }
-    if (!req.body.flowDraft) throw new Error('FLOW_WORKSPACE_REQUIRED')
-    const workspaceRoot = operationalWorkspace(req.body.flowDraft)
+    if (!request.flowDraft) throw new Error('FLOW_WORKSPACE_REQUIRED')
     const health = await runtimes.health(runtimeId)
     if (health.status !== 'available') return { ...fallback, fallback: true }
     const availableRuntimes: { id: string; name: string }[] = []
@@ -575,7 +507,7 @@ export function createApp(store = new Store()) {
     const response = await runtimes.execute(
       runtimeId,
       flowAgentPrompt(message, grounded),
-      flowAgentContext({ ...req.body, message }, availableRuntimes, catalog),
+      flowAgentContext({ ...request, message }, availableRuntimes, catalog),
       AbortSignal.timeout(runtimes.settings().testTimeoutMs),
       [],
       flowAgentOutputSchema(grounded),
@@ -585,8 +517,8 @@ export function createApp(store = new Store()) {
     if (normalized.intent === 'answer') return { ...normalized, runtimeId }
     if (grounded) assertAttachmentGrounding(normalized, req.body.attachments ?? [])
     const revised = applyFlowRevision(
-      req.body.flowDraft,
-      req.body.cfDrafts ?? [],
+      request.flowDraft,
+      request.cfDrafts ?? [],
       normalized.stages,
       { catalog, runtimeId },
     )
@@ -621,8 +553,7 @@ export function createApp(store = new Store()) {
     return { deleted: true }
   })
   app.post<{ Body: FlowDraft }>('/api/flows', async (req) => {
-    const draft = normalizeNewFlowWorkspace(req.body)
-    operationalWorkspace(draft)
+    const draft = scopeFlowDraft(req.body)
     const catalog = versions()
     const plan = await pinRuntimeProfiles(
       compileFlow(draft, new Map(catalog.map((v) => [`${v.cfId}@${v.version}`, v]))),
@@ -641,7 +572,7 @@ export function createApp(store = new Store()) {
       runtimeId?: string
     }
   }>('/api/flow-tests', async (req) => {
-    operationalWorkspace(req.body.flowDraft)
+    const scopedDraft = scopeFlowDraft(req.body.flowDraft)
     const candidateVersions = (req.body.cfDrafts ?? []).map(compileCF)
     const catalog = new Map(
       [...versions(), ...candidateVersions].map((version) => [
@@ -649,8 +580,8 @@ export function createApp(store = new Store()) {
         version,
       ]),
     )
-    const selectedDraft = applyCompileRuntime(req.body.flowDraft, req.body.runtimeId)
-    store.save('flow_drafts', req.body.flowDraft.flowId, req.body.flowDraft)
+    const selectedDraft = applyCompileRuntime(scopedDraft, req.body.runtimeId)
+    store.save('flow_drafts', scopedDraft.flowId, scopedDraft)
     const compiled = compileFlow(selectedDraft, catalog)
     const plan = await pinRuntimeProfiles(compiled, [...versions(), ...candidateVersions])
     const programs = [...versions(), ...candidateVersions].filter((version) =>
@@ -687,7 +618,7 @@ export function createApp(store = new Store()) {
   }>('/api/runs', async (req) => {
     const plan = store.get<FlowPlan>('flow_versions', `${req.body.flowId}@${req.body.flowVersion}`)
     if (!plan) throw new Error('FLOW_VERSION_NOT_FOUND')
-    validateWorkspaceRoot(plan.workspaceRoot)
+    if (plan.workspaceRoot !== workspaceRoot) throw new Error('FLOW_WORKSPACE_MISMATCH')
     const resources = resolveResources(plan, req.body.resourceProfileId)
     const id = newRunId()
     store.createRun(
@@ -781,10 +712,18 @@ export const isDirectExecution = (entryPath = process.argv[1]) => {
 }
 
 if (isDirectExecution()) {
-  mkdirSync('./data', { recursive: true })
-  const app = createApp()
-  await app.listen({
-    host: process.env.HOST ?? '127.0.0.1',
-    port: Number(process.env.PORT ?? 3000),
-  })
+  let app: ReturnType<typeof createApp> | undefined
+  try {
+    const workspace = initializeWorkspace()
+    app = createApp(new Store(workspace.databasePath), workspace.root)
+    app.log.info({ workspace: workspace.root, database: workspace.databasePath }, 'workspace ready')
+    await app.listen({
+      host: process.env.HOST ?? '127.0.0.1',
+      port: Number(process.env.PORT ?? 3000),
+    })
+  } catch (error) {
+    if (app) await app.close()
+    console.error(`CFlow 启动失败：${error instanceof Error ? error.message : String(error)}`)
+    process.exitCode = 1
+  }
 }

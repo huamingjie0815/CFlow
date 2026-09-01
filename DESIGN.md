@@ -220,6 +220,8 @@ status dots. No pills except the canvas 「开始」 marker.
   sibling under the canvas so it resizes the canvas instead of covering its controls.
 - **Flow switcher** — one flat list of drafts and published versions with a status
   tag per row, search, per-row delete, and 新建流程 at the foot.
+- **Workspace setting** — the launch directory is shown as a read-only monospace
+  value in settings. Flow creation never asks for another directory.
 
 ## Do's and Don'ts
 
@@ -228,7 +230,6 @@ status dots. No pills except the canvas 「开始」 marker.
 - Name the next step and fill exactly that one button.
 - Write every label as a sentence a colleague in HR or finance would understand.
 - Translate error codes into what to change and where.
-- Keep hidden system folders out of the folder picker by default.
 - Label a branch edge with the routing rule the author wrote, not the case id.
 
 **Don't**

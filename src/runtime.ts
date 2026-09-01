@@ -1,5 +1,5 @@
-import { spawn } from 'node:child_process'
-import { isAbsolute, resolve } from 'node:path'
+import { createRequire } from 'node:module'
+import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import {
   client as acpClient,
@@ -20,22 +20,32 @@ import type { ExecutorRegistry } from './engine.js'
 import { Store } from './db.js'
 import { isWithinDirectory } from './workspace.js'
 import {
+  adapterDescriptorForId,
+  adapterDescriptorRecord,
+  externalAdapterDescriptors,
   loadAgentManifestRecords,
   type AgentManifestLoadOptions,
   type AgentManifestRecord,
 } from './runtime-manifest.js'
 import {
   canChangeWorkspace,
+  describeResolvedCommand,
   discoverAcpCommands,
   existingAbsoluteDirectory,
-  needsWindowsShell,
+  existingExecutable,
+  launchProcess,
   parseJsonOutput,
-  resolveExecutable,
+  resolveCommandAliases,
   runtimeIdFromCommand,
   runtimeNameFromCommand,
+  terminateProcess,
+  type CommandResolutionOptions,
+  type LaunchSpec,
+  type ResolvedCommand,
 } from './runtime-process.js'
 
-const ADAPTER_BUILD = 'cf-runtime-adapter/3'
+const ADAPTER_BUILD = 'cf-runtime-adapter/4'
+const moduleRequire = createRequire(import.meta.url)
 export class RuntimeExecutionException extends Error {
   readonly details: import('./types.js').RuntimeExecutionError
   constructor(details: import('./types.js').RuntimeExecutionError) {
@@ -110,13 +120,27 @@ const profileFromManifest = (record: AgentManifestRecord): RuntimeProfile => {
   }
 }
 
-export type RuntimeDiscoveryOptions = AgentManifestLoadOptions
+export type RuntimeDiscoveryOptions = AgentManifestLoadOptions &
+  CommandResolutionOptions & { healthTimeoutMs?: number }
 
 export const discoverRuntimeProfiles = (options: RuntimeDiscoveryOptions = {}) => {
   const loaded = loadAgentManifestRecords(options)
   const declared = loaded.records.map(profileFromManifest)
-  const declaredCommands = new Set(declared.map((profile) => profile.command))
-  const generic = discoverAcpCommands(options.projectRoot)
+  const external = externalAdapterDescriptors
+    .filter((descriptor) =>
+      resolveCommandAliases(
+        [descriptor.manifest.command, ...(descriptor.commandAliases ?? [])],
+        options,
+      ),
+    )
+    .map((descriptor) => profileFromManifest(adapterDescriptorRecord(descriptor, 'path-acp')))
+  const declaredCommands = new Set(
+    [...declared, ...external].flatMap((profile) => [
+      profile.command,
+      ...(adapterDescriptorForId(profile.id)?.commandAliases ?? []),
+    ]),
+  )
+  const generic = discoverAcpCommands(options)
     .filter((command) => !declaredCommands.has(command))
     .sort()
     .map((command): RuntimeProfile => ({
@@ -143,7 +167,7 @@ export const discoverRuntimeProfiles = (options: RuntimeDiscoveryOptions = {}) =
       adapterBuild: ADAPTER_BUILD,
       createdAt: new Date(0).toISOString(),
     }))
-  const selected = new Map(generic.map((profile) => [profile.id, profile]))
+  const selected = new Map([...generic, ...external].map((profile) => [profile.id, profile]))
   for (const profile of declared) selected.set(profile.id, profile)
   return { profiles: [...selected.values()], warnings: loaded.warnings }
 }
@@ -440,7 +464,7 @@ export class RuntimeManager {
           status: 'unavailable',
           checkedAt: new Date().toISOString(),
           latencyMs: Date.now() - started,
-          stage: this.commandInstalled(profile, true) ? 'installed' : undefined,
+          stage: this.commandInstalled(profile) ? 'installed' : undefined,
           authentication: 'unknown',
           error: error instanceof Error ? error.message : String(error),
         }
@@ -550,32 +574,65 @@ export class RuntimeManager {
           : await Promise.reject(new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`))
     return profile.outputMode === 'json' ? parseJsonOutput(text) : { content: text.trim() }
   }
-  private commandInstalled(profile: RuntimeProfile, includeProjectBin = false) {
-    if (!profile.command) return false
-    return Boolean(
-      resolveExecutable(profile.command, { ...process.env } as Record<string, string>, {
-        includeProjectBin,
-      }),
+  private commandResolutionOptions(env: NodeJS.ProcessEnv = process.env) {
+    return {
+      bundledRoot: this.discoveryOptions.bundledRoot,
+      env,
+      platform: this.discoveryOptions.platform,
+      projectRoot: this.discoveryOptions.projectRoot,
+    } satisfies CommandResolutionOptions
+  }
+  private resolvedCommand(profile: RuntimeProfile, env: Record<string, string>) {
+    if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
+    const descriptor = adapterDescriptorForId(profile.id)
+    const resolved = resolveCommandAliases(
+      [profile.command, ...(descriptor?.commandAliases ?? [])],
+      this.commandResolutionOptions(env),
     )
+    if (!resolved)
+      throw new Error(
+        `${profile.backend === 'acp' ? 'ACP_SERVER_NOT_FOUND' : 'AGENT_CLI_NOT_FOUND'}:${profile.command}`,
+      )
+    return resolved
+  }
+  private commandInstalled(profile: RuntimeProfile) {
+    if (!profile.command) return false
+    try {
+      this.resolvedCommand(profile, this.runtimeEnvironment(profile))
+      return true
+    } catch {
+      return false
+    }
+  }
+  private launchSpec(
+    profile: RuntimeProfile,
+    args: string[],
+    cwd: string,
+    stdio: LaunchSpec['stdio'],
+    effects: CapabilityEffect[] = [],
+  ) {
+    const env = this.runtimeEnvironment(profile, effects)
+    return {
+      resolved: this.resolvedCommand(profile, env),
+      args,
+      cwd,
+      env,
+      stdio,
+    } satisfies LaunchSpec
   }
   private async probeAcp(profile: RuntimeProfile) {
-    const command = this.acpCommand(profile)
-    const child = spawn(command, profile.args, {
-      cwd: profile.workingDirectory ?? process.cwd(),
-      env: this.acpEnvironment(profile),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: needsWindowsShell(command),
-      windowsHide: true,
-    })
+    const spec = this.launchSpec(profile, profile.args, profile.workingDirectory ?? process.cwd(), [
+      'pipe',
+      'pipe',
+      'pipe',
+    ])
+    const child = launchProcess(spec)
     let stderr = Buffer.alloc(0)
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr?.on('data', (chunk: Buffer) => {
       stderr = Buffer.concat([stderr, chunk])
       if (stderr.length > 8_192) stderr = stderr.subarray(stderr.length - 8_192)
     })
-    const terminate = () => {
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
-    }
+    const terminate = () => terminateProcess(child)
     let timeout: ReturnType<typeof setTimeout> | undefined
     try {
       if (!child.stdin || !child.stdout) throw new Error('ACP_SERVER_STDIO_UNAVAILABLE')
@@ -593,22 +650,34 @@ export class RuntimeManager {
           }),
       )
       const childError = new Promise<never>((_, reject) => child.once('error', reject))
+      const childExit = new Promise<never>((_, reject) =>
+        child.once('exit', (code, signal) =>
+          reject(new Error(`ACP_SERVER_EXITED:${code ?? signal ?? 'unknown'}`)),
+        ),
+      )
       const timedOut = new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           terminate()
           reject(new Error('ACP_HANDSHAKE_TIMEOUT'))
-        }, 5_000)
+        }, this.discoveryOptions.healthTimeoutMs ?? 5_000)
       })
-      const response = await Promise.race([initialize, childError, timedOut])
+      const response = await Promise.race([initialize, childError, childExit, timedOut])
       const agent = response.agentInfo
         ? [response.agentInfo.name, response.agentInfo.version].filter(Boolean).join(' ')
         : undefined
-      return [`ACP ${response.protocolVersion}`, agent, `via ${command}`]
+      return [
+        `ACP ${response.protocolVersion}`,
+        agent,
+        `via ${describeResolvedCommand(spec.resolved)}`,
+      ]
         .filter(Boolean)
         .join(' · ')
     } catch (error) {
       const detail = stderr.toString('utf8').trim().slice(-800)
-      if (error instanceof Error && detail) throw new Error(`${error.message}:${detail}`)
+      if (error instanceof Error)
+        throw new Error(
+          `${error.message}${detail ? `:${detail}` : ''} [launch=${describeResolvedCommand(spec.resolved)}]`,
+        )
       throw error
     } finally {
       if (timeout) clearTimeout(timeout)
@@ -616,24 +685,20 @@ export class RuntimeManager {
     }
   }
   private async probeCli(profile: RuntimeProfile) {
-    const command = this.cliCommand(profile)
-    if (!profile.versionArgs.length) return `CLI via ${command}`
-    const child = spawn(command, profile.versionArgs, {
-      cwd: profile.workingDirectory ?? process.cwd(),
-      env: this.acpEnvironment(profile),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: needsWindowsShell(command),
-      windowsHide: true,
-    })
+    const spec = this.launchSpec(
+      profile,
+      profile.versionArgs,
+      profile.workingDirectory ?? process.cwd(),
+      ['ignore', 'pipe', 'pipe'],
+    )
+    if (!profile.versionArgs.length) return `CLI via ${describeResolvedCommand(spec.resolved)}`
+    const child = launchProcess(spec)
     const output: Buffer[] = []
     const errors: Buffer[] = []
-    child.stdout.on('data', (chunk: Buffer) => output.push(chunk))
-    child.stderr.on('data', (chunk: Buffer) => errors.push(chunk))
+    child.stdout?.on('data', (chunk: Buffer) => output.push(chunk))
+    child.stderr?.on('data', (chunk: Buffer) => errors.push(chunk))
     let timeout: ReturnType<typeof setTimeout> | undefined
-    const terminate = () => {
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
-    }
+    const terminate = () => terminateProcess(child)
     try {
       const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
         (resolveExit, reject) => {
@@ -642,65 +707,111 @@ export class RuntimeManager {
           timeout = setTimeout(() => {
             terminate()
             reject(new Error('CLI_HEALTHCHECK_TIMEOUT'))
-          }, 5_000)
+          }, this.discoveryOptions.healthTimeoutMs ?? 5_000)
         },
       )
       const detail = Buffer.concat(errors).toString('utf8').trim().slice(-800)
       if (result.code !== 0)
         throw new Error(
-          `CLI_HEALTHCHECK_EXITED:${result.code ?? result.signal ?? 'unknown'}${detail ? `:${detail}` : ''}`,
+          `CLI_HEALTHCHECK_EXITED:${result.code ?? result.signal ?? 'unknown'}${detail ? `:${detail}` : ''} [launch=${describeResolvedCommand(spec.resolved)}]`,
         )
       const version = Buffer.concat(output).toString('utf8').trim().split(/\r?\n/, 1)[0]
-      return [version || profile.name, `via ${command}`].join(' · ')
+      return [version || profile.name, `via ${describeResolvedCommand(spec.resolved)}`].join(' · ')
     } finally {
       if (timeout) clearTimeout(timeout)
       terminate()
     }
   }
-  private acpCommand(profile: RuntimeProfile) {
-    if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
-    const env = this.acpEnvironment(profile)
-    const resolved = resolveExecutable(profile.command, env, { includeProjectBin: true })
-    if (!resolved) throw new Error(`ACP_SERVER_NOT_FOUND:${profile.command}`)
-    return resolved
-  }
-  private cliCommand(profile: RuntimeProfile) {
-    if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
-    const resolved = resolveExecutable(profile.command, this.acpEnvironment(profile))
-    if (!resolved) throw new Error(`AGENT_CLI_NOT_FOUND:${profile.command}`)
-    return resolved
-  }
-  private codexPath() {
-    const env = { ...process.env } as Record<string, string>
-    const command = process.env.CFLOW_CODEX_PATH ?? process.env.CODEX_PATH ?? 'codex'
-    const resolved = resolveExecutable(command, env)
-    if (!resolved) throw new Error(`CODEX_CLI_NOT_FOUND:${command}`)
-    return resolved
-  }
-  private claudePath() {
-    const env = { ...process.env } as Record<string, string>
-    const command = process.env.CFLOW_CLAUDE_PATH ?? process.env.CLAUDE_CODE_EXECUTABLE ?? 'claude'
-    const resolved = resolveExecutable(command, env)
-    if (!resolved) throw new Error(`CLAUDE_CODE_CLI_NOT_FOUND:${command}`)
-    return resolved
-  }
-  private acpEnvironment(profile: RuntimeProfile, effects: CapabilityEffect[] = []) {
+  private platformEnvironment() {
     const env: Record<string, string> = {}
+    const required =
+      process.platform === 'win32'
+        ? [
+            'PATH',
+            'PATHEXT',
+            'SystemRoot',
+            'ComSpec',
+            'USERPROFILE',
+            'HOMEDRIVE',
+            'HOMEPATH',
+            'APPDATA',
+            'LOCALAPPDATA',
+            'TEMP',
+            'TMP',
+          ]
+        : ['PATH', 'HOME', 'TMPDIR']
+    for (const key of required) {
+      const actual =
+        process.platform === 'win32'
+          ? Object.keys(process.env).find(
+              (candidate) => candidate.toLowerCase() === key.toLowerCase(),
+            )
+          : key
+      const value = actual ? process.env[actual] : undefined
+      if (value !== undefined) env[key] = value
+    }
+    return env
+  }
+  private bundledCodexPath() {
+    const targets: Record<string, [string, string]> = {
+      'darwin-x64': ['@openai/codex-darwin-x64', 'x86_64-apple-darwin'],
+      'darwin-arm64': ['@openai/codex-darwin-arm64', 'aarch64-apple-darwin'],
+      'linux-x64': ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl'],
+      'linux-arm64': ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'],
+      'win32-x64': ['@openai/codex-win32-x64', 'x86_64-pc-windows-msvc'],
+      'win32-arm64': ['@openai/codex-win32-arm64', 'aarch64-pc-windows-msvc'],
+    }
+    const target = targets[`${process.platform}-${process.arch}`]
+    if (!target)
+      throw new Error(`CODEX_BUNDLED_PLATFORM_UNSUPPORTED:${process.platform}-${process.arch}`)
+    let packageJson: string
+    try {
+      packageJson = moduleRequire.resolve(`${target[0]}/package.json`)
+    } catch {
+      throw new Error(`CODEX_BUNDLED_CLI_NOT_FOUND:${target[0]}`)
+    }
+    const executable = join(
+      dirname(packageJson),
+      'vendor',
+      target[1],
+      'bin',
+      process.platform === 'win32' ? 'codex.exe' : 'codex',
+    )
+    const resolved = existingExecutable(executable)
+    if (!resolved) throw new Error(`CODEX_BUNDLED_CLI_NOT_FOUND:${executable}`)
+    return resolved
+  }
+  private runtimeEnvironment(profile: RuntimeProfile, effects: CapabilityEffect[] = []) {
+    const env = this.platformEnvironment()
     for (const key of profile.envAllowlist) {
       const value = process.env[key]
       if (value !== undefined) env[key] = value
     }
-    if (profile.id === 'codex') {
-      env.CODEX_PATH = this.codexPath()
-      env.INITIAL_AGENT_MODE = effects.some((effect) => effect.type === 'file-write')
-        ? 'workspace-write'
-        : 'read-only'
-      env.NO_BROWSER ??= '1'
-      if (profile.model) env.CODEX_CONFIG = JSON.stringify({ model: profile.model })
-    }
-    if (profile.id === 'claude-code') {
-      env.CLAUDE_CODE_EXECUTABLE = this.claudePath()
-      if (profile.model) env.CLAUDE_MODEL_CONFIG = JSON.stringify({ model: profile.model })
+    const descriptor = adapterDescriptorForId(profile.id)
+    if (descriptor) {
+      Object.assign(env, descriptor.staticEnvironment)
+      if (profile.model && descriptor.modelEnvironment)
+        env[descriptor.modelEnvironment] = JSON.stringify({ model: profile.model })
+      if (descriptor.permissionMode)
+        env[descriptor.permissionMode.environment] = canChangeWorkspace(effects)
+          ? descriptor.permissionMode.workspaceWrite
+          : descriptor.permissionMode.readOnly
+      if (descriptor.nativeCommand) {
+        const override = process.env[descriptor.nativeCommand.overrideEnvironment]
+        if (override) {
+          const resolved = resolveCommandAliases(
+            [override],
+            this.commandResolutionOptions(process.env),
+          )
+          if (!resolved)
+            throw new Error(
+              `${profile.id === 'codex' ? 'CODEX_CLI_NOT_FOUND' : 'CLAUDE_CODE_CLI_NOT_FOUND'}:${override}`,
+            )
+          env[descriptor.nativeCommand.adapterEnvironment] = resolved.executable
+        } else if (descriptor.nativeCommand.bundled === 'codex') {
+          env[descriptor.nativeCommand.adapterEnvironment] = this.bundledCodexPath()
+        }
+      }
     }
     return env
   }
@@ -724,30 +835,21 @@ export class RuntimeManager {
     analysis?: RuntimeAnalysisOptions,
   ) {
     const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
-    const command = this.cliCommand(profile)
     const args = [
       ...profile.args,
       ...this.cliPermissionArgs(profile, effects, analysis),
       ...(profile.promptTransport === 'argument' ? [prompt] : []),
     ]
-    const child = spawn(command, args, {
-      cwd,
-      env: this.acpEnvironment(profile, effects),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: needsWindowsShell(command),
-      windowsHide: true,
-    })
+    const spec = this.launchSpec(profile, args, cwd, ['pipe', 'pipe', 'pipe'], effects)
+    const child = launchProcess(spec)
     const output: Buffer[] = []
     const errors: Buffer[] = []
     let outputBytes = 0
     let outputLimitExceeded = false
-    const terminate = () => {
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
-    }
+    const terminate = () => terminateProcess(child)
     const relayAbort = () => terminate()
     signal.addEventListener('abort', relayAbort, { once: true })
-    child.stdout.on('data', (chunk: Buffer) => {
+    child.stdout?.on('data', (chunk: Buffer) => {
       outputBytes += chunk.length
       if (outputBytes > profile.maxOutputBytes) {
         outputLimitExceeded = true
@@ -756,10 +858,11 @@ export class RuntimeManager {
       }
       output.push(chunk)
     })
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr?.on('data', (chunk: Buffer) => {
       errors.push(chunk)
       if (Buffer.concat(errors).length > 65_536) errors.shift()
     })
+    if (!child.stdin) throw new Error('RUNTIME_STDIN_UNAVAILABLE')
     if (profile.promptTransport === 'stdin') child.stdin.end(prompt)
     else child.stdin.end()
     try {
@@ -798,25 +901,16 @@ export class RuntimeManager {
     analysis?: RuntimeAnalysisOptions,
   ) {
     const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
-    const command = this.acpCommand(profile)
-    const child = spawn(command, profile.args, {
-      cwd,
-      env: this.acpEnvironment(profile, effects),
-      stdio: ['pipe', 'pipe', 'pipe'],
-      shell: needsWindowsShell(command),
-      windowsHide: true,
-    })
+    const spec = this.launchSpec(profile, profile.args, cwd, ['pipe', 'pipe', 'pipe'], effects)
+    const child = launchProcess(spec)
     let stderr = Buffer.alloc(0)
     let stderrText = ''
-    child.stderr.on('data', (chunk: Buffer) => {
+    child.stderr?.on('data', (chunk: Buffer) => {
       stderr = Buffer.concat([stderr, chunk])
       if (stderr.length > 65_536) stderr = stderr.subarray(stderr.length - 65_536)
       stderrText = stderr.toString('utf8')
     })
-    const terminate = () => {
-      child.kill('SIGTERM')
-      setTimeout(() => child.kill('SIGKILL'), 1_000).unref()
-    }
+    const terminate = () => terminateProcess(child)
     const relayAbort = () => terminate()
     signal.addEventListener('abort', relayAbort, { once: true })
     const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(

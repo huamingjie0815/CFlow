@@ -1,25 +1,24 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { delimiter, join } from 'node:path'
 import {
   defaultRuntimeProfiles,
   defaultWorkspaceSettings,
   discoverRuntimeProfiles,
+  RuntimeExecutionException,
   RuntimeManager,
 } from './runtime.js'
 import { Store } from './db.js'
 
 test('discovers generic ACP runtime commands from PATH', () => {
   const directory = join('/tmp', `cf-acp-discovery-${randomUUID()}`)
-  const command = join(directory, 'example-agent-acp.cmd')
+  const command = join(directory, 'example-agent-acp')
   const previousPath = process.env.PATH
-  const previousPathExt = process.env.PATHEXT
   mkdirSync(directory, { recursive: true })
-  writeFileSync(command, '@echo off\nexit /b 0\n')
+  writeFileSync(command, '#!/bin/sh\nexit 0\n')
   chmodSync(command, 0o755)
-  process.env.PATHEXT = '.COM;.EXE;.BAT;.CMD;.PS1'
   process.env.PATH = [directory, previousPath].filter(Boolean).join(delimiter)
   try {
     const runtime = defaultRuntimeProfiles().find((profile) => profile.id === 'example-agent-acp')
@@ -28,9 +27,37 @@ test('discovers generic ACP runtime commands from PATH', () => {
     assert.equal(runtime?.name, 'Example Agent ACP')
   } finally {
     process.env.PATH = previousPath
-    if (previousPathExt === undefined) delete process.env.PATHEXT
-    else process.env.PATHEXT = previousPathExt
     rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('adds known external ACP adapters only when their local commands exist', () => {
+  const root = join('/tmp', `cf-known-acp-${randomUUID()}`)
+  const bin = join(root, 'bin')
+  mkdirSync(bin, { recursive: true })
+  for (const command of ['amp-acp', 'copilot']) {
+    writeFileSync(join(bin, command), '#!/bin/sh\nexit 0\n')
+    chmodSync(join(bin, command), 0o755)
+  }
+  try {
+    const discovery = discoverRuntimeProfiles({
+      projectRoot: root,
+      env: { PATH: bin, HOME: root },
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      includeBuiltins: false,
+    })
+    assert.equal(discovery.profiles.find((profile) => profile.id === 'amp')?.command, 'amp-acp')
+    assert.equal(
+      discovery.profiles.some((profile) => profile.id === 'pi'),
+      false,
+    )
+    assert.deepEqual(discovery.profiles.find((profile) => profile.id === 'github-copilot')?.args, [
+      '--acp',
+    ])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })
 
@@ -243,6 +270,147 @@ process.stdin.on('data', (chunk) => {
     assert.equal(health.status, 'available')
     assert.equal(health.stage, 'protocol-ready')
     assert.match(health.version ?? '', /Fake ACP 1\.0\.0/)
+  } finally {
+    store.close()
+    process.env.PATH = previousPath
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('bundled Codex and Claude adapters initialize without global agent CLIs', async () => {
+  const root = join('/tmp', `cf-bundled-adapters-${randomUUID()}`)
+  const bin = join(root, 'bin')
+  const previousPath = process.env.PATH
+  const previousCodex = process.env.CFLOW_CODEX_PATH
+  const previousClaude = process.env.CFLOW_CLAUDE_PATH
+  const previousCodexHome = process.env.CODEX_HOME
+  mkdirSync(bin, { recursive: true })
+  mkdirSync(join(root, 'codex-home'), { recursive: true })
+  symlinkSync(process.execPath, join(bin, 'node'))
+  process.env.PATH = bin
+  delete process.env.CFLOW_CODEX_PATH
+  delete process.env.CFLOW_CLAUDE_PATH
+  process.env.CODEX_HOME = join(root, 'codex-home')
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      healthTimeoutMs: 8_000,
+    })
+    const [codex, claude] = await Promise.all([
+      manager.health('codex'),
+      manager.health('claude-code'),
+    ])
+    assert.equal(codex.status, 'available', codex.error)
+    assert.equal(claude.status, 'available', claude.error)
+    assert.match(codex.version ?? '', /bundled-bin/)
+    assert.match(claude.version ?? '', /bundled-bin/)
+  } finally {
+    store.close()
+    process.env.PATH = previousPath
+    if (previousCodex === undefined) delete process.env.CFLOW_CODEX_PATH
+    else process.env.CFLOW_CODEX_PATH = previousCodex
+    if (previousClaude === undefined) delete process.env.CFLOW_CLAUDE_PATH
+    else process.env.CFLOW_CLAUDE_PATH = previousClaude
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = previousCodexHome
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('ACP health reports handshake timeout, stderr and resolved launch details', async () => {
+  const root = join('/tmp', `cf-acp-diagnostics-${randomUUID()}`)
+  const previousPath = process.env.PATH
+  mkdirSync(root, { recursive: true })
+  const hanging = join(root, 'hanging-acp')
+  const failing = join(root, 'failing-acp')
+  writeFileSync(hanging, '#!/usr/bin/env node\nprocess.stdin.resume()\n')
+  writeFileSync(
+    failing,
+    '#!/usr/bin/env node\nprocess.stderr.write("adapter setup failed\\n")\nprocess.exit(2)\n',
+  )
+  chmodSync(hanging, 0o755)
+  chmodSync(failing, 0o755)
+  process.env.PATH = [root, previousPath].filter(Boolean).join(delimiter)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      includeBuiltins: false,
+      healthTimeoutMs: 500,
+    })
+    const timedOut = await manager.health('hanging-acp')
+    const failed = await manager.health('failing-acp')
+    assert.equal(timedOut.status, 'unavailable')
+    assert.match(timedOut.error ?? '', /ACP_HANDSHAKE_TIMEOUT/)
+    assert.match(timedOut.error ?? '', /\[launch=native /)
+    assert.equal(failed.status, 'unavailable')
+    assert.match(failed.error ?? '', /adapter setup failed/)
+    assert.match(failed.error ?? '', /\[launch=native /)
+  } finally {
+    store.close()
+    process.env.PATH = previousPath
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('cancels a running ACP session and terminates its child process', async () => {
+  const root = join('/tmp', `cf-acp-cancel-${randomUUID()}`)
+  const previousPath = process.env.PATH
+  mkdirSync(root, { recursive: true })
+  const executable = join(root, 'cancel-acp')
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+let buffer = ''
+let requestCount = 0
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    requestCount += 1
+    if (requestCount === 1) {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        protocolVersion: request.params.protocolVersion,
+        agentCapabilities: {}, authMethods: []
+      } }) + '\\n')
+    } else if (requestCount === 2) {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        sessionId: 'cancel-session'
+      } }) + '\\n')
+    }
+  }
+})
+`,
+  )
+  chmodSync(executable, 0o755)
+  process.env.PATH = [root, previousPath].filter(Boolean).join(delimiter)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      includeBuiltins: false,
+    })
+    const controller = new AbortController()
+    const execution = manager.execute('cancel-acp', 'wait', {}, controller.signal)
+    setTimeout(() => controller.abort(), 100)
+    await assert.rejects(execution, (error) => {
+      assert.ok(error instanceof RuntimeExecutionException)
+      assert.equal(error.details.code, 'RUN_CANCELLED')
+      return true
+    })
   } finally {
     store.close()
     process.env.PATH = previousPath

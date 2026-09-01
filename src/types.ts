@@ -211,6 +211,10 @@ export interface WorkspaceSettings {
   updatedAt: string
 }
 
+export interface WorkspaceInfo {
+  root: string
+}
+
 export type RuntimeExecutionError = {
   layer: 'adapter' | 'runtime' | 'permission' | 'engine'
   code: string
