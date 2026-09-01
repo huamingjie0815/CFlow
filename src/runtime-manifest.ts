@@ -88,7 +88,7 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
     permissionMode: {
       environment: 'INITIAL_AGENT_MODE',
       readOnly: 'read-only',
-      workspaceWrite: 'workspace-write',
+      workspaceWrite: 'agent',
     },
     staticEnvironment: { NO_BROWSER: '1' },
   },

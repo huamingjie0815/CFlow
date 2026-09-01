@@ -7,6 +7,7 @@ import {
   defaultRuntimeProfiles,
   defaultWorkspaceSettings,
   discoverRuntimeProfiles,
+  isAcpToolAllowed,
   RuntimeExecutionException,
   RuntimeManager,
 } from './runtime.js'
@@ -129,6 +130,62 @@ test('loads package manifests and keeps Codex and Claude Code built in', () => {
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('auto-allows declared ACP effects inside the workspace and rejects unsafe requests', () => {
+  const root = '/tmp/cflow-workspace'
+  const effects = [
+    { type: 'file-read', scope: 'workspace', description: '读取工作区文件' },
+    { type: 'file-write', scope: 'workspace', description: '修改工作区文件' },
+    { type: 'command', scope: 'workspace', description: '运行工作区命令' },
+  ] as const
+  assert.equal(
+    isAcpToolAllowed(
+      { kind: 'file-write', locations: [{ path: 'src/index.ts' }] },
+      [...effects],
+      root,
+      root,
+    ),
+    true,
+  )
+  assert.equal(
+    isAcpToolAllowed(
+      { kind: 'command', rawInput: { command: 'pnpm test' } },
+      [...effects],
+      root,
+      root,
+    ),
+    true,
+  )
+  assert.equal(
+    isAcpToolAllowed(
+      { kind: 'file-write', locations: [{ path: '/tmp/outside.txt' }] },
+      [...effects],
+      root,
+      root,
+    ),
+    false,
+  )
+  assert.equal(
+    isAcpToolAllowed(
+      { kind: 'file-delete', locations: [{ path: 'src/index.ts' }] },
+      [],
+      root,
+      root,
+    ),
+    false,
+  )
+  assert.equal(isAcpToolAllowed({ kind: 'file-read' }, [], root, root, true), false)
+  assert.equal(
+    isAcpToolAllowed(
+      { kind: 'file-read', locations: [{ path: 'src/index.ts' }] },
+      [],
+      root,
+      root,
+      true,
+    ),
+    true,
+  )
 })
 
 test('executes a discovered CLI runtime as a bounded child process', async () => {

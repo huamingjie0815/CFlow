@@ -58,6 +58,61 @@ export type RuntimeAnalysisOptions = {
   cwd: string
   allowedRoot: string
 }
+
+type AcpPermissionTool = {
+  kind?: unknown
+  name?: unknown
+  title?: unknown
+  locations?: unknown
+  rawInput?: unknown
+}
+
+export function isAcpToolAllowed(
+  tool: AcpPermissionTool,
+  effects: CapabilityEffect[],
+  root: string | undefined,
+  cwd: string,
+  analysis = false,
+) {
+  const kind = String(tool.kind ?? tool.name ?? tool.title ?? '').toLowerCase()
+  const effectType =
+    kind.includes('read') || kind.includes('search')
+      ? 'file-read'
+      : kind.includes('edit') ||
+          kind.includes('write') ||
+          kind.includes('delete') ||
+          kind.includes('move')
+        ? 'file-write'
+        : kind.includes('exec') || kind.includes('command') || kind.includes('terminal')
+          ? 'command'
+          : undefined
+  const declared = effectType
+    ? analysis && effectType === 'file-read'
+      ? true
+      : effects.some((effect) => effect.type === effectType && effect.scope === 'workspace')
+    : false
+  const locations = Array.isArray(tool.locations) ? [...tool.locations] : []
+  if (tool.rawInput && typeof tool.rawInput === 'object') {
+    for (const key of ['path', 'file', 'filePath', 'filename']) {
+      const value = (tool.rawInput as Record<string, unknown>)[key]
+      if (typeof value === 'string') locations.push(value)
+    }
+  }
+  const inWorkspace = locations.every((location: any) => {
+    let value = typeof location === 'string' ? location : (location?.path ?? location?.uri)
+    if (typeof value === 'string' && value.startsWith('file://')) {
+      try {
+        value = new URL(value).pathname
+      } catch {
+        return false
+      }
+    }
+    if (typeof value === 'string' && !isAbsolute(value)) value = resolve(cwd, value)
+    return Boolean(root) && (!value || isWithinDirectory(root!, value))
+  })
+  const scopedRead = !analysis || effectType !== 'file-read' || locations.length > 0
+  return Boolean(declared && inWorkspace && scopedRead)
+}
 const defaultTraits = (overrides: Partial<ExecutorRuntimeTraits> = {}): ExecutorRuntimeTraits => ({
   backendKind: 'acp',
   sessionMode: 'per-cf-call',
@@ -927,47 +982,8 @@ export class RuntimeManager {
       return await acpClient({ name: 'CFlow' })
         .onRequest(methods.client.session.requestPermission, async (ctx: any) => {
           const tool = ctx?.params?.toolCall ?? ctx?.toolCall ?? {}
-          const kind = String(tool.kind ?? tool.name ?? tool.title ?? '').toLowerCase()
-          const effectType =
-            kind.includes('read') || kind.includes('search')
-              ? 'file-read'
-              : kind.includes('edit') ||
-                  kind.includes('write') ||
-                  kind.includes('delete') ||
-                  kind.includes('move')
-                ? 'file-write'
-                : kind.includes('exec') || kind.includes('command') || kind.includes('terminal')
-                  ? 'command'
-                  : undefined
           const root = analysis?.allowedRoot ?? context?.workspaceRoot
-          const declared = effectType
-            ? analysis && effectType === 'file-read'
-              ? true
-              : effects.some((effect) => effect.type === effectType && effect.scope === 'workspace')
-            : false
-          const locations = Array.isArray(tool.locations) ? [...tool.locations] : []
-          const raw = tool.rawInput
-          if (raw && typeof raw === 'object') {
-            for (const key of ['path', 'file', 'filePath', 'filename']) {
-              const value = (raw as any)[key]
-              if (typeof value === 'string') locations.push(value)
-            }
-          }
-          const inWorkspace = locations.every((location: any) => {
-            let value = typeof location === 'string' ? location : (location?.path ?? location?.uri)
-            if (typeof value === 'string' && value.startsWith('file://')) {
-              try {
-                value = new URL(value).pathname
-              } catch {
-                return false
-              }
-            }
-            if (analysis && typeof value === 'string' && !isAbsolute(value))
-              value = resolve(cwd, value)
-            return Boolean(root) && (!value || isWithinDirectory(root!, value))
-          })
-          const scopedRead = !analysis || effectType !== 'file-read' || locations.length > 0
-          if (!declared || !inWorkspace || !scopedRead) {
+          if (!isAcpToolAllowed(tool, effects, root, cwd, Boolean(analysis))) {
             permissionDenied = true
             const option = ctx?.params?.options?.find((o: any) =>
               String(o.kind).startsWith('reject'),

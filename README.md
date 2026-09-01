@@ -79,6 +79,7 @@ npm start
 - Runtime 配置每次保存都会生成不可变 Profile 版本；发布 Flow 时会 pin 精确 Profile 版本，Run Ledger 记录实际执行版本。
 - 设置页只读展示当前工作区，并提供默认 Agent 和测试最长等待时间；资源绑定按需放在折叠的高级区域。
 - Runtime 必须返回符合 CF output contract 的 JSON，否则 Flow fail closed。
+- Runtime 工具请求默认按 CF 的 effects 自动授权：已声明且位于工作区内的读写和命令操作无需逐次确认；未声明能力或工作区外路径会被拒绝。Flow 中显式的人工审批节点仍需单独批准。
 - Flow/CF 草稿会保存到 SQLite；Resource Profile 可在设置中创建、编辑与删除。
 
 非内置 Agent 可以通过 JSON manifest 接入。项目级文件放在 `<workspace>/.cflow/agents.d/*.json`，用户级文件放在 `~/.config/cflow/agents.d/*.json`；项目配置优先级更高。最小示例：
