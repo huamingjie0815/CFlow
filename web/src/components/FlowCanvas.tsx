@@ -25,7 +25,7 @@ import { nodeKindLabel } from '../copy'
 import { describeNode, edgeLabel, nodeConfigNote } from '../flow-labels'
 import { nodeRunStateLabel, nodeRunStateTone, type NodeRunState } from '../run'
 import type { CanvasPosition, CFDraft, CFVersion, FlowDraft, FlowNode } from '../types'
-import { reconcileCanvasNodes } from '../workbench-ui'
+import { arrangeCanvasPositions, reconcileCanvasNodes } from '../workbench-ui'
 
 type FlowCanvasProps = {
   draft: FlowDraft
@@ -90,11 +90,6 @@ function EntryCard() {
 
 const nodeTypes = { flowCard: FlowCard, entry: EntryCard }
 
-function defaultPosition(index: number, total: number) {
-  const columns = Math.max(1, Math.ceil(Math.sqrt(total)))
-  return { x: 180 + (index % columns) * 270, y: 150 + Math.floor(index / columns) * 190 }
-}
-
 function FlowCanvasInner(props: FlowCanvasProps) {
   const {
     draft,
@@ -113,12 +108,16 @@ function FlowCanvasInner(props: FlowCanvasProps) {
   } = props
   const [viewportZoom, setViewportZoom] = useState(1)
   const mappedNodes = useMemo<Node<CardData>[]>(() => {
+    const arrangedPositions = arrangeCanvasPositions(
+      draft.nodes.map((node) => node.id),
+      draft.edges,
+    )
     const cards: Node<CardData>[] = draft.nodes.map((node, index) => {
       const copy = describeNode(node, cfs, candidateCfs)
       return {
         id: node.id,
         type: 'flowCard',
-        position: positions[node.id] ?? defaultPosition(index, draft.nodes.length),
+        position: positions[node.id] ?? arrangedPositions[node.id],
         selected: selectedNodeId === node.id,
         data: {
           kind: node.kind,
@@ -134,7 +133,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
       {
         id: '$entry',
         type: 'entry',
-        position: positions.$entry ?? { x: 24, y: 210 },
+        position: positions.$entry ?? arrangedPositions.$entry,
         data: { kind: 'entry', label: '开始', subtitle: '', state: flowState },
         draggable: true,
         deletable: false,
@@ -142,7 +141,16 @@ function FlowCanvasInner(props: FlowCanvasProps) {
       },
       ...cards,
     ]
-  }, [candidateCfs, cfs, draft.nodes, flowState, nodeRunStates, positions, selectedNodeId])
+  }, [
+    candidateCfs,
+    cfs,
+    draft.edges,
+    draft.nodes,
+    flowState,
+    nodeRunStates,
+    positions,
+    selectedNodeId,
+  ])
   const mappedEdges = useMemo<Edge[]>(
     () =>
       draft.edges.map((edge) => ({

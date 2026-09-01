@@ -1,3 +1,5 @@
+import type { FlowEdge } from './types'
+
 export type RunMode = 'test' | 'live' | null
 export type TestState = 'idle' | 'running' | 'passed' | 'failed' | 'cancelled' | 'published'
 export type DrawerTab = 'log' | 'check'
@@ -51,17 +53,67 @@ export function flowTestCounts(snapshots: readonly TestSnapshot[]): Record<strin
   return counts
 }
 
-/** Arrange the entry point and flow nodes on one centered vertical axis. */
-export function arrangeCanvasPositions(nodeIds: readonly string[]): Record<string, { x: number; y: number }> {
+/** Arrange a DAG in vertical layers, spreading sibling branches horizontally. */
+export function arrangeCanvasPositions(
+  nodeIds: readonly string[],
+  edges: readonly Pick<FlowEdge, 'from' | 'to'>[] = [],
+): Record<string, { x: number; y: number }> {
   const nodeX = 220
   const entryX = 262
   const entryY = 32
   const firstNodeY = 132
   const nodeGap = 190
+  const columnGap = 260
+  const nodeSet = new Set(nodeIds)
+  const incoming = new Map<string, number>(nodeIds.map((id) => [id, 0]))
+  const outgoing = new Map<string, string[]>(nodeIds.map((id) => [id, []]))
+  for (const edge of edges) {
+    if (!nodeSet.has(edge.to)) continue
+    if (edge.from !== '$entry' && !nodeSet.has(edge.from)) continue
+    if (edge.from !== '$entry') {
+      incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + 1)
+      outgoing.get(edge.from)!.push(edge.to)
+    }
+  }
+
+  const ranks = new Map<string, number>()
+  const queue = nodeIds.filter((id) => incoming.get(id) === 0)
+  for (const id of queue) ranks.set(id, 1)
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const current = queue[cursor]
+    const nextRank = (ranks.get(current) ?? 1) + 1
+    for (const next of outgoing.get(current) ?? []) {
+      ranks.set(next, Math.max(ranks.get(next) ?? 1, nextRank))
+      const remaining = (incoming.get(next) ?? 1) - 1
+      incoming.set(next, remaining)
+      if (remaining === 0) queue.push(next)
+    }
+  }
+  // Keep malformed or temporarily disconnected drafts visible instead of stacking them.
+  let fallbackRank = Math.max(0, ...ranks.values()) + 1
+  for (const id of nodeIds) {
+    if (!ranks.has(id)) ranks.set(id, fallbackRank++)
+  }
+
+  const layers = new Map<number, string[]>()
+  for (const id of nodeIds) {
+    const rank = ranks.get(id)!
+    const layer = layers.get(rank) ?? []
+    layer.push(id)
+    layers.set(rank, layer)
+  }
   return {
     $entry: { x: entryX, y: entryY },
     ...Object.fromEntries(
-      nodeIds.map((id, index) => [id, { x: nodeX, y: firstNodeY + index * nodeGap }]),
+      [...layers.entries()].flatMap(([rank, ids]) =>
+        ids.map((id, index) => [
+          id,
+          {
+            x: nodeX + (index - (ids.length - 1) / 2) * columnGap,
+            y: firstNodeY + (rank - 1) * nodeGap,
+          },
+        ]),
+      ),
     ),
   }
 }

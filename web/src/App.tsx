@@ -915,7 +915,7 @@ export function App() {
   }
   const arrangeLayout = () => {
     if (!draft) return
-    setPositions(arrangeCanvasPositions(draft.nodes.map((node) => node.id)))
+    setPositions(arrangeCanvasPositions(draft.nodes.map((node) => node.id), draft.edges))
     setLayoutRevision((revision) => revision + 1)
   }
   const addCapabilityNode = () => {

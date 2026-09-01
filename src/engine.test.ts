@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { Store } from './db.js'
 import { compileCF, compileFlow } from './compiler.js'
-import { builtins, Engine } from './engine.js'
+import { builtins, Engine, ExecutorRegistry } from './engine.js'
 import type { CFDraft, FlowDraft } from './types.js'
 
 async function waitFor(predicate: () => boolean, timeoutMs = 500, stepMs = 5) {
@@ -271,6 +271,67 @@ test('allows a shared downstream node after an exclusive branch', async () => {
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   assert.equal(store.getRun(runId)?.status, 'completed')
+  store.close()
+})
+
+test('completes through a terminal branch without running the continuing route', async () => {
+  const cf = compileCF({
+    cfId: 'continuing-work',
+    revision: 1,
+    name: 'Continue',
+    does: 'continue processing',
+    defaultExecutor: 'must-not-run',
+  })
+  const flow: FlowDraft = {
+    flowId: 'terminal-branch',
+    revision: 1,
+    name: 'Terminal branch',
+    objective: 'stop when done',
+    workspaceRoot: process.cwd(),
+    nodes: [
+      { id: 'route', kind: 'branch', cond: { $get: 'decision' }, cases: ['done', 'continue'] },
+      {
+        id: 'continue',
+        kind: 'cf-call',
+        cfRef: { cfId: cf.cfId, version: cf.version },
+      },
+      { id: 'out', kind: 'output', outputId: 'result' },
+    ],
+    edges: [
+      { id: 'entry', from: '$entry', to: 'route' },
+      {
+        id: 'done',
+        from: 'route',
+        to: 'out',
+        when: { outcome: 'branch-case', caseId: 'done' },
+      },
+      {
+        id: 'continue',
+        from: 'route',
+        to: 'continue',
+        when: { outcome: 'branch-case', caseId: 'continue' },
+      },
+      { id: 'continue-out', from: 'continue', to: 'out' },
+    ],
+  }
+  const plan = compileFlow(flow, new Map([[`${cf.cfId}@${cf.version}`, cf]]))
+  let executed = false
+  const executors = new ExecutorRegistry().register({
+    id: 'must-not-run',
+    execute: async () => {
+      executed = true
+      return {}
+    },
+  })
+  const store = new Store(`/tmp/cf-terminal-branch-${randomUUID()}.sqlite`)
+  const runId = randomUUID()
+  store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`, { decision: 'done' })
+  new Engine(store, executors, () => [cf]).start(runId, plan)
+
+  await waitFor(() => ['completed', 'failed'].includes(store.getRun(runId)?.status ?? ''))
+  assert.equal(store.getRun(runId)?.status, 'completed')
+  assert.equal(executed, false)
+  assert.ok(store.events(runId).some((event) => event.type === 'node.inactive' && event.node === 1))
   store.close()
 })
 

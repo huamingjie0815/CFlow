@@ -74,8 +74,8 @@ test('fans a branch out to every route and re-converges on the next stage', () =
         name: 'route by risk',
         cond: 'risk',
         routes: [
-          { caseId: 'high', condition: '高风险', stages: [stage('escalate')] },
-          { caseId: 'low', condition: '低风险', stages: [stage('auto-close')] },
+          { caseId: 'high', condition: '高风险', endsFlow: false, stages: [stage('escalate')] },
+          { caseId: 'low', condition: '低风险', endsFlow: false, stages: [stage('auto-close')] },
         ],
       },
       stage('report'),
@@ -95,26 +95,87 @@ test('fans a branch out to every route and re-converges on the next stage', () =
   assert.equal(plan.edges.filter((e) => e.when?.outcome === 'branch-case').length, 2)
 })
 
+test('allows a branch route to end the Flow immediately', () => {
+  const graph = buildProposalGraph(
+    [
+      {
+        kind: 'branch',
+        name: '是否需要继续处理',
+        cond: 'decision',
+        routes: [
+          { caseId: 'done', condition: '条件已满足，直接结束流程', stages: [], endsFlow: true },
+          {
+            caseId: 'continue',
+            condition: '仍需处理',
+            endsFlow: false,
+            stages: [stage('继续处理')],
+          },
+        ],
+      },
+    ],
+    { catalog: [], runtimeId: 'codex' },
+  )
+
+  const output = graph.nodes.at(-1)
+  assert.equal(output?.kind, 'output')
+  assert.ok(
+    graph.edges.some(
+      (edge) =>
+        edge.from === 'branch-1' &&
+        edge.to === output?.id &&
+        edge.when?.outcome === 'branch-case' &&
+        edge.when.caseId === 'done',
+    ),
+  )
+  compileProposal(graph)
+})
+
 test('rejects malformed branches', () => {
   const branch = (routes: unknown) => () =>
     buildProposalGraph([{ kind: 'branch', name: 'b', cond: 'x', routes }], { catalog: [] })
   assert.throws(
-    branch([{ caseId: 'only', condition: 'c', stages: [stage('a')] }]),
+    branch([{ caseId: 'only', condition: 'c', endsFlow: false, stages: [stage('a')] }]),
     /ROUTES_INVALID/,
   )
   assert.throws(
     branch([
-      { caseId: 'dup', condition: 'c', stages: [stage('a')] },
-      { caseId: 'dup', condition: 'c', stages: [stage('b')] },
+      { caseId: 'dup', condition: 'c', endsFlow: false, stages: [stage('a')] },
+      { caseId: 'dup', condition: 'c', endsFlow: false, stages: [stage('b')] },
     ]),
     /BRANCH_CASE_INVALID/,
   )
   assert.throws(
     branch([
-      { caseId: 'a', condition: 'c', stages: [] },
-      { caseId: 'b', condition: 'c', stages: [stage('b')] },
+      { caseId: 'a', condition: 'c', endsFlow: false, stages: [] },
+      { caseId: 'b', condition: 'c', endsFlow: false, stages: [stage('b')] },
     ]),
     /BRANCH_ROUTE_EMPTY/,
+  )
+  assert.throws(
+    branch([
+      { caseId: 'a', condition: 'c', endsFlow: true, stages: [stage('must-not-run')] },
+      { caseId: 'b', condition: 'c', endsFlow: false, stages: [stage('b')] },
+    ]),
+    /BRANCH_ROUTE_TERMINAL_WITH_STAGES/,
+  )
+  assert.throws(
+    () =>
+      buildProposalGraph(
+        [
+          {
+            kind: 'branch',
+            name: 'stop',
+            cond: 'route',
+            routes: [
+              { caseId: 'a', condition: 'a', endsFlow: true, stages: [] },
+              { caseId: 'b', condition: 'b', endsFlow: true, stages: [] },
+            ],
+          },
+          stage('unreachable'),
+        ],
+        { catalog: [] },
+      ),
+    /RUNTIME_PROPOSAL_AFTER_TERMINAL_BRANCH/,
   )
 })
 
@@ -137,12 +198,32 @@ test('grounding requires every stage, nested routes included, to quote the sourc
           { sourceQuote: 'First collect the data.' },
           {
             sourceQuote: 'Then escalate',
-            routes: [{ stages: [{ sourceQuote: 'escalate high risk' }] }],
+            routes: [
+              {
+                sourceQuote: 'high risk',
+                stages: [{ sourceQuote: 'escalate high risk' }],
+              },
+            ],
           },
         ],
       },
       contents,
     ),
+  )
+  assert.throws(
+    () =>
+      assertAttachmentGrounding(
+        {
+          stages: [
+            {
+              sourceQuote: 'Then escalate',
+              routes: [{ sourceQuote: 'invented terminal condition', stages: [] }],
+            },
+          ],
+        },
+        contents,
+      ),
+    /RUNTIME_PROPOSAL_UNGROUNDED:2/,
   )
   assert.throws(
     () => assertAttachmentGrounding({ stages: [{ sourceQuote: 'invented text' }] }, contents),

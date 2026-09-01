@@ -92,8 +92,16 @@ test('nested route stages are checked too, and reported by name', () => {
           name: '路由',
           sourceQuote: '若为“故障”，进入紧急通道',
           routes: [
-            { stages: [{ name: '紧急处理', sourceQuote: '进入紧急通道' }] },
-            { stages: [{ name: '编造的步骤', sourceQuote: '联系外部供应商索赔' }] },
+            {
+              condition: '故障',
+              sourceQuote: '若为“故障”',
+              stages: [{ name: '紧急处理', sourceQuote: '进入紧急通道' }],
+            },
+            {
+              condition: '其他',
+              sourceQuote: '其他类别按普通队列处理',
+              stages: [{ name: '编造的步骤', sourceQuote: '联系外部供应商索赔' }],
+            },
           ],
         },
       ],
