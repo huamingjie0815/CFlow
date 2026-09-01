@@ -51,6 +51,21 @@ export function flowTestCounts(snapshots: readonly TestSnapshot[]): Record<strin
   return counts
 }
 
+/** Arrange the entry point and flow nodes on one centered vertical axis. */
+export function arrangeCanvasPositions(nodeIds: readonly string[]): Record<string, { x: number; y: number }> {
+  const nodeX = 220
+  const entryX = 262
+  const entryY = 32
+  const firstNodeY = 132
+  const nodeGap = 190
+  return {
+    $entry: { x: entryX, y: entryY },
+    ...Object.fromEntries(
+      nodeIds.map((id, index) => [id, { x: nodeX, y: firstNodeY + index * nodeGap }]),
+    ),
+  }
+}
+
 /** Keep React Flow's measured geometry and live position while refreshing node content. */
 export function reconcileCanvasNodes<T extends CanvasNodeLike>(
   current: readonly T[],

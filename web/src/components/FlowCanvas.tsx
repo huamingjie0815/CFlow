@@ -30,6 +30,7 @@ import { reconcileCanvasNodes } from '../workbench-ui'
 type FlowCanvasProps = {
   draft: FlowDraft
   positions: Record<string, CanvasPosition>
+  layoutRevision: number
   cfs: CFVersion[]
   candidateCfs: CFDraft[]
   flowState: 'draft' | 'published'
@@ -58,7 +59,7 @@ function FlowCard({ data, selected }: NodeProps<Node<CardData>>) {
     <article
       className={`flow-card flow-card-${data.kind} is-${data.state}${selected ? ' is-selected' : ''}`}
     >
-      <Handle type="target" position={Position.Left} className="flow-handle" />
+      <Handle type="target" position={Position.Top} className="flow-handle" />
       <div className="flow-card-head">
         <span className="node-kind">{nodeKindLabel(data.kind)}</span>
         {data.index != null && (
@@ -72,7 +73,7 @@ function FlowCard({ data, selected }: NodeProps<Node<CardData>>) {
         <span className={`status-lamp is-${nodeRunStateTone(data.state)}`} />
         <span>{nodeRunStateLabel(data.state)}</span>
       </div>
-      <Handle type="source" position={Position.Right} className="flow-handle" />
+      <Handle type="source" position={Position.Bottom} className="flow-handle" />
     </article>
   )
 }
@@ -82,7 +83,7 @@ function EntryCard() {
     <div className="entry-card">
       <span className="entry-signal" />
       <span>开始</span>
-      <Handle type="source" position={Position.Right} className="flow-handle" />
+      <Handle type="source" position={Position.Bottom} className="flow-handle" />
     </div>
   )
 }
@@ -98,6 +99,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
   const {
     draft,
     positions,
+    layoutRevision,
     cfs,
     candidateCfs,
     flowState,
@@ -147,7 +149,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         id: edge.id,
         source: edge.from,
         target: edge.to,
-        type: 'smoothstep',
+        type: 'bezier',
         label: edgeLabel(edge, draft.nodes),
         selected: selectedEdgeId === edge.id,
         reconnectable: edge.from !== '$entry',
@@ -164,6 +166,13 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     [mappedNodes, setNodes],
   )
   useEffect(() => setEdges(mappedEdges), [mappedEdges, setEdges])
+
+  useEffect(() => {
+    setNodes(mappedNodes)
+    // mappedNodes is the latest snapshot when the explicit layout revision changes.
+    // Ordinary content refreshes must continue through reconcileCanvasNodes above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layoutRevision, setNodes])
 
   const connect = useCallback(
     (connection: Connection) => {

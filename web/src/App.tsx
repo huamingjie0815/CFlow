@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CirclePlay,
   CircleStop,
+  ListOrdered,
   GitBranch,
   GitMerge,
   Library,
@@ -33,6 +34,7 @@ import {
   draftSaveStatus,
   flowTestCounts,
   mergeAttachments,
+  arrangeCanvasPositions,
   nextSignalAction,
   runStopControl,
   type DrawerTab,
@@ -146,6 +148,7 @@ export function App() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<FlowDraft | null>(null)
   const [positions, setPositions] = useState<Record<string, CanvasPosition>>({})
+  const [layoutRevision, setLayoutRevision] = useState(0)
   const [candidateCfs, setCandidateCfs] = useState<CFDraft[]>([])
   // One transcript: the goal turn is simply the first turn of the same chat.
   const [conversation, setConversation] = useState<AgentChatMessage[]>([])
@@ -910,6 +913,11 @@ export function App() {
     setSelectedEdgeId(null)
     setSelectedNodeId(node.id)
   }
+  const arrangeLayout = () => {
+    if (!draft) return
+    setPositions(arrangeCanvasPositions(draft.nodes.map((node) => node.id)))
+    setLayoutRevision((revision) => revision + 1)
+  }
   const addCapabilityNode = () => {
     const cfId = uniqueId('cf')
     setCandidateCfs((current) => [
@@ -1202,6 +1210,15 @@ export function App() {
                   <Workflow size={15} />
                   能力
                 </button>
+                <button
+                  className="button"
+                  type="button"
+                  onClick={arrangeLayout}
+                  title="将入口和节点整理为从上到下的单列布局"
+                >
+                  <ListOrdered size={15} />
+                  整理布局
+                </button>
                 <span className="toolbar-divider" />
                 <button
                   type="button"
@@ -1361,6 +1378,7 @@ export function App() {
                   compact={Boolean(drawerTab)}
                   draft={draft}
                   positions={positions}
+                  layoutRevision={layoutRevision}
                   cfs={data?.cfs ?? []}
                   candidateCfs={candidateCfs}
                   flowState={testState === 'published' ? 'published' : 'draft'}

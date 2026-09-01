@@ -6,3 +6,4 @@ data/*.sqlite-wal
 test-results/
 .playwright-cli/
 .impeccable/
+output/

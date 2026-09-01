@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   canApplyAgentRevision,
+  arrangeCanvasPositions,
   draftSaveStatus,
   flowTestCounts,
   nextSignalAction,
@@ -119,6 +120,17 @@ test('refreshes canvas content without dropping measured node state', () => {
     },
     incoming[1],
   ])
+})
+
+test('arranges the entry and nodes in one vertical column', () => {
+  const positions = arrangeCanvasPositions(['step-2', 'branch-1', 'output-1'])
+
+  assert.deepEqual(positions, {
+    $entry: { x: 262, y: 32 },
+    'step-2': { x: 220, y: 132 },
+    'branch-1': { x: 220, y: 322 },
+    'output-1': { x: 220, y: 512 },
+  })
 })
 
 test('agent revisions only apply to the exact flow revision that was sent', () => {
