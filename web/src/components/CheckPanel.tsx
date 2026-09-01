@@ -76,6 +76,13 @@ export function CheckPanel(props: CheckPanelProps) {
         </div>
       )}
 
+      {!!preview?.warnings.length && (
+        <div className="inline-alert warning" role="status">
+          <strong>检查提醒</strong>
+          <span>{preview.warnings.map((warning) => warning.message).join('；')}</span>
+        </div>
+      )}
+
       <div className="check-body">
         {preview ? (
           <>

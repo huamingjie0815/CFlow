@@ -7,11 +7,12 @@ import { existsSync, realpathSync } from 'node:fs'
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { dirname, join, sep } from 'node:path'
 import { Store } from './db.js'
-import { compileCF, compileFlow } from './compiler.js'
+import { assertFileReferences, compileCF, compileFlow } from './compiler.js'
 import { Engine, builtins, newRunId } from './engine.js'
 import { RuntimeManager } from './runtime.js'
 import { sha256 } from './hash.js'
 import { initializeWorkspace, validateWorkspaceRoot } from './workspace.js'
+import { missingWorkspaceFiles, searchWorkspaceFiles } from './workspace-files.js'
 import {
   collectGroundingFailures,
   groundingError,
@@ -36,6 +37,7 @@ import {
 import type {
   CFDraft,
   CFVersion,
+  CompilationWarning,
   FlowCompilationSnapshot,
   FlowDraft,
   Json,
@@ -116,6 +118,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     plan: FlowPlan,
     programs: CFVersion[],
     runId?: string,
+    warnings?: CompilationWarning[],
   ) => {
     const snapshot: FlowCompilationSnapshot = {
       id: `${flowDraft.flowId}@${flowDraft.revision}:${mode}`,
@@ -125,6 +128,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       flowDraft,
       plan,
       programs,
+      ...(warnings?.length ? { warnings } : {}),
       runId,
       createdAt: new Date().toISOString(),
     }
@@ -157,7 +161,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     return resolved
   }
   const persistFlowProposal = async <
-    T extends { flowDraft: FlowDraft | null; attachmentSummary?: any },
+    T extends { flowDraft: FlowDraft | null; cfDrafts?: CFDraft[]; attachmentSummary?: any },
   >(
     proposal: T,
     attachments: PreparedAttachments | null,
@@ -185,7 +189,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         await rm(attachments.root, { recursive: true, force: true })
       }
     }
-    store.save('flow_drafts', draft.flowId, draft)
+    store.db.transaction(() => {
+      store.save('flow_drafts', draft.flowId, draft)
+      for (const cfDraft of proposal.cfDrafts ?? []) store.save('cf_drafts', cfDraft.cfId, cfDraft)
+    })()
     return {
       ...proposal,
       flowDraft: draft,
@@ -197,6 +204,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   app.register(fastifyStatic, { root: runtimePublicRoot })
   app.get('/', async (_, reply) => reply.sendFile('index.html'))
   app.get('/api/workspace', async () => ({ root: workspaceRoot }))
+  app.post<{ Body: { query?: string; selected?: string[] } }>(
+    '/api/workspace/files/search',
+    async (req) => searchWorkspaceFiles(workspaceRoot, req.body ?? {}),
+  )
   app.get('/api/settings', async () => runtimes.settings())
   app.put<{ Body: Partial<WorkspaceSettings> }>('/api/settings', async (req) =>
     runtimes.updateSettings(req.body ?? {}),
@@ -253,13 +264,31 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   })
   app.get('/api/flows', async () => store.list<FlowPlan>('flow_versions'))
   app.get('/api/flow-drafts', async () => store.list<FlowDraft>('flow_drafts'))
-  app.put<{ Params: { id: string }; Body: FlowDraft }>('/api/flow-drafts/:id', async (req) => {
-    if (req.params.id !== req.body.flowId) throw new Error('FLOW_DRAFT_ID_MISMATCH')
-    if (!req.body.flowId?.trim() || !req.body.name?.trim() || !req.body.objective?.trim())
+  app.put<{
+    Params: { id: string }
+    Body: { flowDraft: FlowDraft; cfDrafts: CFDraft[] }
+  }>('/api/flow-drafts/:id', async (req) => {
+    const { flowDraft, cfDrafts } = req.body ?? ({} as any)
+    if (req.params.id !== flowDraft?.flowId) throw new Error('FLOW_DRAFT_ID_MISMATCH')
+    if (!flowDraft.flowId?.trim() || !flowDraft.name?.trim() || !flowDraft.objective?.trim())
       throw new Error('FLOW_DRAFT_INVALID')
-    const draft = scopeFlowDraft(req.body)
-    store.save('flow_drafts', draft.flowId, draft)
-    return draft
+    if (!Array.isArray(cfDrafts)) throw new Error('CF_DRAFTS_REQUIRED')
+    const ids = new Set<string>()
+    for (const cfDraft of cfDrafts) {
+      if (!cfDraft.cfId?.trim() || !Number.isInteger(cfDraft.revision) || cfDraft.revision < 1)
+        throw new Error('CF_DRAFT_INVALID')
+      if (ids.has(cfDraft.cfId)) throw new Error('CF_DRAFT_DUPLICATE')
+      ids.add(cfDraft.cfId)
+      assertFileReferences(cfDraft.fileReferences)
+    }
+    const draft = scopeFlowDraft(flowDraft)
+    const stored = store.get<FlowDraft>('flow_drafts', draft.flowId)
+    if (stored && stored.revision > draft.revision) throw new Error('FLOW_DRAFT_STALE')
+    store.db.transaction(() => {
+      store.save('flow_drafts', draft.flowId, draft)
+      for (const cfDraft of cfDrafts) store.save('cf_drafts', cfDraft.cfId, cfDraft)
+    })()
+    return { flowDraft: draft, cfDrafts }
   })
   app.delete<{ Params: { id: string } }>('/api/flow-drafts/:id', async (req, reply) => {
     const result = store.db.prepare('DELETE FROM flow_drafts WHERE id=?').run(req.params.id) as {
@@ -298,6 +327,37 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     const plan = req.body.runtimeId
       ? await pinRuntimeProfiles(compiled, [...versions(), ...candidates])
       : compiled
+    const warnings: CompilationWarning[] = []
+    for (const node of selectedDraft.nodes) {
+      if (node.kind !== 'cf-call') continue
+      const version = catalog.get(`${node.cfRef.cfId}@${node.cfRef.version}`)
+      const hasFileAccess = (version?.draft.effects ?? []).some(
+        (effect) => effect.type === 'file-read' || effect.type === 'file-write',
+      )
+      if (!hasFileAccess || !version) continue
+      const fileReferences = version.draft.fileReferences ?? []
+      for (const path of await missingWorkspaceFiles(workspaceRoot, fileReferences)) {
+        warnings.push({
+          code: 'INDEXED_FILE_MISSING',
+          cfId: version.cfId,
+          nodeId: node.id,
+          path,
+          message: `引用文件不存在：${path}`,
+        })
+      }
+      const indexed = new Set(fileReferences)
+      for (const match of version.draft.does.matchAll(/@\{([^}]+)\}/g)) {
+        const path = match[1]
+        if (!indexed.has(path))
+          warnings.push({
+            code: 'FILE_MENTION_NOT_INDEXED',
+            cfId: version.cfId,
+            nodeId: node.id,
+            path,
+            message: `任务中的文件没有加入引用列表：${path}`,
+          })
+      }
+    }
     saveCompilationSnapshot(
       'preview',
       selectedDraft,
@@ -310,6 +370,8 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
             node.cfRef.version === version.version,
         ),
       ),
+      undefined,
+      warnings,
     )
     const referenced = new Set(
       selectedDraft.nodes
@@ -321,6 +383,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       programs: [...catalog.values()].filter((version) =>
         referenced.has(`${version.cfId}@${version.version}`),
       ),
+      warnings,
     }
   })
   app.post<{ Body: { objective: string; runtimeId?: string } }>(
@@ -581,7 +644,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       ]),
     )
     const selectedDraft = applyCompileRuntime(scopedDraft, req.body.runtimeId)
-    store.save('flow_drafts', scopedDraft.flowId, scopedDraft)
+    store.db.transaction(() => {
+      store.save('flow_drafts', scopedDraft.flowId, scopedDraft)
+      for (const cfDraft of req.body.cfDrafts ?? []) store.save('cf_drafts', cfDraft.cfId, cfDraft)
+    })()
     const compiled = compileFlow(selectedDraft, catalog)
     const plan = await pinRuntimeProfiles(compiled, [...versions(), ...candidateVersions])
     const programs = [...versions(), ...candidateVersions].filter((version) =>

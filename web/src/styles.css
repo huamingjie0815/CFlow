@@ -136,18 +136,12 @@ pre {
 }
 
 .brand-mark {
-  display: grid;
   width: 34px;
   height: 34px;
   flex: 0 0 auto;
-  place-items: center;
-  color: var(--accent);
-  background: var(--accent-soft);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  display: block;
+  border-radius: 8px;
+  user-select: none;
 }
 .new-flow-button {
   display: flex;
@@ -1674,6 +1668,123 @@ pre {
   color: var(--amber);
   line-height: 1.45;
 }
+.file-references {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+.file-references.is-inactive .file-reference-list {
+  opacity: 0.58;
+}
+.file-reference-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.file-reference-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.file-reference-heading strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+.file-reference-heading span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+.file-reference-trigger {
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+.file-reference-list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.file-reference-list li {
+  display: grid;
+  min-height: 30px;
+  grid-template-columns: 18px 14px minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  font:
+    9px 'SFMono-Regular',
+    Consolas,
+    monospace;
+}
+.file-reference-list li.is-missing {
+  color: var(--amber);
+}
+.file-reference-list li > span:nth-of-type(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-reference-order {
+  color: var(--faint);
+  text-align: center;
+}
+.file-reference-list .icon-button {
+  width: 26px;
+  height: 26px;
+}
+.file-reference-warnings {
+  display: grid;
+  gap: 3px;
+  color: var(--amber);
+  font-size: 9px;
+  line-height: 1.45;
+}
+.file-mention-field {
+  position: relative;
+}
+.file-mention-suggestions {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+.file-mention-suggestions button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  color: var(--text);
+  text-align: left;
+  background: var(--surface);
+  border: 0;
+  cursor: pointer;
+  font:
+    9px 'SFMono-Regular',
+    Consolas,
+    monospace;
+}
+.file-mention-suggestions button + button {
+  border-top: 1px solid var(--border);
+}
+.file-mention-suggestions button:hover,
+.file-mention-suggestions button[aria-selected='true'],
+.file-mention-suggestions button:focus-visible {
+  background: var(--accent-soft);
+}
+.file-mention-suggestions span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .checkbox-row {
   display: flex;
   align-items: center;
@@ -1690,6 +1801,115 @@ pre {
   transition:
     border-color 160ms ease,
     background-color 160ms ease;
+}
+
+.file-picker-popover {
+  position: fixed;
+  z-index: 12;
+  display: grid;
+  width: 364px;
+  max-height: 444px;
+  grid-template-rows: auto auto minmax(120px, 1fr) auto;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+}
+.file-picker-popover > header,
+.file-picker-popover > footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+}
+.file-picker-popover > header {
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+}
+.file-picker-popover > header > div {
+  display: grid;
+  gap: 2px;
+}
+.file-picker-popover > header strong {
+  font-size: 12px;
+}
+.file-picker-popover > header span,
+.file-picker-popover > footer > span {
+  color: var(--muted);
+  font-size: 9px;
+}
+.file-picker-search {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 12px 7px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: var(--inset);
+  border-radius: 7px;
+}
+.file-picker-search input {
+  min-width: 0;
+  height: 34px;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 11px;
+}
+.file-picker-results {
+  min-height: 0;
+  padding: 0 7px 7px;
+  overflow-y: auto;
+}
+.file-picker-results label {
+  display: grid;
+  min-height: 32px;
+  grid-template-columns: 16px 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  font:
+    9px 'SFMono-Regular',
+    Consolas,
+    monospace;
+}
+.file-picker-results label:hover {
+  background: var(--inset);
+}
+.file-picker-results input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.file-picker-results span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-picker-results p {
+  margin: 24px 10px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
+}
+.file-picker-results p.is-error {
+  color: var(--red);
+}
+.file-picker-popover > footer {
+  border-top: 1px solid var(--border);
+}
+.file-picker-popover > footer > span {
+  min-width: 0;
+  flex: 1;
+}
+.file-picker-popover > footer .button {
+  height: 30px;
 }
 .checkbox-row:hover {
   border-color: var(--border-strong);
@@ -2621,11 +2841,68 @@ pre {
   font-size: 11px;
 }
 .run-log-output {
-  max-width: 320px;
+  width: min(480px, 55%);
+  min-width: 220px;
   margin: 0 0 0 auto;
-  overflow: auto;
   color: var(--muted);
   font-size: 10px;
+}
+.run-log-output summary {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 13px minmax(0, 1fr);
+  align-items: start;
+  gap: 2px;
+  cursor: pointer;
+  list-style: none;
+}
+.run-log-output summary::-webkit-details-marker {
+  display: none;
+}
+.run-log-output summary svg {
+  margin-top: 2px;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.run-log-output[open] summary svg {
+  transform: rotate(90deg);
+}
+.run-log-output-label {
+  min-width: 0;
+}
+.run-log-output-label strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+}
+.run-log-output-label code {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.run-log-output summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.run-log-output[open] {
+  width: min(560px, 65%);
+}
+.run-log-output pre {
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding: 9px 10px;
+  overflow: auto;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .run-log-group + .run-log-group {
   margin-top: 10px;
@@ -2667,11 +2944,10 @@ pre {
 }
 .run-log-title strong {
   display: block;
-  overflow: hidden;
   font-size: 12px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 .run-log-title small {
   display: block;

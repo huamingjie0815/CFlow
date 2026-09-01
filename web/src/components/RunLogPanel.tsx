@@ -1,6 +1,13 @@
+import { ChevronRight } from 'lucide-react'
 import { useMemo } from 'react'
 import { nodeRunStateLabel, nodeRunStateTone } from '../run'
-import { buildRunLog, compactJson, type RunLogEntry, type RunLogGroup } from '../run-log'
+import {
+  buildRunLog,
+  compactJson,
+  formatJson,
+  type RunLogEntry,
+  type RunLogGroup,
+} from '../run-log'
 import { runStatusLabel } from '../copy'
 import type { CFDraft, CFVersion, FlowDraft, RunDetail, RunSummary } from '../types'
 
@@ -45,7 +52,7 @@ function TechnicalDetails({ entries }: { entries: RunLogEntry[] }) {
             <div>
               <h3>{entry.title}</h3>
             </div>
-            <code>{entry.type}</code>
+            <code title={entry.type}>{entry.type}</code>
           </header>
           <pre>
             <code>{entry.technical}</code>
@@ -154,7 +161,18 @@ export function RunLogPanel(props: RunLogPanelProps) {
                 </p>
               </div>
               {runOutput != null && (
-                <pre className="run-log-output">{compactJson(runOutput, 320)}</pre>
+                <details className="run-log-output">
+                  <summary>
+                    <ChevronRight aria-hidden="true" size={13} />
+                    <span className="run-log-output-label">
+                      <strong>运行结果</strong>
+                      <code>{compactJson(runOutput, 320)}</code>
+                    </span>
+                  </summary>
+                  <pre>
+                    <code>{formatJson(runOutput)}</code>
+                  </pre>
+                </details>
               )}
             </div>
             {log.run.entries.length > 0 && (

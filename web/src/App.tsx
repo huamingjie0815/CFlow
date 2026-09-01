@@ -130,6 +130,10 @@ function uniqueId(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 }
 
+function draftBundleSignature(flowDraft: FlowDraft, cfDrafts: CFDraft[]) {
+  return JSON.stringify([flowDraft, cfDrafts])
+}
+
 export function App() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<FlowDraft | null>(null)
@@ -160,12 +164,13 @@ export function App() {
   const [goal, setGoal] = useState('')
   const [skillAttachments, setSkillAttachments] = useState<File[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
   const [testingRuntimeId, setTestingRuntimeId] = useState<string | null>(null)
   const hydratedWorkspaceRef = useRef<string | null>(null)
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false)
+  const latestDraftRef = useRef({ draft, candidateCfs })
+  latestDraftRef.current = { draft, candidateCfs }
 
   const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap })
   const data = bootstrap.data
@@ -277,7 +282,7 @@ export function App() {
       ) {
         return current
       }
-      return { plan: snapshot.plan, programs: snapshot.programs }
+      return { plan: snapshot.plan, programs: snapshot.programs, warnings: snapshot.warnings ?? [] }
     })
   }, [data?.flowCompilations, draft?.flowId, draft?.revision])
 
@@ -304,13 +309,36 @@ export function App() {
   }
 
   const saveMutation = useMutation({
-    mutationFn: api.saveDraft,
-    onSuccess: () => {
-      setDirty(false)
-      void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
+    mutationFn: (snapshot: { flowDraft: FlowDraft; cfDrafts: CFDraft[]; signature: string }) =>
+      api.saveDraft(snapshot.flowDraft, snapshot.cfDrafts),
+    onSuccess: (saved, variables) => {
+      queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) => {
+        if (!current) return current
+        const cfById = new Map(current.cfDrafts.map((cf) => [cf.cfId, cf]))
+        for (const cf of saved.cfDrafts) cfById.set(cf.cfId, cf)
+        const flowDrafts = current.flowDrafts.some((item) => item.flowId === saved.flowDraft.flowId)
+          ? current.flowDrafts.map((item) =>
+              item.flowId === saved.flowDraft.flowId ? saved.flowDraft : item,
+            )
+          : [saved.flowDraft, ...current.flowDrafts]
+        return { ...current, flowDrafts, cfDrafts: [...cfById.values()] }
+      })
+      const current = latestDraftRef.current
+      if (
+        current.draft?.flowId === saved.flowDraft.flowId &&
+        draftBundleSignature(current.draft, current.candidateCfs) === variables.signature
+      )
+        setDirty(false)
     },
-    onError: (error) =>
-      setNotice({ tone: 'error', title: '自动保存失败', detail: readableError(error) }),
+    onError: (error, variables) => {
+      const current = latestDraftRef.current
+      if (
+        current.draft &&
+        draftBundleSignature(current.draft, current.candidateCfs) !== variables.signature
+      )
+        return
+      setNotice({ tone: 'error', title: '自动保存失败', detail: readableError(error) })
+    },
   })
   const deleteDraftMutation = useMutation({
     mutationFn: api.deleteDraft,
@@ -366,9 +394,14 @@ export function App() {
   })
   useEffect(() => {
     if (!dirty || !draft) return
-    const timer = window.setTimeout(() => saveMutation.mutate(draft), 900)
+    const snapshot = {
+      flowDraft: structuredClone(draft),
+      cfDrafts: structuredClone(candidateCfs),
+      signature: draftBundleSignature(draft, candidateCfs),
+    }
+    const timer = window.setTimeout(() => saveMutation.mutate(snapshot), 900)
     return () => window.clearTimeout(timer)
-  }, [dirty, draft])
+  }, [candidateCfs, dirty, draft])
 
   const compileMutation = useMutation({
     mutationFn: () => api.compile(draft!, candidateCfs, compileRuntimeId),
@@ -458,7 +491,7 @@ export function App() {
     onSuccess: (result) => {
       setRunId(result.runId)
       setInspectedRunId(result.runId)
-      setPreview({ plan: result.plan, programs: result.programs })
+      setPreview({ plan: result.plan, programs: result.programs, warnings: [] })
     },
     onError: (error) => {
       const detail = readableError(error)
@@ -706,11 +739,28 @@ export function App() {
     setPreviewError(null)
   }
   const updateCandidateCf = (next: CFDraft) => {
+    setDirty(true)
     setCandidateCfs((current) => {
       const index = current.findIndex((item) => item.cfId === next.cfId)
       if (index < 0) return [...current, next]
       return current.map((item, itemIndex) => (itemIndex === index ? next : item))
     })
+  }
+
+  const persistCurrentDraft = async () => {
+    const current = latestDraftRef.current
+    if (!dirty || !current.draft) return true
+    const snapshot = {
+      flowDraft: structuredClone(current.draft),
+      cfDrafts: structuredClone(current.candidateCfs),
+      signature: draftBundleSignature(current.draft, current.candidateCfs),
+    }
+    try {
+      await saveMutation.mutateAsync(snapshot)
+      return true
+    } catch {
+      return false
+    }
   }
 
   const openCheck = () => {
@@ -719,9 +769,8 @@ export function App() {
     if (!preview && !compileMutation.isPending) compileMutation.mutate()
   }
 
-  const newFlow = () => {
-    if (draft && dirty && !window.confirm('当前流程还没保存。确定要新建吗？未保存的修改会丢失。'))
-      return
+  const newFlow = async () => {
+    if (!(await persistCurrentDraft())) return
     clearWorkspace()
   }
 
@@ -794,6 +843,7 @@ export function App() {
             node.cfRef.version === cf.version,
         ),
       ),
+      warnings: [],
     })
     setDrawerTab(null)
   }
@@ -871,7 +921,7 @@ export function App() {
   if ((bootstrap.isPending && !data) || (data && !workspaceHydrated))
     return (
       <div className="boot-screen">
-        <span className="brand-mark">CF</span>
+        <img className="brand-mark" src="/cflow-mark.svg" alt="CFlow" draggable={false} />
         <LoaderCircle className="spin" size={20} />
         <p>正在连接本地工作台…</p>
       </div>
@@ -902,7 +952,8 @@ export function App() {
       ? `${deletePlanMutation.variables.flowId}@${deletePlanMutation.variables.flowVersion}`
       : null
 
-  const selectFlowRow = (row: FlowListRow) => {
+  const selectFlowRow = async (row: FlowListRow) => {
+    if (!(await persistCurrentDraft())) return
     if (row.kind === 'draft') {
       const target = currentDrafts.find((item) => item.flowId === row.flowId)
       if (target) selectDraft(target)

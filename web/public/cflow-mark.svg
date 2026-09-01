@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">CFlow</title>
+  <desc id="desc">A continuous white workflow path forming the letter C on a charcoal background.</desc>
+  <rect width="64" height="64" rx="14" fill="#171A1F"/>
+  <g transform="rotate(-90 32 32)">
+    <path
+      d="M47 17H31C21.61 17 14 24.61 14 34s7.61 17 17 17h15"
+      fill="none"
+      stroke="#F8FAFC"
+      stroke-width="4.5"
+      stroke-linecap="round"
+    />
+    <circle cx="47" cy="17" r="3.4" fill="#F8FAFC"/>
+    <path
+      d="m40.5 44.5 6.5 6.5-6.5 6.5"
+      fill="none"
+      stroke="#F8FAFC"
+      stroke-width="4.5"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+  </g>
+</svg>

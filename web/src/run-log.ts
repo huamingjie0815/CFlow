@@ -54,6 +54,11 @@ export function compactJson(value: unknown, limit = 200) {
   return json.length > limit ? `${json.slice(0, limit - 1)}…` : json
 }
 
+export function formatJson(value: unknown) {
+  const json = JSON.stringify(value, null, 2)
+  return json ?? ''
+}
+
 const readField = (event: LedgerEvent, key: string) =>
   (event.data as Record<string, unknown> | undefined)?.[key]
 
@@ -122,12 +127,12 @@ export function describeLedgerEvent(
         return {
           title: '需要人工核对',
           detail: `有 ${nodes.length} 个步骤的结果无法确认，请人工核对后再继续。`,
-          technical: compactJson(event.data),
+          technical: formatJson(event.data),
         }
       return {
         title: named('需要人工核对', '需要人工核对'),
         detail: '这一步可能已经产生了影响，但结果没有确认。请人工核对后再继续。',
-        technical: error === undefined ? undefined : compactJson(error),
+        technical: error === undefined ? undefined : formatJson(error),
       }
     }
     case 'resources.bound': {
@@ -135,7 +140,7 @@ export function describeLedgerEvent(
       return {
         title: '已绑定运行资料',
         detail: count ? `这次运行可以使用 ${count} 项资料。` : '这次运行不需要额外资料。',
-        technical: compactJson(event.data),
+        technical: formatJson(event.data),
       }
     }
     case 'resource.access': {
@@ -143,7 +148,7 @@ export function describeLedgerEvent(
       return {
         title: named('使用了资料', '使用了资料'),
         detail: count ? `这一步用到了 ${count} 项已授权资料。` : '这一步用到了已授权资料。',
-        technical: compactJson(event.data),
+        technical: formatJson(event.data),
       }
     }
     case 'approval.requested':
@@ -160,7 +165,7 @@ export function describeLedgerEvent(
         title: named('完成', '步骤完成'),
         detail:
           value === undefined || value === null ? '这一步已完成。' : '这一步已完成，产出了结果。',
-        technical: value === undefined ? undefined : compactJson(value),
+        technical: value === undefined ? undefined : formatJson(value),
       }
     }
     case 'node.failed': {
@@ -170,7 +175,7 @@ export function describeLedgerEvent(
       return {
         title: named('失败', '步骤失败'),
         detail: error === undefined ? '这一步执行失败。' : `错误：${String(error)}`,
-        technical: compactJson(event.data),
+        technical: formatJson(event.data),
       }
     }
     case 'node.inactive':
@@ -189,7 +194,7 @@ export function describeLedgerEvent(
       return {
         title: '运行记录',
         detail: '记录了一条运行事实，详情见技术细节。',
-        technical: compactJson({ type: event.type, data: event.data }),
+        technical: formatJson({ type: event.type, data: event.data }),
       }
   }
 }

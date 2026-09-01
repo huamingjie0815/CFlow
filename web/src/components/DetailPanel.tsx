@@ -1,6 +1,8 @@
 import { Link2, ListChecks, Plus, Trash2 } from 'lucide-react'
 import { nodeKindLabel } from '../copy'
 import { describeNode } from '../flow-labels'
+import { FileMentionField } from './FileMentionField'
+import { FileReferencePicker } from './FileReferencePicker'
 import type {
   CFDraft,
   CFVersion,
@@ -88,6 +90,12 @@ export function DetailPanel(props: DetailPanelProps) {
     : null
   const selectedCapabilityIsCandidate =
     selectedCfNode !== null && candidateCfs.some((item) => item.cfId === selectedCfNode.cfRef.cfId)
+  const hasFileAccess = (selectedCapability?.effects ?? []).some(
+    (effect) => effect.type === 'file-read' || effect.type === 'file-write',
+  )
+  const fileWarnings = selectedCfNode
+    ? (preview?.warnings ?? []).filter((warning) => warning.nodeId === selectedCfNode.id)
+    : []
   const updateNode = (next: FlowNode) => {
     if (!draft) return
     onDraftChange({
@@ -380,10 +388,10 @@ export function DetailPanel(props: DetailPanelProps) {
                       value={selectedCapability.name}
                       onChange={(name) => updateCapability({ name })}
                     />
-                    <Field
-                      label="要做什么"
+                    <FileMentionField
                       value={selectedCapability.does}
-                      multiline
+                      references={selectedCapability.fileReferences ?? []}
+                      active={hasFileAccess}
                       onChange={(does) => updateCapability({ does })}
                     />
                     <div className="field field-auto-context">
@@ -455,6 +463,18 @@ export function DetailPanel(props: DetailPanelProps) {
                         />
                         会修改工作区内的文件
                       </label>
+                      <FileReferencePicker
+                        active={hasFileAccess}
+                        references={selectedCapability.fileReferences ?? []}
+                        onChange={(fileReferences) => updateCapability({ fileReferences })}
+                      />
+                      {fileWarnings.length > 0 && (
+                        <div className="file-reference-warnings" role="status">
+                          {fileWarnings.map((warning) => (
+                            <span key={`${warning.code}:${warning.path}`}>{warning.message}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </>
                 )}

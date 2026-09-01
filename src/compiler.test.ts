@@ -42,8 +42,43 @@ test('changing any guidance field changes the program hash', () => {
   assert.notEqual(compileCF({ ...cf, process: 'be terse' }).programHash, base.programHash)
 })
 
+test('compiles ordered workspace file references into the agent task without file contents', () => {
+  const referenced = compileCF({
+    ...cf,
+    does: 'update report.csv',
+    effects: [{ type: 'file-read', scope: 'workspace', description: 'read workspace files' }],
+    fileReferences: ['reports/report.csv', 'archive/report.csv'],
+  })
+
+  assert.match(referenced.program.task, /Indexed workspace files \(priority order\):/)
+  assert.match(referenced.program.task, /1\. reports\/report\.csv/)
+  assert.match(referenced.program.task, /2\. archive\/report\.csv/)
+  assert.match(referenced.program.task, /first matching indexed path/)
+  assert.match(referenced.program.task, /search the workspace/)
+})
+
+test('keeps inactive file references out of the compiled agent task', () => {
+  const inactive = compileCF({
+    ...cf,
+    fileReferences: ['reports/private.txt'],
+  })
+
+  assert.doesNotMatch(inactive.program.task, /reports\/private\.txt/)
+})
+
 test('rejects an empty capability description', () => {
   assert.throws(() => compileCF({ ...cf, does: '   ' }), /CF_DOES_REQUIRED/)
+})
+
+test('rejects unsafe or duplicate workspace file references', () => {
+  assert.throws(
+    () => compileCF({ ...cf, fileReferences: ['../outside.txt'] }),
+    /CF_FILE_PATH_INVALID/,
+  )
+  assert.throws(
+    () => compileCF({ ...cf, fileReferences: ['notes/a.txt', 'notes/a.txt'] }),
+    /CF_FILE_PATH_INVALID/,
+  )
 })
 
 test('rejects invalid contracts and duplicate flow identifiers', () => {

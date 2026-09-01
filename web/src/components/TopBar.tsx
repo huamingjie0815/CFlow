@@ -42,9 +42,7 @@ type TopBarProps = {
 export function TopBar(props: TopBarProps) {
   return (
     <header className="top-bar">
-      <span className="brand-mark" aria-label="CFlow">
-        CF
-      </span>
+      <img className="brand-mark" src="/cflow-mark.svg" alt="CFlow" draggable={false} />
       <FlowSwitcher
         drafts={props.drafts}
         plans={props.plans}

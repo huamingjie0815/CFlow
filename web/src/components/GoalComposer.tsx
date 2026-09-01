@@ -1,4 +1,4 @@
-import { FileText, LoaderCircle, Send, Split, Upload, X } from 'lucide-react'
+import { FileText, LoaderCircle, Send, Split, Wrench, X } from 'lucide-react'
 import { useRef } from 'react'
 import {
   attachmentName,
@@ -33,7 +33,6 @@ type GoalComposerProps = {
  */
 export function GoalComposer(props: GoalComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const selected = props.runtimes.find((runtime) => runtime.id === props.runtimeId)
   const take = (event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = snapshotFileList(event.currentTarget.files)
@@ -107,23 +106,14 @@ export function GoalComposer(props: GoalComposerProps) {
           accept={TEXT_ACCEPT}
           onChange={take}
         />
-        <input
-          ref={folderInputRef}
-          className="visually-hidden"
-          type="file"
-          multiple
-          // @ts-expect-error webkitdirectory is supported by desktop Chromium/WebKit
-          webkitdirectory=""
-          onChange={take}
-        />
         {!!props.attachments.length && (
-          <div className="skill-attachments" aria-label="已选择的附件">
+          <div className="skill-attachments" aria-label="已选择的 Skill">
             <div className="attachment-summary" role="status" aria-live="polite">
               <div>
                 <strong>
                   {props.isPending
-                    ? `正在提交 ${props.attachments.length} 个附件`
-                    : `已选择 ${props.attachments.length} 个附件`}
+                    ? `正在提交 ${props.attachments.length} 个 Skill 文件`
+                    : `已选择 ${props.attachments.length} 个 Skill 文件`}
                 </strong>
                 <span>{props.isPending ? '正在上传并分析' : '发送目标时上传'}</span>
               </div>
@@ -173,16 +163,9 @@ export function GoalComposer(props: GoalComposerProps) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={props.isPending}
+            title="选择 Skill 文件"
           >
-            <Upload size={14} /> 文件
-          </button>
-          <button
-            className="attachment-button"
-            type="button"
-            onClick={() => folderInputRef.current?.click()}
-            disabled={props.isPending}
-          >
-            <Upload size={14} /> 文件夹
+            <Wrench size={14} /> 选择 Skill
           </button>
           <label className={`runtime-select is-${selected ? runtimeStatus(selected) : 'checking'}`}>
             <span className="status-lamp" />

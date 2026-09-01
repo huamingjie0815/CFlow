@@ -12,6 +12,8 @@ import type {
   RuntimeWithHealth,
   RuntimeDiscoveryResult,
   WorkspaceSettings,
+  WorkspaceFileSearchResult,
+  DraftBundle,
 } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -116,10 +118,16 @@ export const api = {
       }),
     )
   },
-  saveDraft(draft: FlowDraft) {
-    return request<FlowDraft>(`/api/flow-drafts/${encodeURIComponent(draft.flowId)}`, {
+  saveDraft(flowDraft: FlowDraft, cfDrafts: CFDraft[]) {
+    return request<DraftBundle>(`/api/flow-drafts/${encodeURIComponent(flowDraft.flowId)}`, {
       method: 'PUT',
-      body: JSON.stringify(draft),
+      body: JSON.stringify({ flowDraft, cfDrafts }),
+    })
+  },
+  searchWorkspaceFiles(query: string, selected: string[]) {
+    return request<WorkspaceFileSearchResult>('/api/workspace/files/search', {
+      method: 'POST',
+      body: JSON.stringify({ query, selected }),
     })
   },
   deleteDraft(flowId: string) {
@@ -228,6 +236,7 @@ export function readableError(error: unknown) {
     FLOW_VERSION_NOT_FOUND: '这条已发布版本已经不存在，请刷新工作台。',
     FLOW_WORKSPACE_REQUIRED: '当前流程缺少工作区信息，请刷新工作台。',
     FLOW_WORKSPACE_MISMATCH: '这条流程不属于当前启动目录，请从对应目录启动 CFlow。',
+    FLOW_DRAFT_STALE: '这份草稿已经有更新版本，请重新选择后再编辑。',
     UNKNOWN_CF: '有步骤还没有填写内容，或者它引用的说明已经不在了。请打开这个步骤补齐。',
     FLOW_DUPLICATE_NODE: '有两个步骤用了同一个编号，请删掉多余的那个。',
     FLOW_DUPLICATE_EDGE: '有两条重复的连线，请删掉一条。',

@@ -1,6 +1,7 @@
 export type {
   CFDraft,
   CFVersion,
+  CompilationWarning,
   FlowCompilationSnapshot,
   FlowDraft,
   FlowEdge,
@@ -16,6 +17,7 @@ export type {
 import type {
   CFDraft,
   CFVersion,
+  CompilationWarning,
   FlowCompilationSnapshot,
   FlowDraft,
   FlowPlan,
@@ -100,6 +102,18 @@ export type FlowProposal = {
 export type CompilationPreview = {
   plan: FlowPlan
   programs: CFVersion[]
+  warnings: CompilationWarning[]
+}
+
+export type WorkspaceFileSearchResult = {
+  matches: string[]
+  missing: string[]
+  truncated: boolean
+}
+
+export type DraftBundle = {
+  flowDraft: FlowDraft
+  cfDrafts: CFDraft[]
 }
 
 export type BootstrapData = {

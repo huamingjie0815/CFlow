@@ -21,6 +21,8 @@ export interface CFDraft {
   inputContract?: Json
   outputContract?: Json
   effects?: CapabilityEffect[]
+  /** Ordered workspace-relative paths used to resolve file mentions in the task. */
+  fileReferences?: string[]
   defaultExecutor?: string
 }
 export type CapabilityEffect = {
@@ -133,8 +135,16 @@ export interface FlowCompilationSnapshot {
   flowDraft: FlowDraft
   plan: FlowPlan
   programs: CFVersion[]
+  warnings?: CompilationWarning[]
   runId?: string
   createdAt: string
+}
+export type CompilationWarning = {
+  code: 'INDEXED_FILE_MISSING' | 'FILE_MENTION_NOT_INDEXED'
+  cfId: string
+  nodeId: string
+  path: string
+  message: string
 }
 export type LedgerEvent = {
   seq: number

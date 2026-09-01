@@ -1,15 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import {
-  Bot,
-  CircleAlert,
-  FileText,
-  LoaderCircle,
-  Send,
-  Undo2,
-  Upload,
-  Wrench,
-  X,
-} from 'lucide-react'
+import { Bot, CircleAlert, FileText, LoaderCircle, Send, Undo2, Wrench, X } from 'lucide-react'
 import { useMutation } from '@tanstack/react-query'
 import { api, readableError } from '../api'
 import { runStatusLabel } from '../copy'
@@ -87,7 +77,6 @@ function failureContext(runDetail: RunDetail | null, draft: FlowDraft) {
 
 export function FlowAgentChat(props: FlowAgentChatProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const folderInputRef = useRef<HTMLInputElement>(null)
   const [input, setInput] = useState('')
   const latestRef = useRef({
     draft: props.draft,
@@ -301,7 +290,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           disabled={props.disabled || mutation.isPending}
         />
         {!!props.attachments.length && (
-          <div className="agent-attachments" aria-label="已选择的附件">
+          <div className="agent-attachments" aria-label="已选择的 Skill">
             <ul className="attachment-list">
               {props.attachments.slice(0, 3).map((file) => (
                 <li key={attachmentName(file)} className="skill-attachment">
@@ -353,32 +342,14 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             accept={TEXT_ACCEPT}
             onChange={takeFiles}
           />
-          <input
-            ref={folderInputRef}
-            className="visually-hidden"
-            type="file"
-            multiple
-            // @ts-expect-error desktop Chromium/WebKit
-            webkitdirectory=""
-            onChange={takeFiles}
-          />
           <button
             className="attachment-button"
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={mutation.isPending || props.disabled}
-            title="附加 skill 文件以调整当前流程"
+            title="选择 Skill 文件以调整当前流程"
           >
-            <Upload size={13} /> 文件
-          </button>
-          <button
-            className="attachment-button"
-            type="button"
-            onClick={() => folderInputRef.current?.click()}
-            disabled={mutation.isPending || props.disabled}
-            title="附加 skill 文件夹以调整当前流程"
-          >
-            <Upload size={13} /> 文件夹
+            <Wrench size={13} /> 选择 Skill
           </button>
           <span className="toolbar-spacer" />
           <button

@@ -9,6 +9,28 @@ type NormalizedFlowEdge = Omit<FlowEdge, 'from' | 'to'> & {
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
+export function assertFileReferences(fileReferences: string[] | undefined) {
+  if (!fileReferences) return
+  assert(fileReferences.length <= 100, 'CF_FILE_REFERENCES_LIMIT')
+  const seen = new Set<string>()
+  for (const path of fileReferences) {
+    assert(
+      typeof path === 'string' && path.length > 0 && path.length <= 1024,
+      'CF_FILE_PATH_INVALID',
+    )
+    assert(
+      !path.startsWith('/') && !path.startsWith('\\') && !/^[A-Za-z]:/.test(path),
+      'CF_FILE_PATH_INVALID',
+    )
+    const parts = path.split('/')
+    assert(
+      parts.every((part) => part.length > 0 && part !== '.' && part !== '..'),
+      'CF_FILE_PATH_INVALID',
+    )
+    assert(!path.includes('\\') && !seen.has(path), 'CF_FILE_PATH_INVALID')
+    seen.add(path)
+  }
+}
 function checkGraph(
   nodes: number[],
   edges: { from: number | string; to: number }[],
@@ -31,6 +53,7 @@ function checkGraph(
   assert(seen.size === nodes.length, 'UNREACHABLE_NODE: all nodes must be reachable')
 }
 export function compileCF(draft: CFDraft): CFVersion {
+  assertFileReferences(draft.fileReferences)
   if (draft.effects) {
     const validTypes = new Set(['file-read', 'file-write', 'command'])
     for (const effect of draft.effects) {
@@ -47,8 +70,26 @@ export function compileCF(draft: CFDraft): CFVersion {
   assertContractSchema(inputContract, 'CF_INPUT')
   assertContractSchema(outputContract, 'CF_OUTPUT')
   assert(draft.does.trim().length > 0, 'CF_DOES_REQUIRED')
+  const hasFileAccess = (draft.effects ?? []).some(
+    (effect) => effect.type === 'file-read' || effect.type === 'file-write',
+  )
+  const fileReferenceGuidance =
+    hasFileAccess && draft.fileReferences?.length
+      ? [
+          'Indexed workspace files (priority order):',
+          ...draft.fileReferences.map((path, index) => `${index + 1}. ${path}`),
+          '',
+          'File resolution rules:',
+          '- Resolve an explicit @{relative/path} against the indexed paths first.',
+          '- Resolve a mentioned relative path, filename, or basename against the indexed paths before searching elsewhere.',
+          '- When more than one indexed file matches, use the first matching indexed path in the order above.',
+          '- If no indexed path matches, search the workspace for the mentioned file.',
+          '- Use only files required by the task. These paths are location hints; no file contents are embedded here.',
+        ].join('\n')
+      : undefined
   const task = [
     draft.does.trim(),
+    fileReferenceGuidance,
     draft.input?.trim() ? `Input guidance: ${draft.input.trim()}` : undefined,
     draft.output?.trim() ? `Output guidance: ${draft.output.trim()}` : undefined,
     draft.process?.trim() ? `Process constraints: ${draft.process.trim()}` : undefined,

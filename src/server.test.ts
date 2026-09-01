@@ -77,14 +77,57 @@ test('reports and enforces the launch workspace', async (t) => {
     nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
     edges: [],
   }
+  const cfDraft = {
+    cfId: 'empty-step',
+    revision: 1,
+    name: '',
+    does: '',
+    fileReferences: ['notes/input.md'],
+  }
   const saved = await app.inject({
     method: 'PUT',
     url: '/api/flow-drafts/scoped-flow',
-    payload: draft,
+    payload: { flowDraft: draft, cfDrafts: [cfDraft] },
   })
   assert.equal(saved.statusCode, 200)
-  assert.equal(saved.json().workspaceRoot, realpathSync(root))
+  assert.equal(saved.json().flowDraft.workspaceRoot, realpathSync(root))
+  assert.deepEqual(saved.json().cfDrafts, [cfDraft])
   assert.equal(store.get<any>('flow_drafts', draft.flowId)?.workspaceRoot, realpathSync(root))
+  assert.deepEqual(store.get<any>('cf_drafts', cfDraft.cfId), cfDraft)
+})
+
+test('searches workspace file paths without reading contents or following excluded paths', async (t) => {
+  const root = join('/tmp', `cflow-file-index-${randomUUID()}`)
+  mkdirSync(join(root, 'reports'), { recursive: true })
+  mkdirSync(join(root, 'node_modules', 'hidden'), { recursive: true })
+  writeFileSync(join(root, 'reports', 'report.csv'), 'PRIVATE_FILE_CONTENT')
+  writeFileSync(join(root, 'reports', 'summary.md'), '# Summary')
+  writeFileSync(join(root, 'node_modules', 'hidden', 'package.js'), 'excluded')
+  symlinkSync(join(root, 'reports'), join(root, 'linked-reports'))
+  const store = new Store(join(root, 'api.sqlite'))
+  const app = createTestApp(store, root)
+  t.after(async () => {
+    await app.close()
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  await app.ready()
+
+  const response = await app.inject({
+    method: 'POST',
+    url: '/api/workspace/files/search',
+    payload: {
+      query: 'report.csv',
+      selected: ['reports/report.csv', 'reports/missing.csv', '../outside.txt'],
+    },
+  })
+
+  assert.equal(response.statusCode, 200)
+  assert.deepEqual(response.json().matches, ['reports/report.csv'])
+  assert.deepEqual(response.json().missing, ['reports/missing.csv'])
+  assert.equal(response.json().truncated, false)
+  assert.doesNotMatch(response.body, /PRIVATE_FILE_CONTENT/)
+  assert.doesNotMatch(response.body, /linked-reports|node_modules|outside/)
 })
 
 test('HTTP API publishes and runs a Flow', async () => {
@@ -281,6 +324,7 @@ process.stdin.on('end', () => {
   assert.equal(response.statusCode, 200, JSON.stringify(response.json()))
   assert.equal(response.json().flowDraft.name, 'marker-flow')
   assert.equal(response.json().cfDrafts[0].name, 'marker-stage')
+  assert.equal(store.get<any>('cf_drafts', response.json().cfDrafts[0].cfId)?.name, 'marker-stage')
   const ungroundedPayload = payload.replace('UNIQUE_SKILL_MARKER', 'NO_GROUNDING')
   const ungroundedResponse = await app.inject({
     method: 'POST',
@@ -352,7 +396,11 @@ test('previews complete compiler output without publishing or running', async ()
     cfId: 'preview-cf',
     revision: 1,
     name: 'Preview capability',
-    does: 'prepare a compiler preview',
+    does: 'prepare @{reports/not-indexed.csv}',
+    effects: [
+      { type: 'file-read' as const, scope: 'workspace' as const, description: 'read files' },
+    ],
+    fileReferences: ['reports/missing.csv'],
     defaultExecutor: 'echo',
   }
   const flowDraft = {
@@ -385,6 +433,10 @@ test('previews complete compiler output without publishing or running', async ()
   assert.equal(preview.plan.nodes[0].programHash, preview.programs[0].programHash)
   assert.equal(preview.programs[0].program.cfId, 'preview-cf')
   assert.equal(preview.programs.length, 1)
+  assert.deepEqual(
+    preview.warnings.map((warning: { code: string }) => warning.code),
+    ['INDEXED_FILE_MISSING', 'FILE_MENTION_NOT_INDEXED'],
+  )
   assert.equal(store.flowCompilations().length, 1)
   const repeated = await app.inject({
     method: 'POST',
@@ -670,7 +722,7 @@ test('persists and removes Flow drafts through the workspace API', async () => {
   const save = await app.inject({
     method: 'PUT',
     url: '/api/flow-drafts/saved-draft',
-    payload: draft,
+    payload: { flowDraft: draft, cfDrafts: [] },
   })
   assert.equal(save.statusCode, 200)
   const list = await app.inject({ method: 'GET', url: '/api/flow-drafts' })
