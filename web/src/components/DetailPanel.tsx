@@ -423,6 +423,17 @@ export function DetailPanel(props: DetailPanelProps) {
                             会拒绝执行。
                           </small>
                         )}
+                      {/(执行|运行|调用|启动).*(脚本|命令|程序|PowerShell|Python|bash|shell)/i.test(
+                        `${selectedCapability.does} ${selectedCapability.process ?? ''}`,
+                      ) &&
+                        !(selectedCapability.effects ?? []).some(
+                          (effect) => effect.type === 'command',
+                        ) && (
+                          <small className="effect-warning">
+                            当前任务涉及执行命令，请勾选“会执行工作区内的命令”，否则测试时 Agent
+                            会拒绝执行。
+                          </small>
+                        )}
                       <label className="checkbox-row">
                         <input
                           type="checkbox"
@@ -464,6 +475,27 @@ export function DetailPanel(props: DetailPanelProps) {
                           }}
                         />
                         会修改工作区内的文件
+                      </label>
+                      <label className="checkbox-row">
+                        <input
+                          type="checkbox"
+                          checked={(selectedCapability.effects ?? []).some(
+                            (effect) => effect.type === 'command',
+                          )}
+                          onChange={(event) => {
+                            const effects = (selectedCapability.effects ?? []).filter(
+                              (effect) => effect.type !== 'command',
+                            )
+                            if (event.target.checked)
+                              effects.push({
+                                type: 'command',
+                                scope: 'workspace',
+                                description: '执行工作区内的命令或脚本',
+                              })
+                            updateCapability({ effects })
+                          }}
+                        />
+                        会执行工作区内的命令
                       </label>
                       <FileReferencePicker
                         active={hasFileAccess}
