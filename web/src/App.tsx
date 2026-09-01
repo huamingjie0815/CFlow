@@ -177,6 +177,7 @@ export function App() {
   const [retryGoal, setRetryGoal] = useState<RetryGoal | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
+  const [flowAgentRuntimeId, setFlowAgentRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
   const [testingRuntimeId, setTestingRuntimeId] = useState<string | null>(null)
   const hydratedWorkspaceRef = useRef<string | null>(null)
@@ -212,6 +213,10 @@ export function App() {
   useEffect(() => {
     if (data?.settings.defaultRuntimeId && !runtimeId) setRuntimeId(data.settings.defaultRuntimeId)
   }, [data?.settings.defaultRuntimeId, runtimeId])
+  useEffect(() => {
+    if (data?.settings.defaultRuntimeId && !flowAgentRuntimeId)
+      setFlowAgentRuntimeId(data.settings.defaultRuntimeId)
+  }, [data?.settings.defaultRuntimeId, flowAgentRuntimeId])
   useEffect(() => {
     if (data?.settings.defaultRuntimeId && !compileRuntimeId)
       setCompileRuntimeId(data.settings.defaultRuntimeId)
@@ -1460,7 +1465,7 @@ export function App() {
                 runDetail={viewedRun}
                 messages={conversation}
                 runtimes={runtimes}
-                runtimeId={runtimeId}
+                runtimeId={flowAgentRuntimeId}
                 testCount={currentTestCount}
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
@@ -1476,6 +1481,7 @@ export function App() {
                 disabled={!workspaceAvailable}
                 onMessagesChange={setConversation}
                 onAttachmentsChange={setSkillAttachments}
+                onRuntimeChange={setFlowAgentRuntimeId}
                 onRevision={(result) => {
                   updateDraft(result.flowDraft)
                   setCandidateCfs(result.cfDrafts)

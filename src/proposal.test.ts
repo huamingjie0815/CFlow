@@ -5,6 +5,7 @@ import {
   applyFlowRevision,
   assertAttachmentGrounding,
   buildProposalGraph,
+  flowRevisionOutputSchema,
   matchPublishedCapabilities,
   normalizeEffects,
 } from './proposal.js'
@@ -23,6 +24,17 @@ const stage = (name: string, extra: object = {}) => ({
   does: `do ${name}`,
   cfId: null,
   ...extra,
+})
+
+test('revision schema allows branch stages and uses a consistent nested capability shape', () => {
+  const schema = flowRevisionOutputSchema(false) as any
+  const stageItem = schema.properties.stages.items
+  assert.deepEqual(stageItem.properties.kind.enum, ['cf-call', 'branch'])
+  const nestedCapability = stageItem.properties.routes.items.properties.stages.items
+  assert.ok(nestedCapability.required.includes('cond'))
+  assert.ok(nestedCapability.required.includes('routes'))
+  assert.equal(nestedCapability.properties.cond.type, 'null')
+  assert.equal(nestedCapability.properties.routes.maxItems, 0)
 })
 
 /** Compiles a proposed graph so the plan invariants are the real assertion. */
@@ -342,6 +354,69 @@ test('revises an existing flow in place as a linear graph', () => {
   )
 })
 
+test('revises an existing Flow into a branching graph with a terminal route', () => {
+  const current: FlowDraft = {
+    flowId: 'existing-flow',
+    revision: 2,
+    name: 'Existing',
+    objective: 'preserve identity',
+    workspaceRoot: process.cwd(),
+    resources: [{ id: 'mail', type: 'folder', access: 'read', required: true }],
+    nodes: [{ id: 'result-node', kind: 'output', outputId: 'final' }],
+    edges: [],
+  }
+  const result = applyFlowRevision(
+    current,
+    [],
+    [
+      stage('读取邮件'),
+      {
+        kind: 'branch',
+        name: '是否有新邮件',
+        does: null,
+        cfId: null,
+        cond: 'hasNewMail',
+        routes: [
+          {
+            caseId: 'none',
+            condition: '没有新邮件，直接结束',
+            endsFlow: true,
+            stages: [],
+          },
+          {
+            caseId: 'found',
+            condition: '存在新邮件',
+            endsFlow: false,
+            stages: [stage('对比正文')],
+          },
+        ],
+      },
+      stage('输出结论'),
+    ],
+    { catalog: [], runtimeId: 'codex' },
+  )
+
+  assert.equal(result.flowDraft.flowId, current.flowId)
+  assert.equal(result.flowDraft.workspaceRoot, current.workspaceRoot)
+  assert.deepEqual(result.flowDraft.resources, current.resources)
+  assert.ok(result.flowDraft.nodes.some((node) => node.kind === 'branch'))
+  assert.ok(
+    result.flowDraft.edges.some(
+      (edge) =>
+        edge.when?.outcome === 'branch-case' &&
+        edge.when.caseId === 'none' &&
+        edge.to === 'result-node',
+    ),
+  )
+  const versions = result.cfDrafts.map((draft) => compileCF(draft))
+  assert.doesNotThrow(() =>
+    compileFlow(
+      result.flowDraft,
+      new Map(versions.map((version) => [`${version.cfId}@${version.version}`, version])),
+    ),
+  )
+})
+
 test('revision rejects control stages and cfIds outside this turn', () => {
   const current: FlowDraft = {
     flowId: 'existing-flow',
@@ -352,13 +427,6 @@ test('revision rejects control stages and cfIds outside this turn', () => {
     nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
     edges: [],
   }
-  assert.throws(
-    () =>
-      applyFlowRevision(current, [], [{ kind: 'branch', name: 'x', does: 'x' }], {
-        catalog: [],
-      }),
-    /CONTROL_FORBIDDEN/,
-  )
   assert.throws(
     () => applyFlowRevision(current, [], [stage('x', { cfId: 'invented' })], { catalog: [] }),
     /RUNTIME_REVISION_CF_UNKNOWN/,

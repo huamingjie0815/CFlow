@@ -618,6 +618,10 @@ pre {
   color: var(--accent);
   border-color: var(--accent);
 }
+.retry-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 .thinking {
   display: flex;
   align-items: center;
@@ -1546,6 +1550,16 @@ pre {
   flex: 1;
   color: var(--muted);
   font-size: 9px;
+}
+.agent-composer-footer .runtime-select {
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+}
+.agent-composer-footer .runtime-select select {
+  max-width: 112px;
+  min-width: 0;
+  font-size: 10px;
 }
 .inspector-section {
   display: grid;

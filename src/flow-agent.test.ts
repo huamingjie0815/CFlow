@@ -125,3 +125,57 @@ test('normalizer ignores stages for answers and rejects empty revisions', () => 
     /RUNTIME_REVISION_EMPTY/,
   )
 })
+
+test('normalizer preserves branch routes for a Flow revision', () => {
+  const response = normalizeAgentResponse({
+    message: '按是否需要提醒重新编排。',
+    intent: 'revise',
+    stages: [
+      {
+        kind: 'branch',
+        name: '是否需要提醒',
+        does: null,
+        cfId: null,
+        cond: 'needsReminder',
+        routes: [
+          {
+            caseId: 'skip',
+            condition: '不需要提醒，直接结束',
+            endsFlow: true,
+            stages: [],
+          },
+          {
+            caseId: 'send',
+            condition: '需要提醒',
+            endsFlow: false,
+            stages: [{ kind: 'cf-call', name: '发送提醒', does: '发送提醒邮件', cfId: null }],
+          },
+        ],
+      },
+    ],
+  })
+
+  assert.equal(response.stages[0].kind, 'branch')
+  assert.equal(response.stages[0].routes[0].endsFlow, true)
+  assert.equal(response.stages[0].routes[1].stages[0].name, '发送提醒')
+})
+
+test('normalizer rejects a partial revision when one branch is invalid', () => {
+  assert.throws(
+    () =>
+      normalizeAgentResponse({
+        message: '重新编排',
+        intent: 'revise',
+        stages: [
+          { kind: 'cf-call', name: '保留步骤', does: '执行任务', cfId: null },
+          {
+            kind: 'branch',
+            name: '不完整分支',
+            cond: 'route',
+            routes: [{ caseId: 'only', condition: '只有一条路径', endsFlow: true, stages: [] }],
+          },
+        ],
+      }),
+    /RUNTIME_REVISION_STAGE_INVALID/,
+  )
+})

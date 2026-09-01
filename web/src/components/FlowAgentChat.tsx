@@ -1,5 +1,15 @@
 import { useMemo, useRef, useState } from 'react'
-import { Bot, CircleAlert, FileText, LoaderCircle, Send, Undo2, Wrench, X } from 'lucide-react'
+import {
+  Bot,
+  CircleAlert,
+  FileText,
+  LoaderCircle,
+  RotateCcw,
+  Send,
+  Undo2,
+  Wrench,
+  X,
+} from 'lucide-react'
 import { useMutation } from '@tanstack/react-query'
 import { api, readableError } from '../api'
 import { runStatusLabel } from '../copy'
@@ -7,6 +17,7 @@ import {
   attachmentName,
   canApplyAgentRevision,
   mergeAttachments,
+  runtimeStatus,
   snapshotFileList,
 } from '../workbench-ui'
 import type { AgentChatMessage, CFDraft, FlowDraft, RunDetail, RuntimeWithHealth } from '../types'
@@ -22,6 +33,12 @@ type AgentSnapshot = {
   selection: { nodeId: string | null; edgeId: string | null }
   check: { error: string | null }
   attachments: File[]
+}
+
+type FailedRequest = {
+  message: string
+  snapshot: AgentSnapshot
+  errorMessageId: string
 }
 
 type FlowAgentChatProps = {
@@ -40,6 +57,7 @@ type FlowAgentChatProps = {
   disabled?: boolean
   onMessagesChange: (update: MessageUpdate) => void
   onAttachmentsChange: (files: File[]) => void
+  onRuntimeChange: (id: string) => void
   onRevision: (result: {
     flowDraft: FlowDraft
     cfDrafts: CFDraft[]
@@ -79,6 +97,7 @@ function failureContext(runDetail: RunDetail | null, draft: FlowDraft) {
 export function FlowAgentChat(props: FlowAgentChatProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [input, setInput] = useState('')
+  const [failedRequest, setFailedRequest] = useState<FailedRequest | null>(null)
   const latestRef = useRef({
     draft: props.draft,
     cfDrafts: props.cfDrafts,
@@ -111,6 +130,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
     mutationFn: ({ message, snapshot }: { message: string; snapshot: AgentSnapshot }) =>
       api.flowAgentChat({ message, ...snapshot }),
     onSuccess: (response, variables) => {
+      setFailedRequest(null)
       const messageId = idOf('agent')
       let conflict = false
       if (response.flowDraft) {
@@ -144,14 +164,16 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
       ])
       props.onAttachmentsChange([])
     },
-    onError: (error) => {
+    onError: (error, variables) => {
+      const errorMessageId = idOf('agent-error')
+      setFailedRequest({ ...variables, errorMessageId })
       props.onMessagesChange((current) => [
         ...current,
         {
-          id: idOf('agent-error'),
+          id: errorMessageId,
           role: 'assistant',
           body: `暂时无法处理：${readableError(error)}`,
-          meta: '当前草稿未修改',
+          meta: `${props.runtimes.find((item) => item.id === variables.snapshot.runtimeId)?.name ?? variables.snapshot.runtimeId ?? '本地流程分析'} · 当前草稿未修改`,
         },
       ])
     },
@@ -175,8 +197,14 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
       ...messages,
       { id: idOf('agent-user'), role: 'user', body: message },
     ])
+    setFailedRequest(null)
     setInput('')
     mutation.mutate({ message, snapshot })
+  }
+
+  const retryFailedRequest = () => {
+    if (!failedRequest || mutation.isPending || props.disabled) return
+    mutation.mutate({ message: failedRequest.message, snapshot: failedRequest.snapshot })
   }
 
   const takeFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -251,6 +279,18 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
                   <span>
                     <strong>撤销上次助手修改</strong>
                   </span>
+                </button>
+              )}
+              {message.id === failedRequest?.errorMessageId && (
+                <button
+                  type="button"
+                  className="retry-button"
+                  onClick={retryFailedRequest}
+                  disabled={mutation.isPending || props.disabled}
+                  title="使用失败时的请求内容和工作台快照重试"
+                >
+                  <RotateCcw size={13} />
+                  重试
                 </button>
               )}
             </div>
@@ -356,6 +396,27 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           >
             <Wrench size={13} /> 选择 Skill
           </button>
+          <label
+            className={`runtime-select is-${selectedRuntime ? runtimeStatus(selectedRuntime) : 'checking'}`}
+          >
+            <span className="status-lamp" />
+            <select
+              value={props.runtimeId}
+              onChange={(event) => props.onRuntimeChange(event.target.value)}
+              aria-label="流程助手使用哪个 Runtime"
+              disabled={mutation.isPending || props.disabled}
+            >
+              {props.runtimes.map((runtime) => (
+                <option
+                  key={runtime.id}
+                  value={runtime.id}
+                  disabled={runtimeStatus(runtime) !== 'available'}
+                >
+                  {runtime.name}
+                </option>
+              ))}
+            </select>
+          </label>
           <span className="toolbar-spacer" />
           <button
             className="send-button"

@@ -69,15 +69,33 @@ export type AgentChatMessage = {
 export type FlowAgentResponse = {
   message: string
   intent: 'answer' | 'revise'
-  stages: {
-    kind: 'cf-call'
-    name: string
-    does: string
-    cfId: string | null
-    input?: string
-    output?: string
-    process?: string
-  }[]
+  stages: Array<
+    | {
+        kind: 'cf-call'
+        name: string
+        does: string
+        cfId: string | null
+        input?: string
+        output?: string
+        process?: string
+      }
+    | {
+        kind: 'branch'
+        name: string
+        cond: string
+        routes: Array<{
+          caseId: string
+          condition: string
+          endsFlow: boolean
+          stages: Array<{
+            kind: 'cf-call'
+            name: string
+            does: string
+            cfId: string | null
+          }>
+        }>
+      }
+  >
   flowDraft?: FlowDraft
   cfDrafts?: CFDraft[]
   runtimeId?: string

@@ -24,13 +24,15 @@ const capabilitySchema = (grounded: boolean) => ({
   type: 'object',
   additionalProperties: false,
   required: grounded
-    ? ['kind', 'name', 'does', 'cfId', 'sourceQuote']
-    : ['kind', 'name', 'does', 'cfId'],
+    ? ['kind', 'name', 'does', 'cfId', 'cond', 'routes', 'sourceQuote']
+    : ['kind', 'name', 'does', 'cfId', 'cond', 'routes'],
   properties: {
     kind: { type: 'string', enum: ['cf-call'] },
     name: { type: 'string' },
     does: { type: 'string' },
     cfId: { type: ['string', 'null'] },
+    cond: { type: 'null' },
+    routes: { type: 'array', maxItems: 0 },
     input: { type: ['string', 'null'] },
     output: { type: ['string', 'null'] },
     process: { type: ['string', 'null'] },
@@ -51,12 +53,13 @@ export const flowRevisionOutputSchema = (grounded = false) =>
       stages: {
         type: 'array',
         maxItems: MAX_STAGES,
-        items: capabilitySchema(grounded),
+        items: stageSchema(grounded),
       },
     },
   }) as Record<string, unknown>
 
-const stageSchema = (grounded: boolean) => ({
+function stageSchema(grounded: boolean): Record<string, unknown> {
+  return {
   type: 'object',
   additionalProperties: false,
   required: grounded
@@ -96,7 +99,8 @@ const stageSchema = (grounded: boolean) => ({
     sourceQuote: { type: ['string', 'null'] },
     effects: { type: 'array', items: { type: 'object' } },
   },
-})
+  }
+}
 
 /**
  * `grounded` mirrors attachment mode: when a skill document is uploaded every
@@ -417,11 +421,7 @@ const textOf = (value: unknown, fallback: string | undefined, max: number) => {
   return trimmed ? trimmed.slice(0, max) : fallback
 }
 
-/**
- * Rebuilds the current draft as a linear cf-call spine. The runtime may only
- * emit capability stages; branch/join/approval/onError are stripped here so a
- * revision cannot smuggle control structure into an existing Flow.
- */
+/** Rebuilds the current draft from bounded capabilities and top-level branches. */
 export function applyFlowRevision(
   current: FlowDraft,
   currentCfDrafts: CFDraft[],
@@ -443,6 +443,7 @@ export function applyFlowRevision(
   const nodes: FlowNode[] = []
   const edges: FlowEdge[] = []
   const cfDrafts: CFDraft[] = []
+  const terminalRoutes: { branchId: string; caseId: string }[] = []
 
   const allocateId = (preferred: string | undefined, fallback: string) => {
     let id = preferred && !claimed.has(preferred) ? preferred : fallback
@@ -463,24 +464,22 @@ export function applyFlowRevision(
       return cfById.get(node.cfRef.cfId)?.name?.trim() === name
     })
 
-  const capability = (stage: any, index: number): FlowNode => {
-    if (stage?.kind && stage.kind !== 'cf-call')
-      throw new Error(`RUNTIME_REVISION_CONTROL_FORBIDDEN:${index}`)
+  const capability = (stage: any, fallback: string): FlowNode => {
     const name = String(stage?.name ?? '')
       .trim()
       .slice(0, 80)
     const does = String(stage?.does ?? '')
       .trim()
       .slice(0, 500)
-    if (!name || !does) throw new Error(`RUNTIME_REVISION_STAGE_INVALID:${index}`)
+    if (!name || !does) throw new Error(`RUNTIME_REVISION_STAGE_INVALID:${fallback}`)
     const requestedId = stage?.cfId ? String(stage.cfId) : ''
     if (requestedId && !allowedIds.has(requestedId))
       throw new Error(`RUNTIME_REVISION_CF_UNKNOWN:${requestedId}`)
     const knownId = requestedId
     const published = knownId ? catalog.find((item) => item.cfId === knownId) : undefined
     const candidate = knownId ? cfById.get(knownId) : undefined
-    const matched = matchExisting(knownId || `unmatched-${index}`, name)
-    const id = allocateId(matched?.id, `step-${index + 1}`)
+    const matched = matchExisting(knownId || `unmatched-${fallback}`, name)
+    const id = allocateId(matched?.id, fallback)
     const executor = matched?.kind === 'cf-call' ? matched.executor : runtimeId
 
     const withMeta = (cfId: string, version: string): FlowNode => ({
@@ -525,21 +524,78 @@ export function applyFlowRevision(
     return withMeta(cfId, '1.0.0')
   }
 
-  let previous: string | '$entry' = '$entry'
+  const connect = (from: string | '$entry', to: string, when?: FlowEdge['when']) => {
+    edges.push({ id: `edge-${edges.length + 1}`, from, to, ...(when ? { when } : {}) })
+  }
+
+  let frontier: (string | '$entry')[] = ['$entry']
   for (const [index, stage] of stages.entries()) {
-    const node = capability(stage, index)
-    nodes.push(node)
-    edges.push({
-      id: `edge-${edges.length + 1}`,
-      from: previous,
-      to: node.id,
+    if (!frontier.length) throw new Error('RUNTIME_REVISION_AFTER_TERMINAL_BRANCH')
+    if ((stage as any)?.kind !== 'branch') {
+      const node = capability(stage, `step-${index + 1}`)
+      nodes.push(node)
+      frontier.forEach((from) => connect(from, node.id))
+      frontier = [node.id]
+      continue
+    }
+
+    const routes = Array.isArray((stage as any).routes) ? (stage as any).routes.slice(0, 8) : []
+    if (routes.length < 2) throw new Error('RUNTIME_REVISION_BRANCH_ROUTES_INVALID')
+    const cases: string[] = []
+    const caseConditions: Record<string, string> = {}
+    const branchId = allocateId(undefined, `branch-${index + 1}`)
+    const branch: FlowNode = {
+      id: branchId,
+      kind: 'branch',
+      cond: { $get: String((stage as any).cond ?? 'route').trim() || 'route' },
+      cases,
+      caseConditions,
+    }
+    nodes.push(branch)
+    frontier.forEach((from) => connect(from, branch.id))
+    const tails: string[] = []
+    routes.forEach((route: any, routeIndex: number) => {
+      const caseId = String(route?.caseId ?? `case-${routeIndex + 1}`).trim()
+      const condition = String(route?.condition ?? '')
+        .trim()
+        .slice(0, 500)
+      if (!caseId || !condition || cases.includes(caseId))
+        throw new Error('RUNTIME_REVISION_BRANCH_CASE_INVALID')
+      cases.push(caseId)
+      caseConditions[caseId] = condition
+      const routeStages = Array.isArray(route?.stages) ? route.stages.slice(0, MAX_STAGES) : []
+      if (typeof route?.endsFlow !== 'boolean')
+        throw new Error('RUNTIME_REVISION_BRANCH_ROUTE_END_INVALID')
+      if (route.endsFlow && routeStages.length)
+        throw new Error('RUNTIME_REVISION_BRANCH_ROUTE_TERMINAL_WITH_STAGES')
+      if (!routeStages.length && !route.endsFlow)
+        throw new Error('RUNTIME_REVISION_BRANCH_ROUTE_EMPTY')
+      if (!routeStages.length) {
+        terminalRoutes.push({ branchId: branch.id, caseId })
+        return
+      }
+      let previous = branch.id
+      routeStages.forEach((routeStage: any, stageIndex: number) => {
+        const node = capability(routeStage, `step-${index + 1}-${routeIndex + 1}-${stageIndex + 1}`)
+        nodes.push(node)
+        connect(
+          previous,
+          node.id,
+          stageIndex === 0 ? { outcome: 'branch-case', caseId } : undefined,
+        )
+        previous = node.id
+      })
+      tails.push(previous)
     })
-    previous = node.id
+    frontier = tails
   }
   const previousOutput = current.nodes.find((node) => node.kind === 'output')
   const output: FlowNode = previousOutput ?? { id: 'output', kind: 'output', outputId: 'result' }
   nodes.push(output)
-  edges.push({ id: `edge-${edges.length + 1}`, from: previous, to: output.id })
+  frontier.forEach((from) => connect(from, output.id))
+  terminalRoutes.forEach(({ branchId, caseId }) =>
+    connect(branchId, output.id, { outcome: 'branch-case', caseId }),
+  )
 
   const flowDraft: FlowDraft = {
     ...current,
