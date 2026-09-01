@@ -25,6 +25,7 @@ import { nodeKindLabel } from '../copy'
 import { describeNode, edgeLabel, nodeConfigNote } from '../flow-labels'
 import { nodeRunStateLabel, nodeRunStateTone, type NodeRunState } from '../run'
 import type { CanvasPosition, CFDraft, CFVersion, FlowDraft, FlowNode } from '../types'
+import { reconcileCanvasNodes } from '../workbench-ui'
 
 type FlowCanvasProps = {
   draft: FlowDraft
@@ -158,7 +159,10 @@ function FlowCanvasInner(props: FlowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(mappedNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(mappedEdges)
 
-  useEffect(() => setNodes(mappedNodes), [mappedNodes, setNodes])
+  useEffect(
+    () => setNodes((current) => reconcileCanvasNodes(current, mappedNodes)),
+    [mappedNodes, setNodes],
+  )
   useEffect(() => setEdges(mappedEdges), [mappedEdges, setEdges])
 
   const connect = useCallback(

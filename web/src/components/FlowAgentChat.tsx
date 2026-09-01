@@ -31,6 +31,7 @@ type FlowAgentChatProps = {
   messages: AgentChatMessage[]
   runtimes: RuntimeWithHealth[]
   runtimeId?: string
+  testCount: number
   selectedNodeId: string | null
   selectedEdgeId: string | null
   checkError: string | null
@@ -198,7 +199,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           <span className="agent-live-mark" title="发送时读取当前工作台快照" />
         </div>
         <div className="agent-context-facts">
-          <span>第 {props.draft.revision} 稿</span>
+          <span>测试 {props.testCount} 次</span>
           <span>{props.draft.nodes.length} 步骤</span>
           <span>{props.runDetail ? runStatusLabel(props.runDetail.run.status) : '暂无运行'}</span>
         </div>

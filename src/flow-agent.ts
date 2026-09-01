@@ -194,13 +194,13 @@ export function flowAgentFallback(body: AgentRequest, catalog: CFVersion[] = [])
     }
   if (looksLikeRevision(body.message))
     return {
-      message: `我已经加载「${draft.name}」第 ${draft.revision} 稿，但当前没有可用的流程助手，不能直接改图。请在设置里选一个可用 Runtime 后再说一次要改的地方。`,
+      message: `我已经加载「${draft.name}」当前草稿，但当前没有可用的流程助手，不能直接改图。请在设置里选一个可用 Runtime 后再说一次要改的地方。`,
       intent: 'answer',
       stages: [],
     }
   const stepCount = draft.nodes.filter((node) => node.kind === 'cf-call').length
   return {
-    message: `我已经加载「${draft.name}」第 ${draft.revision} 稿，当前有 ${stepCount} 个能力步骤。你可以问某一步在做什么，或在助手可用时直接说要怎么改。`,
+    message: `我已经加载「${draft.name}」当前草稿，当前有 ${stepCount} 个能力步骤。你可以问某一步在做什么，或在助手可用时直接说要怎么改。`,
     intent: 'answer',
     stages: [],
   }

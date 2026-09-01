@@ -18,6 +18,7 @@ type DetailPanelProps = {
   selectedNodeId: string | null
   selectedEdgeId: string | null
   preview: CompilationPreview | null
+  testCount: number
   cfs?: CFVersion[]
   candidateCfs?: CFDraft[]
   runtimes?: RuntimeWithHealth[]
@@ -66,6 +67,7 @@ export function DetailPanel(props: DetailPanelProps) {
     selectedNodeId,
     selectedEdgeId,
     preview,
+    testCount,
     cfs = [],
     candidateCfs = [],
     runtimes = [],
@@ -620,8 +622,8 @@ export function DetailPanel(props: DetailPanelProps) {
               />
               <div className="property-list">
                 <div>
-                  <span>草稿次数</span>
-                  <strong>第 {draft.revision} 稿</strong>
+                  <span>测试次数</span>
+                  <strong>{testCount} 次</strong>
                 </div>
                 <div>
                   <span>步骤</span>

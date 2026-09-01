@@ -3,7 +3,9 @@ import assert from 'node:assert/strict'
 import {
   canApplyAgentRevision,
   draftSaveStatus,
+  flowTestCounts,
   nextSignalAction,
+  reconcileCanvasNodes,
   runStopControl,
   snapshotFileList,
 } from '../web/src/workbench-ui.js'
@@ -80,6 +82,43 @@ test('snapshots selected files before the browser input is cleared', () => {
   liveFileList.length = 0
 
   assert.deepEqual(snapshot, [selected])
+})
+
+test('counts persisted test attempts per flow and ignores previews', () => {
+  assert.deepEqual(
+    flowTestCounts([
+      { flowId: 'flow-a', mode: 'preview' },
+      { flowId: 'flow-a', mode: 'test' },
+      { flowId: 'flow-a', mode: 'test' },
+      { flowId: 'flow-b', mode: 'test' },
+    ]),
+    { 'flow-a': 2, 'flow-b': 1 },
+  )
+})
+
+test('refreshes canvas content without dropping measured node state', () => {
+  const current = [
+    {
+      id: 'step-1',
+      position: { x: 240, y: 160 },
+      measured: { width: 220, height: 120 },
+      data: { label: '旧名称' },
+    },
+  ]
+  const incoming = [
+    { id: 'step-1', position: { x: 180, y: 150 }, data: { label: '新名称' } },
+    { id: 'step-2', position: { x: 450, y: 150 }, data: { label: '新节点' } },
+  ]
+
+  assert.deepEqual(reconcileCanvasNodes(current, incoming), [
+    {
+      id: 'step-1',
+      position: { x: 240, y: 160 },
+      measured: { width: 220, height: 120 },
+      data: { label: '新名称' },
+    },
+    incoming[1],
+  ])
 })
 
 test('agent revisions only apply to the exact flow revision that was sent', () => {

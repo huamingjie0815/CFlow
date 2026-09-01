@@ -6,6 +6,7 @@ import type { FlowDraft, FlowPlan } from '../types'
 type FlowSwitcherProps = {
   drafts: FlowDraft[]
   plans: FlowPlan[]
+  testCounts: Record<string, number>
   currentFlowId: string | null
   deletingKey: string | null
   onSelect: (row: FlowListRow) => void
@@ -31,8 +32,8 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const allRows = useMemo(
-    () => buildFlowList(props.drafts, props.plans, props.currentFlowId),
-    [props.currentFlowId, props.drafts, props.plans],
+    () => buildFlowList(props.drafts, props.plans, props.currentFlowId, props.testCounts),
+    [props.currentFlowId, props.drafts, props.plans, props.testCounts],
   )
   const rows = useMemo(() => filterFlowList(allRows, query), [allRows, query])
   const current = currentFlowLabel(allRows, props.currentFlowId)

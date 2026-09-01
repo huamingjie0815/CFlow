@@ -121,7 +121,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     warnings?: CompilationWarning[],
   ) => {
     const snapshot: FlowCompilationSnapshot = {
-      id: `${flowDraft.flowId}@${flowDraft.revision}:${mode}`,
+      id:
+        mode === 'test' && runId
+          ? `test:${runId}`
+          : `${flowDraft.flowId}@${flowDraft.revision}:${mode}`,
       flowId: flowDraft.flowId,
       flowRevision: flowDraft.revision,
       mode,

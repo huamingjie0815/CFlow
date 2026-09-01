@@ -31,6 +31,7 @@ import type { FlowListRow } from './flow-list'
 import { deriveNodeRunStates, type NodeRunState } from './run'
 import {
   draftSaveStatus,
+  flowTestCounts,
   mergeAttachments,
   nextSignalAction,
   runStopControl,
@@ -41,10 +42,11 @@ import type {
   CanvasPosition,
   CFDraft,
   CompilationPreview,
-  RunDetail,
+  FlowCompilationSnapshot,
   FlowDraft,
   FlowNode,
   FlowPlan,
+  RunDetail,
   AgentChatMessage,
   BootstrapData,
 } from './types'
@@ -496,8 +498,16 @@ export function App() {
   })
 
   const testMutation = useMutation({
-    mutationFn: () =>
-      api.test(draft!, candidateCfs, data?.settings.defaultResourceProfileId, compileRuntimeId),
+    mutationFn: async () => {
+      const testedDraft = structuredClone(draft!)
+      const result = await api.test(
+        testedDraft,
+        candidateCfs,
+        data?.settings.defaultResourceProfileId,
+        compileRuntimeId,
+      )
+      return { ...result, testedDraft }
+    },
     onMutate: () => {
       setRunMode('test')
       setTestState('running')
@@ -511,6 +521,28 @@ export function App() {
       setRunId(result.runId)
       setInspectedRunId(result.runId)
       setPreview({ plan: result.plan, programs: result.programs, warnings: [] })
+      const snapshot: FlowCompilationSnapshot = {
+        id: `test:${result.runId}`,
+        flowId: result.testedDraft.flowId,
+        flowRevision: result.testedDraft.revision,
+        mode: 'test',
+        flowDraft: result.testedDraft,
+        plan: result.plan,
+        programs: result.programs,
+        runId: result.runId,
+        createdAt: new Date().toISOString(),
+      }
+      queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) =>
+        current
+          ? {
+              ...current,
+              flowCompilations: [
+                snapshot,
+                ...current.flowCompilations.filter((item) => item.id !== snapshot.id),
+              ],
+            }
+          : current,
+      )
     },
     onError: (error) => {
       const detail = readableError(error)
@@ -733,6 +765,11 @@ export function App() {
     if (draft && !drafts.some((item) => item.flowId === draft.flowId)) drafts.unshift(draft)
     return drafts.map((item) => (draft?.flowId === item.flowId ? draft : item))
   }, [data?.flowDrafts, draft])
+  const testCounts = useMemo(
+    () => flowTestCounts(data?.flowCompilations ?? []),
+    [data?.flowCompilations],
+  )
+  const currentTestCount = draft ? (testCounts[draft.flowId] ?? 0) : 0
   const latestPlan = useMemo(
     () =>
       (data?.plans ?? [])
@@ -1024,6 +1061,8 @@ export function App() {
         drafts={currentDrafts}
         plans={data?.plans ?? []}
         draft={draft}
+        testCount={currentTestCount}
+        testCounts={testCounts}
         testState={testState}
         saveStatus={saveStatus}
         isSaving={saveMutation.isPending}
@@ -1106,6 +1145,7 @@ export function App() {
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
                 preview={preview}
+                testCount={currentTestCount}
                 cfs={data?.cfs ?? []}
                 candidateCfs={candidateCfs}
                 runtimes={runtimes}
@@ -1403,6 +1443,7 @@ export function App() {
                 messages={conversation}
                 runtimes={runtimes}
                 runtimeId={runtimeId}
+                testCount={currentTestCount}
                 selectedNodeId={selectedNodeId}
                 selectedEdgeId={selectedEdgeId}
                 checkError={previewError}
@@ -1430,7 +1471,7 @@ export function App() {
                   setNotice({
                     tone: 'success',
                     title: '已按你的要求更新流程',
-                    detail: `当前画布已切换到第 ${result.flowDraft.revision} 稿，可以撤销这次助手修改。`,
+                    detail: '当前画布已应用助手修改，可以撤销这次修改。',
                   })
                   void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
                 }}

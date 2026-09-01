@@ -381,7 +381,14 @@ test('tests Flow and candidate CF drafts without publishing either version', asy
     await new Promise((resolve) => setTimeout(resolve, 10))
   }
   assert.equal(store.getRun(runId)?.status, 'completed')
-  assert.equal(store.flowCompilations().length, 1)
+  const repeated = await app.inject({
+    method: 'POST',
+    url: '/api/flow-tests',
+    payload: { flowDraft, cfDrafts: [cfDraft], input: { message: 'test again' } },
+  })
+  assert.equal(repeated.statusCode, 200)
+  assert.notEqual(repeated.json().runId, runId)
+  assert.equal(store.flowCompilations().length, 2)
   assert.equal(store.list('cf_versions').length, 0)
   assert.equal(store.list('flow_versions').length, 0)
   await app.close()

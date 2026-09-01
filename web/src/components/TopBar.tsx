@@ -18,6 +18,8 @@ type TopBarProps = {
   drafts: FlowDraft[]
   plans: FlowPlan[]
   draft: FlowDraft | null
+  testCount: number
+  testCounts: Record<string, number>
   testState: TestState
   saveStatus: string | null
   isSaving: boolean
@@ -46,6 +48,7 @@ export function TopBar(props: TopBarProps) {
       <FlowSwitcher
         drafts={props.drafts}
         plans={props.plans}
+        testCounts={props.testCounts}
         currentFlowId={props.draft?.flowId ?? null}
         deletingKey={props.deletingKey}
         onSelect={props.onSelectFlow}
@@ -56,7 +59,7 @@ export function TopBar(props: TopBarProps) {
         <span className="top-bar-meta">
           <span className={`route-state is-${props.testState}`} />
           {testStateLabel(props.testState)}
-          <span className="top-bar-dot">·</span>第 {props.draft.revision} 稿
+          <span className="top-bar-dot">·</span>测试 {props.testCount} 次
           <span className="top-bar-dot">·</span>
           {props.draft.nodes.length} 个步骤
         </span>

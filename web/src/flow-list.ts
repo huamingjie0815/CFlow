@@ -16,7 +16,7 @@ export type FlowListRow = {
   /** '草稿' or 'v2 已发布' */
   statusLabel: string
   statusTone: 'draft' | 'published'
-  /** '第 3 稿 · 7 个步骤' or '7 个步骤' */
+  /** '测试 3 次 · 7 个步骤' or '7 个步骤' */
   detail: string
   flowVersion?: string
   searchText: string
@@ -28,6 +28,7 @@ export function buildFlowList(
   drafts: FlowDraft[],
   plans: FlowPlan[],
   currentFlowId: string | null = null,
+  testCounts: Record<string, number> = {},
 ): FlowListRow[] {
   const rows: FlowListRow[] = [
     ...drafts.map((draft) => ({
@@ -37,7 +38,7 @@ export function buildFlowList(
       name: draft.name?.trim() || draft.objective?.trim() || '未命名流程',
       statusLabel: '草稿',
       statusTone: 'draft' as const,
-      detail: `第 ${draft.revision} 稿 · ${stepCount(draft.nodes.length)}`,
+      detail: `测试 ${testCounts[draft.flowId] ?? 0} 次 · ${stepCount(draft.nodes.length)}`,
       searchText: `${draft.name} ${draft.objective} ${draft.flowId}`.toLowerCase(),
     })),
     ...plans.map((plan) => ({

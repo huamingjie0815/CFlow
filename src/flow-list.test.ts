@@ -37,11 +37,16 @@ test('one row per draft and per published version', () => {
 })
 
 test('status labels and details read in business language', () => {
-  const rows = buildFlowList([draft('a', '报销核对', 3, 7)], [plan('b', '入职资料', '2.0.0', 5)])
+  const rows = buildFlowList(
+    [draft('a', '报销核对', 3, 7)],
+    [plan('b', '入职资料', '2.0.0', 5)],
+    null,
+    { a: 2 },
+  )
   const draftRow = rows.find((r) => r.key === 'a')!
   assert.equal(draftRow.statusLabel, '草稿')
   assert.equal(draftRow.statusTone, 'draft')
-  assert.equal(draftRow.detail, '第 3 稿 · 7 个步骤')
+  assert.equal(draftRow.detail, '测试 2 次 · 7 个步骤')
   const planRow = rows.find((r) => r.key === 'b@2.0.0')!
   assert.equal(planRow.statusLabel, 'v2.0.0 已发布')
   assert.equal(planRow.statusTone, 'published')

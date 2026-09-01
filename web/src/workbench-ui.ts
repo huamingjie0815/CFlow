@@ -5,6 +5,13 @@ export type DrawerTab = 'log' | 'check'
 /** Which single action gets the one filled button on screen. */
 export type SignalAction = 'goal' | 'check' | 'test' | 'publish' | 'run' | null
 
+type TestSnapshot = { flowId: string; mode: 'preview' | 'test' }
+
+type CanvasNodeLike = {
+  id: string
+  position: { x: number; y: number }
+}
+
 /**
  * DESIGN.md allows exactly one filled button per screen. With 检查/测试/运行/发布
  * sharing one toolbar row that is impossible to hold by eye, so it is computed:
@@ -33,6 +40,27 @@ export function nextSignalAction(input: {
 
 export function snapshotFileList<T>(files: ArrayLike<T> | null): T[] {
   return files ? Array.from(files) : []
+}
+
+export function flowTestCounts(snapshots: readonly TestSnapshot[]): Record<string, number> {
+  const counts: Record<string, number> = {}
+  for (const snapshot of snapshots) {
+    if (snapshot.mode !== 'test') continue
+    counts[snapshot.flowId] = (counts[snapshot.flowId] ?? 0) + 1
+  }
+  return counts
+}
+
+/** Keep React Flow's measured geometry and live position while refreshing node content. */
+export function reconcileCanvasNodes<T extends CanvasNodeLike>(
+  current: readonly T[],
+  incoming: readonly T[],
+): T[] {
+  const currentById = new Map(current.map((node) => [node.id, node]))
+  return incoming.map((node) => {
+    const existing = currentById.get(node.id)
+    return existing ? { ...existing, ...node, position: existing.position } : node
+  })
 }
 
 export function attachmentName(file: File) {
