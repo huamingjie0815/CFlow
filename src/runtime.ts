@@ -74,7 +74,10 @@ export function isAcpToolAllowed(
   cwd: string,
   analysis = false,
 ) {
-  const kind = String(tool.kind ?? tool.name ?? tool.title ?? '').toLowerCase()
+  const kind = [tool.kind, tool.name, tool.title]
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => String(value).toLowerCase())
+    .join(' ')
   const effectType =
     kind.includes('read') || kind.includes('search')
       ? 'file-read'
@@ -83,7 +86,14 @@ export function isAcpToolAllowed(
           kind.includes('delete') ||
           kind.includes('move')
         ? 'file-write'
-        : kind.includes('exec') || kind.includes('command') || kind.includes('terminal')
+        : kind.includes('exec') ||
+            kind.includes('command') ||
+            kind.includes('terminal') ||
+            kind.includes('bash') ||
+            kind.includes('shell') ||
+            kind.includes('powershell') ||
+            kind.includes('cmd') ||
+            kind.includes('run')
           ? 'command'
           : undefined
   const declared = effectType

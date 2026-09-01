@@ -159,6 +159,15 @@ test('auto-allows declared ACP effects inside the workspace and rejects unsafe r
   )
   assert.equal(
     isAcpToolAllowed(
+      { kind: 'other', name: 'Bash', rawInput: { command: 'python parse.py' } },
+      [...effects],
+      root,
+      root,
+    ),
+    true,
+  )
+  assert.equal(
+    isAcpToolAllowed(
       { kind: 'file-write', locations: [{ path: '/tmp/outside.txt' }] },
       [...effects],
       root,
