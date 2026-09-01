@@ -1,4 +1,4 @@
-import { FileText, LoaderCircle, Send, Split, Wrench, X } from 'lucide-react'
+import { FileText, LoaderCircle, RotateCcw, Send, Split, Wrench, X } from 'lucide-react'
 import { useRef } from 'react'
 import {
   attachmentName,
@@ -24,6 +24,8 @@ type GoalComposerProps = {
   onAttachmentsChange: (files: File[]) => void
   onRuntimeChange: (id: string) => void
   onSubmit: () => void
+  retryMessageId?: string
+  onRetry: () => void
 }
 
 /**
@@ -56,17 +58,31 @@ export function GoalComposer(props: GoalComposerProps) {
         <div className="messages">
           {props.messages.map((message) => (
             <article className={`message is-${message.role}`} key={message.id}>
-              <span className="message-avatar">{message.role === 'user' ? '你' : 'CF'}</span>
+              <span className="message-avatar">
+                {message.role === 'user' ? (
+                  '你'
+                ) : (
+                  <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
+                )}
+              </span>
               <div>
                 <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
                 <p>{message.body}</p>
                 {message.meta && <small>{message.meta}</small>}
+                {message.id === props.retryMessageId && (
+                  <button type="button" className="retry-button" onClick={props.onRetry}>
+                    <RotateCcw size={13} />
+                    重试
+                  </button>
+                )}
               </div>
             </article>
           ))}
           {props.isPending && (
             <article className="message is-assistant">
-              <span className="message-avatar">CF</span>
+              <span className="message-avatar">
+                <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
+              </span>
               <div>
                 <strong>流程助手</strong>
                 <p className="thinking">

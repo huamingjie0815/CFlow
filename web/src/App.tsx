@@ -74,6 +74,12 @@ type AgentUndo = {
   messageId: string
 }
 
+type RetryGoal = {
+  objective: string
+  attachments: File[]
+  messageId: string
+}
+
 function workspaceStorageKey(root: string) {
   return `${workspaceKeyPrefix}${root}`
 }
@@ -163,6 +169,7 @@ export function App() {
   } | null>(null)
   const [goal, setGoal] = useState('')
   const [skillAttachments, setSkillAttachments] = useState<File[]>([])
+  const [retryGoal, setRetryGoal] = useState<RetryGoal | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
@@ -450,6 +457,7 @@ export function App() {
       setCandidateCfs(proposal.cfDrafts ?? [])
       setAgentUndo(null)
       setSkillAttachments([])
+      setRetryGoal(null)
       setPositions({})
       setConversation((current) => [
         ...current,
@@ -466,11 +474,22 @@ export function App() {
       setTestState('idle')
       setPreview(null)
     },
-    onError: (error) => {
+    onError: (error, variables) => {
       const detail = readableError(error)
+      const messageId = uniqueId('message')
+      setRetryGoal({
+        objective: variables.objective,
+        attachments: variables.attachments,
+        messageId,
+      })
       setConversation((current) => [
         ...current,
-        { id: uniqueId('message'), role: 'assistant', body: `生成失败：${detail}` },
+        {
+          id: messageId,
+          role: 'assistant',
+          body: `生成失败：${detail}`,
+          meta: '可以恢复目标后更换助手重试',
+        },
       ])
       setNotice({ tone: 'error', title: '生成失败', detail })
     },
@@ -885,6 +904,7 @@ export function App() {
       { id: uniqueId('message'), role: 'user', body: objective },
     ])
     setGoal('')
+    setRetryGoal(null)
     proposalMutation.mutate({
       objective,
       runtime: runtimeId,
@@ -1113,6 +1133,12 @@ export function App() {
               onAttachmentsChange={setSkillAttachments}
               onRuntimeChange={setRuntimeId}
               onSubmit={submitGoal}
+              retryMessageId={retryGoal?.messageId}
+              onRetry={() => {
+                if (!retryGoal) return
+                setGoal(retryGoal.objective)
+                setSkillAttachments(retryGoal.attachments)
+              }}
             />
           ) : (
             <>

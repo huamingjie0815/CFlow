@@ -570,6 +570,13 @@ pre {
   font-size: 10px;
   font-weight: 600;
 }
+.message-avatar img,
+.agent-message-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
 .message.is-user .message-avatar {
   color: #fff;
   background: var(--orange);
@@ -592,6 +599,24 @@ pre {
     10px 'SFMono-Regular',
     Consolas,
     monospace;
+}
+.retry-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 5px 8px;
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+}
+.retry-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
 }
 .thinking {
   display: flex;
@@ -2753,6 +2778,32 @@ pre {
   flex-direction: column;
   background: var(--surface);
   border-top: 1px solid var(--border-strong);
+}
+.drawer-resize-handle {
+  display: grid;
+  height: 10px;
+  flex: 0 0 auto;
+  place-items: center;
+  cursor: ns-resize;
+  touch-action: none;
+  user-select: none;
+}
+.drawer-resize-handle > span {
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  transition: background 150ms ease, width 150ms ease;
+}
+.drawer-resize-handle:hover > span,
+.drawer-resize-handle:focus-visible > span,
+.bottom-drawer.is-resizing .drawer-resize-handle > span {
+  width: 44px;
+  background: var(--accent);
+}
+.bottom-drawer.is-resizing,
+.bottom-drawer.is-resizing * {
+  cursor: ns-resize !important;
 }
 .drawer-tabs {
   display: flex;

@@ -234,7 +234,11 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
         {props.messages.map((message) => (
           <article className={`agent-message is-${message.role}`} key={message.id}>
             <span className="agent-message-avatar">
-              {message.role === 'user' ? '你' : <Bot size={13} />}
+              {message.role === 'user' ? (
+                '你'
+              ) : (
+                <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
+              )}
             </span>
             <div className="agent-message-body">
               <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
@@ -254,7 +258,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
         {mutation.isPending && (
           <article className="agent-message is-assistant">
             <span className="agent-message-avatar">
-              <Bot size={13} />
+              <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
             </span>
             <div className="agent-message-body">
               <strong>流程助手</strong>
