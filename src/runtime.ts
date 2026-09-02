@@ -15,6 +15,7 @@ import type {
   RuntimeHealth,
   RuntimeProfile,
   WorkspaceSettings,
+  AgentTraceReporter,
 } from './types.js'
 import type { ExecutorRegistry } from './engine.js'
 import { Store } from './db.js'
@@ -477,8 +478,19 @@ export class RuntimeManager {
     const executor = (id: string) =>
       registry.register({
         id,
-        execute: (task, input, signal, resources, effects, context) =>
-          this.executeProfile(profile, task, input, signal, resources, undefined, effects, context),
+        execute: (task, input, signal, resources, effects, context, trace) =>
+          this.executeProfile(
+            profile,
+            task,
+            input,
+            signal,
+            resources,
+            undefined,
+            effects,
+            context,
+            undefined,
+            trace,
+          ),
       })
     executor(`${profile.id}@${profile.profileVersion}`)
     if (!exactOnly) executor(profile.id)
@@ -572,10 +584,22 @@ export class RuntimeManager {
     resources: ResolvedResource[] = [],
     outputSchema?: Record<string, unknown>,
     context?: { workspaceRoot: string },
+    trace?: AgentTraceReporter,
   ): Promise<Json> {
     const profile = this.profile(id)
     if (!profile) throw new Error(`UNKNOWN_EXECUTOR:${id}`)
-    return this.executeProfile(profile, task, input, signal, resources, outputSchema, [], context)
+    return this.executeProfile(
+      profile,
+      task,
+      input,
+      signal,
+      resources,
+      outputSchema,
+      [],
+      context,
+      undefined,
+      trace,
+    )
   }
   async executeAnalysis(
     id: string,
@@ -584,6 +608,7 @@ export class RuntimeManager {
     signal: AbortSignal,
     options: RuntimeAnalysisOptions,
     outputSchema?: Record<string, unknown>,
+    trace?: AgentTraceReporter,
   ): Promise<Json> {
     const profile = this.profile(id)
     if (!profile) throw new Error(`UNKNOWN_EXECUTOR:${id}`)
@@ -597,6 +622,7 @@ export class RuntimeManager {
       [],
       undefined,
       options,
+      trace,
     )
   }
   private async executeProfile(
@@ -609,8 +635,15 @@ export class RuntimeManager {
     effects: CapabilityEffect[] = [],
     context?: { workspaceRoot: string },
     analysis?: RuntimeAnalysisOptions,
+    trace?: AgentTraceReporter,
   ): Promise<Json> {
     if (!profile.enabled) throw new Error(`RUNTIME_DISABLED:${profile.id}`)
+    trace?.({
+      kind: 'stage',
+      title: '已准备 Agent 请求',
+      status: 'completed',
+      detail: `${profile.name} · ${profile.backend.toUpperCase()}`,
+    })
     if (profile.backend === 'builtin') return { task, input }
     const prompt = [
       'You are executing one bounded CF capability inside a fixed Flow.',
@@ -633,9 +666,9 @@ export class RuntimeManager {
       .join('\n\n')
     const text =
       profile.backend === 'acp'
-        ? await this.runAcp(profile, prompt, signal, effects, context, analysis)
+        ? await this.runAcp(profile, prompt, signal, effects, context, analysis, trace)
         : profile.backend === 'cli'
-          ? await this.runCli(profile, prompt, signal, effects, context, analysis)
+          ? await this.runCli(profile, prompt, signal, effects, context, analysis, trace)
           : await Promise.reject(new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`))
     return profile.outputMode === 'json' ? parseJsonOutput(text) : { content: text.trim() }
   }
@@ -898,6 +931,7 @@ export class RuntimeManager {
     effects: CapabilityEffect[] = [],
     context?: { workspaceRoot: string },
     analysis?: RuntimeAnalysisOptions,
+    trace?: AgentTraceReporter,
   ) {
     const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
     const args = [
@@ -907,6 +941,7 @@ export class RuntimeManager {
     ]
     const spec = this.launchSpec(profile, args, cwd, ['pipe', 'pipe', 'pipe'], effects)
     const child = launchProcess(spec)
+    trace?.({ kind: 'stage', title: '正在等待 Agent 响应', status: 'running' })
     const output: Buffer[] = []
     const errors: Buffer[] = []
     let outputBytes = 0
@@ -951,6 +986,7 @@ export class RuntimeManager {
         throw new Error(
           `AGENT_CLI_EXITED:${result.code ?? result.childSignal ?? 'unknown'}${stderr ? `:${stderr}` : ''}`,
         )
+      trace?.({ kind: 'stage', title: 'Agent 已返回结果', status: 'completed' })
       return Buffer.concat(output).toString('utf8')
     } finally {
       signal.removeEventListener('abort', relayAbort)
@@ -964,6 +1000,7 @@ export class RuntimeManager {
     effects: CapabilityEffect[] = [],
     context?: { workspaceRoot: string },
     analysis?: RuntimeAnalysisOptions,
+    trace?: AgentTraceReporter,
   ) {
     const cwd = analysis?.cwd ?? context?.workspaceRoot ?? profile.workingDirectory ?? process.cwd()
     const spec = this.launchSpec(profile, profile.args, cwd, ['pipe', 'pipe', 'pipe'], effects)
@@ -989,6 +1026,7 @@ export class RuntimeManager {
         Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
       )
       let permissionDenied = false
+      trace?.({ kind: 'stage', title: '正在连接 Agent 会话', status: 'running' })
       return await acpClient({ name: 'CFlow' })
         .onRequest(methods.client.session.requestPermission, async (ctx: any) => {
           const tool = ctx?.params?.toolCall ?? ctx?.toolCall ?? {}
@@ -1018,7 +1056,44 @@ export class RuntimeManager {
           })
           return ctx.buildSession(cwd).withSession(async (session) => {
             const promptResult = session.prompt(prompt)
-            const text = await session.readText()
+            let text = ''
+            let analysisReported = false
+            while (true) {
+              const update = await session.nextUpdate()
+              if (update.kind === 'stop') break
+              const item: any = update.update
+              const tag = item?.sessionUpdate
+              if (tag === 'agent_message_chunk' && item.content?.type === 'text')
+                text += item.content.text
+              else if (tag === 'agent_thought_chunk' && !analysisReported) {
+                analysisReported = true
+                trace?.({ kind: 'stage', title: 'Agent 正在分析', status: 'running' })
+              } else if (tag === 'plan')
+                trace?.({
+                  kind: 'plan',
+                  title: 'Agent 制定了执行计划',
+                  detail: item.entries?.map((entry: any) => entry.content).join('；'),
+                  technical: item,
+                })
+              else if (tag === 'tool_call' || tag === 'tool_call_update')
+                trace?.({
+                  kind: 'tool',
+                  title: item.title ?? item.name ?? 'Agent 工具调用',
+                  detail: item.status ? `状态：${item.status}` : undefined,
+                  status:
+                    item.status === 'failed'
+                      ? 'failed'
+                      : item.status === 'completed'
+                        ? 'completed'
+                        : 'running',
+                  technical: {
+                    toolCallId: item.toolCallId,
+                    input: item.rawInput,
+                    output: item.rawOutput,
+                    locations: item.locations,
+                  },
+                })
+            }
             const response = await promptResult
             if (response.stopReason !== 'end_turn') {
               const reason = String(response.stopReason).toUpperCase()
@@ -1036,6 +1111,7 @@ export class RuntimeManager {
             }
             if (Buffer.byteLength(text, 'utf8') > profile.maxOutputBytes)
               throw new Error('RUNTIME_OUTPUT_LIMIT_EXCEEDED')
+            trace?.({ kind: 'stage', title: 'Agent 已完成处理', status: 'completed' })
             return text
           })
         })

@@ -2,6 +2,8 @@ import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
+  AgentInvocation,
+  AgentTraceEvent,
   Json,
   FlowCompilationSnapshot,
   LedgerEvent,
@@ -10,6 +12,7 @@ import type {
   RuntimeProfile,
   WorkspaceSettings,
 } from './types.js'
+import { safeTraceEvent } from './agent-trace.js'
 export class Store {
   readonly db: Database
   constructor(file = join(process.cwd(), '.cflow', 'cflow.sqlite')) {
@@ -20,6 +23,108 @@ export class Store {
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_compilations (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, flow_revision INTEGER NOT NULL, mode TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS approvals (run_id TEXT NOT NULL, node INTEGER NOT NULL, decision TEXT, decided_at TEXT, PRIMARY KEY(run_id,node)); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
     )
+    this.db.exec(
+      `CREATE TABLE IF NOT EXISTS agent_invocations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, runtime_id TEXT, flow_id TEXT, run_id TEXT, node INTEGER, message_id TEXT, result TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS agent_trace_events (invocation_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(invocation_id, seq), FOREIGN KEY(invocation_id) REFERENCES agent_invocations(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS agent_invocations_run_node ON agent_invocations(run_id,node);`,
+    )
+    this.db
+      .prepare(
+        "UPDATE agent_invocations SET status='interrupted', error=COALESCE(error,'服务已中断'), updated_at=? WHERE status IN ('queued','running')",
+      )
+      .run(new Date().toISOString())
+  }
+
+  createAgentInvocation(value: Omit<AgentInvocation, 'createdAt' | 'updatedAt'>) {
+    const now = new Date().toISOString()
+    this.db
+      .prepare(
+        'INSERT INTO agent_invocations(id,kind,status,runtime_id,flow_id,run_id,node,message_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)',
+      )
+      .run(
+        value.id,
+        value.kind,
+        value.status,
+        value.runtimeId ?? null,
+        value.flowId ?? null,
+        value.runId ?? null,
+        value.node ?? null,
+        value.messageId ?? null,
+        now,
+        now,
+      )
+    return this.agentInvocation(value.id)!
+  }
+  agentInvocation(id: string): AgentInvocation | undefined {
+    const row = this.db.prepare('SELECT * FROM agent_invocations WHERE id=?').get(id) as any
+    return row
+      ? {
+          id: row.id,
+          kind: row.kind,
+          status: row.status,
+          runtimeId: row.runtime_id ?? undefined,
+          flowId: row.flow_id ?? undefined,
+          runId: row.run_id ?? undefined,
+          node: row.node ?? undefined,
+          messageId: row.message_id ?? undefined,
+          result: row.result ? JSON.parse(row.result) : undefined,
+          error: row.error ?? undefined,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }
+      : undefined
+  }
+  agentInvocationsForRun(runId: string): AgentInvocation[] {
+    return (
+      this.db
+        .prepare('SELECT id FROM agent_invocations WHERE run_id=? ORDER BY created_at')
+        .all(runId) as { id: string }[]
+    ).map((row) => this.agentInvocation(row.id)!)
+  }
+  setAgentInvocation(id: string, status: AgentInvocation['status'], result?: Json, error?: string) {
+    this.db
+      .prepare('UPDATE agent_invocations SET status=?,result=?,error=?,updated_at=? WHERE id=?')
+      .run(
+        status,
+        result === undefined ? null : JSON.stringify(result),
+        error ?? null,
+        new Date().toISOString(),
+        id,
+      )
+  }
+  appendAgentTrace(
+    invocationId: string,
+    value: Omit<AgentTraceEvent, 'invocationId' | 'seq' | 'at'>,
+  ) {
+    const count = (
+      this.db
+        .prepare('SELECT COUNT(*) count FROM agent_trace_events WHERE invocation_id=?')
+        .get(invocationId) as { count: number }
+    ).count
+    if (count >= 500) return undefined
+    const seq = count + 1
+    const at = new Date().toISOString()
+    const limited =
+      count === 499
+        ? {
+            kind: 'notice' as const,
+            title: '后续过程记录已截断',
+            detail: '本次调用的过程事件超过 500 项。',
+          }
+        : value
+    const event = { invocationId, seq, ...safeTraceEvent(limited), at }
+    this.db
+      .prepare('INSERT INTO agent_trace_events(invocation_id,seq,value,at) VALUES(?,?,?,?)')
+      .run(invocationId, seq, JSON.stringify(event), at)
+    return event
+  }
+  agentTraceEvents(invocationId: string): AgentTraceEvent[] {
+    return (
+      this.db
+        .prepare('SELECT value FROM agent_trace_events WHERE invocation_id=? ORDER BY seq')
+        .all(invocationId) as { value: string }[]
+    ).map((row) => JSON.parse(row.value) as AgentTraceEvent)
+  }
+  deleteAgentInvocationsForFlow(flowId: string) {
+    return this.db.prepare('DELETE FROM agent_invocations WHERE flow_id=?').run(flowId)
   }
   saveFlowCompilation(snapshot: FlowCompilationSnapshot) {
     this.db

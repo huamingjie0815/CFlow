@@ -4,6 +4,7 @@ import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
 import { fileURLToPath } from 'node:url'
 import { existsSync, realpathSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { dirname, join, sep } from 'node:path'
 import { Store } from './db.js'
@@ -62,6 +63,28 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     ...[...testCatalogs.values()].flat(),
   ])
   const scopeFlowDraft = (draft: FlowDraft): FlowDraft => ({ ...draft, workspaceRoot })
+  const startInvocation = (input: {
+    id?: string
+    kind: 'flow-proposal' | 'flow-assistant'
+    runtimeId?: string
+    flowId?: string
+    messageId?: string
+  }) => {
+    const id = input.id?.trim() || `agent-${randomUUID()}`
+    const existing = store.agentInvocation(id)
+    if (!existing)
+      store.createAgentInvocation({
+        id,
+        kind: input.kind,
+        status: 'running',
+        runtimeId: input.runtimeId,
+        flowId: input.flowId,
+        messageId: input.messageId,
+      })
+    return id
+  }
+  const traceFor = (id: string) => (event: Parameters<typeof store.appendAgentTrace>[1]) =>
+    store.appendAgentTrace(id, event)
   const app = Fastify({ logger: true })
   app.register(fastifyMultipart, {
     // Do not silently truncate large skill bundles; files are streamed to disk.
@@ -298,6 +321,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       changes?: number
     }
     if (!result.changes) return reply.code(404).send({ error: 'FLOW_DRAFT_NOT_FOUND' })
+    store.deleteAgentInvocationsForFlow(req.params.id)
     return { deleted: true }
   })
   const deletePublishedFlow = async (id: string, reply: any) => {
@@ -410,6 +434,9 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       const runtimeId = body.runtimeId?.trim()
       const profile = runtimeId ? runtimes.profile(runtimeId) : undefined
       const runtimeUsable = Boolean(runtimeId) && profile?.backend !== 'builtin'
+      const invocationId = runtimeUsable
+        ? startInvocation({ id: body.invocationId, kind: 'flow-proposal', runtimeId })
+        : undefined
       // Attachment analysis needs a real agent runtime; the keyword fallback
       // below can only match already published capabilities.
       if (multipart && !runtimeUsable) throw await failing('RUNTIME_ANALYSIS_REQUIRED')
@@ -486,6 +513,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
                 deadline,
                 { cwd: multipart.root, allowedRoot: multipart.root },
                 flowProposalOutputSchema(true),
+                invocationId ? traceFor(invocationId) : undefined,
               )
             : await runtimes.execute(
                 runtimeId!,
@@ -495,14 +523,25 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
                 [],
                 flowProposalOutputSchema(false),
                 { workspaceRoot },
+                invocationId ? traceFor(invocationId) : undefined,
               )
         } catch (error) {
           await discard()
+          if (invocationId)
+            store.setAgentInvocation(
+              invocationId,
+              'failed',
+              undefined,
+              error instanceof Error ? error.message : String(error),
+            )
           throw error
         }
         const proposal = response as any
-        if (!proposal || typeof proposal !== 'object' || !Array.isArray(proposal.stages))
+        if (!proposal || typeof proposal !== 'object' || !Array.isArray(proposal.stages)) {
+          if (invocationId)
+            store.setAgentInvocation(invocationId, 'failed', undefined, 'RUNTIME_PROPOSAL_INVALID')
           throw await failing('RUNTIME_PROPOSAL_INVALID')
+        }
         if (multipart) {
           const failures = collectGroundingFailures(proposal, multipart.contents)
           if (failures.length) {
@@ -518,15 +557,22 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
               'flow proposal rejected: stages not grounded in the uploaded source',
             )
             await discard()
-            throw groundingError(failures, proposal)
+            const error = groundingError(failures, proposal)
+            if (invocationId)
+              store.setAgentInvocation(invocationId, 'failed', undefined, error.message)
+            throw error
           }
         }
         const graph = buildProposalGraph(proposal.stages, { catalog, runtimeId })
-        return asProposal(
+        const result = await asProposal(
           graph,
           String(proposal.flowName ?? objective),
           String(proposal.summary ?? 'Runtime 已生成可审阅的 Flow 草案。').slice(0, 1000),
+          invocationId ? { invocationId } : {},
         )
+        if (invocationId)
+          store.setAgentInvocation(invocationId, 'completed', result as unknown as Json)
+        return result
       }
 
       const matched = matchPublishedCapabilities(objective, catalog)
@@ -562,6 +608,13 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     if (!request.flowDraft) throw new Error('FLOW_WORKSPACE_REQUIRED')
     const health = await runtimes.health(runtimeId)
     if (health.status !== 'available') return { ...fallback, fallback: true }
+    const invocationId = startInvocation({
+      id: (req.body as any).invocationId,
+      kind: 'flow-assistant',
+      runtimeId,
+      flowId: request.flowDraft.flowId,
+      messageId: (req.body as any).messageId,
+    })
     const availableRuntimes: { id: string; name: string }[] = []
     for (const item of runtimes.profiles()) {
       if (!item.enabled) continue
@@ -570,29 +623,67 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         availableRuntimes.push({ id: item.id, name: item.name })
     }
     const grounded = Boolean(req.body.attachments?.length)
-    const response = await runtimes.execute(
-      runtimeId,
-      flowAgentPrompt(message, grounded),
-      flowAgentContext({ ...request, message }, availableRuntimes, catalog),
-      AbortSignal.timeout(runtimes.settings().testTimeoutMs),
-      [],
-      flowAgentOutputSchema(grounded),
-      { workspaceRoot },
-    )
-    const normalized = normalizeAgentResponse(response)
-    if (normalized.intent === 'answer') return { ...normalized, runtimeId }
-    if (grounded) assertAttachmentGrounding(normalized, req.body.attachments ?? [])
-    const revised = applyFlowRevision(
-      request.flowDraft,
-      request.cfDrafts ?? [],
-      normalized.stages,
-      { catalog, runtimeId },
-    )
+    let response: Json
+    try {
+      response = await runtimes.execute(
+        runtimeId,
+        flowAgentPrompt(message, grounded),
+        flowAgentContext({ ...request, message }, availableRuntimes, catalog),
+        AbortSignal.timeout(runtimes.settings().testTimeoutMs),
+        [],
+        flowAgentOutputSchema(grounded),
+        { workspaceRoot },
+        traceFor(invocationId),
+      )
+    } catch (error) {
+      store.setAgentInvocation(
+        invocationId,
+        'failed',
+        undefined,
+        error instanceof Error ? error.message : String(error),
+      )
+      throw error
+    }
+    let normalized: ReturnType<typeof normalizeAgentResponse>
+    try {
+      normalized = normalizeAgentResponse(response)
+    } catch (error) {
+      store.setAgentInvocation(
+        invocationId,
+        'failed',
+        undefined,
+        error instanceof Error ? error.message : String(error),
+      )
+      throw error
+    }
+    if (normalized.intent === 'answer') {
+      const result = { ...normalized, runtimeId, invocationId }
+      store.setAgentInvocation(invocationId, 'completed', result as unknown as Json)
+      return result
+    }
+    let revised: ReturnType<typeof applyFlowRevision>
+    try {
+      if (grounded) assertAttachmentGrounding(normalized, req.body.attachments ?? [])
+      revised = applyFlowRevision(request.flowDraft, request.cfDrafts ?? [], normalized.stages, {
+        catalog,
+        runtimeId,
+      })
+    } catch (error) {
+      store.setAgentInvocation(
+        invocationId,
+        'failed',
+        undefined,
+        error instanceof Error ? error.message : String(error),
+      )
+      throw error
+    }
     store.db.transaction(() => {
       for (const draft of revised.cfDrafts) store.save('cf_drafts', draft.cfId, draft)
       store.save('flow_drafts', revised.flowDraft.flowId, revised.flowDraft)
     })()
-    return { ...normalized, ...revised, runtimeId }
+    const result = { ...normalized, ...revised, runtimeId, invocationId }
+    store.setAgentInvocation(invocationId, 'completed', result as unknown as Json)
+    return result
   })
   app.get('/api/runs', async () => store.runs())
   app.get('/api/resources', async () => store.resourceProfiles<ResourceProfile>())
@@ -731,7 +822,46 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
     const run = store.getRun(req.params.id)
     if (!run) return reply.code(404).send({ error: 'RUN_NOT_FOUND' })
-    return { run, events: store.events(req.params.id) }
+    return {
+      run,
+      events: store.events(req.params.id),
+      invocations: store.agentInvocationsForRun(req.params.id),
+    }
+  })
+  app.get<{ Params: { id: string } }>('/api/agent-invocations/:id', async (req, reply) => {
+    const invocation = store.agentInvocation(req.params.id)
+    if (!invocation) return reply.code(404).send({ error: 'AGENT_INVOCATION_NOT_FOUND' })
+    return { invocation, events: store.agentTraceEvents(req.params.id) }
+  })
+  app.get<{ Params: { id: string } }>('/api/agent-invocations/:id/events', async (req, reply) => {
+    if (!store.agentInvocation(req.params.id))
+      return reply.code(404).send({ error: 'AGENT_INVOCATION_NOT_FOUND' })
+    reply.raw.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    })
+    let sent = Number(req.headers['last-event-id'] ?? 0)
+    const flush = () => {
+      for (const event of store.agentTraceEvents(req.params.id).filter((item) => item.seq > sent)) {
+        reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`)
+        sent = event.seq
+      }
+      const invocation = store.agentInvocation(req.params.id)
+      if (invocation && !['queued', 'running'].includes(invocation.status)) {
+        reply.raw.write(`event: complete\ndata: ${JSON.stringify(invocation)}\n\n`)
+        return true
+      }
+      return false
+    }
+    if (flush()) return reply.raw.end()
+    const timer = setInterval(() => {
+      if (flush()) {
+        clearInterval(timer)
+        reply.raw.end()
+      }
+    }, 100)
+    req.raw.on('close', () => clearInterval(timer))
   })
   app.get<{ Params: { id: string } }>('/api/runs/:id/events', async (req, reply) => {
     reply.raw.writeHead(200, {

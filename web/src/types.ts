@@ -12,9 +12,13 @@ export type {
   RuntimeProfile,
   WorkspaceInfo,
   WorkspaceSettings,
+  AgentInvocation,
+  AgentTraceEvent,
 } from '../../src/types'
 
 import type {
+  AgentInvocation,
+  AgentTraceEvent,
   CFDraft,
   CFVersion,
   CompilationWarning,
@@ -54,6 +58,7 @@ export type RunSummary = {
 export type RunDetail = {
   run: RunSummary
   events: import('../../src/types').LedgerEvent[]
+  invocations?: AgentInvocation[]
 }
 
 export type AgentChatMessage = {
@@ -64,6 +69,12 @@ export type AgentChatMessage = {
   /** Whether this turn came from the initial goal or from later chat. */
   source?: 'goal' | 'agent'
   at?: string
+  invocationId?: string
+}
+
+export type AgentInvocationDetail = {
+  invocation: AgentInvocation
+  events: AgentTraceEvent[]
 }
 
 export type FlowAgentResponse = {
@@ -100,6 +111,7 @@ export type FlowAgentResponse = {
   cfDrafts?: CFDraft[]
   runtimeId?: string
   fallback?: boolean
+  invocationId?: string
 }
 
 export type FlowProposal = {
@@ -115,6 +127,7 @@ export type FlowProposal = {
     entryFiles: string[]
     archivePath: string
   }
+  invocationId?: string
 }
 
 export type CompilationPreview = {

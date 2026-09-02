@@ -10,6 +10,7 @@ import {
 } from '../run-log'
 import { runStatusLabel } from '../copy'
 import type { CFDraft, CFVersion, FlowDraft, RunDetail, RunSummary } from '../types'
+import { AgentTracePopover } from './AgentTracePopover'
 
 const RECENT_RUN_LIMIT = 4
 
@@ -66,27 +67,32 @@ function TechnicalDetails({ entries }: { entries: RunLogEntry[] }) {
 function StepGroup({
   group,
   onSelectNode,
+  invocationId,
 }: {
   group: RunLogGroup
   onSelectNode: (id: string | null) => void
+  invocationId?: string
 }) {
   const clickable = Boolean(group.nodeId) && !group.stale
   return (
     <section className="run-log-group">
-      {clickable ? (
-        <button
-          type="button"
-          className="run-log-head"
-          onClick={() => onSelectNode(group.nodeId!)}
-          title="在左侧详情里打开这一步"
-        >
-          <RunLogHead group={group} />
-        </button>
-      ) : (
-        <div className="run-log-head is-static">
-          <RunLogHead group={group} />
-        </div>
-      )}
+      <div className="run-log-head is-static">
+        {clickable ? (
+          <button
+            type="button"
+            className="run-log-select"
+            onClick={() => onSelectNode(group.nodeId!)}
+            title="在左侧详情里打开这一步"
+          >
+            <RunLogHead group={group} />
+          </button>
+        ) : (
+          <span className="run-log-select is-static">
+            <RunLogHead group={group} />
+          </span>
+        )}
+        {invocationId && <AgentTracePopover invocationId={invocationId} />}
+      </div>
       <div className="activity-list">
         {group.entries.map((entry) => (
           <EntryRow entry={entry} key={`${entry.seq}-${entry.type}`} />
@@ -192,7 +198,14 @@ export function RunLogPanel(props: RunLogPanelProps) {
               </section>
             )}
             {log.nodes.map((group) => (
-              <StepGroup group={group} key={group.key} onSelectNode={props.onSelectNode} />
+              <StepGroup
+                group={group}
+                key={group.key}
+                onSelectNode={props.onSelectNode}
+                invocationId={
+                  props.runDetail?.invocations?.find((item) => item.node === group.nodeIndex)?.id
+                }
+              />
             ))}
             {!log.nodes.length && !log.run.entries.length && (
               <div className="empty-panel compact">这次运行还没有产生记录。</div>

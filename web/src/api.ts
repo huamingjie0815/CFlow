@@ -75,15 +75,16 @@ export const api = {
       cfDrafts,
     }
   },
-  propose(objective: string, runtimeId: string, attachments: File[] = []) {
+  propose(objective: string, runtimeId: string, attachments: File[] = [], invocationId?: string) {
     if (!attachments.length)
       return request<FlowProposal>('/api/flow-proposals', {
         method: 'POST',
-        body: JSON.stringify({ objective, runtimeId }),
+        body: JSON.stringify({ objective, runtimeId, invocationId }),
       })
     const body = new FormData()
     body.set('objective', objective)
     body.set('runtimeId', runtimeId)
+    if (invocationId) body.set('invocationId', invocationId)
     attachments.forEach((file) =>
       body.append(
         'attachments',
@@ -103,6 +104,8 @@ export const api = {
     check?: { error?: string | null }
     runDetail?: RunDetail | null
     attachments?: File[]
+    invocationId?: string
+    messageId?: string
   }) {
     const { attachments = [], ...snapshot } = input
     const attachmentContents = Promise.all(
@@ -158,6 +161,11 @@ export const api = {
   },
   getRun(id: string) {
     return request<RunDetail>(`/api/runs/${encodeURIComponent(id)}`)
+  },
+  getAgentInvocation(id: string) {
+    return request<import('./types').AgentInvocationDetail>(
+      `/api/agent-invocations/${encodeURIComponent(id)}`,
+    )
   },
   run(flowId: string, flowVersion: string, resourceProfileId?: string) {
     return request<{ runId: string }>('/api/runs', {
@@ -228,6 +236,7 @@ export function readableError(error: unknown) {
     DEFAULT_RUNTIME_NOT_SELECTABLE: '请选择一个真实的本机助手作为默认助手。',
     RESOURCE_BINDING_REQUIRED: '这条流程还缺要用的资料，请先在设置里补全。',
     AGENT_MESSAGE_REQUIRED: '请先写下想咨询的问题。',
+    AGENT_INVOCATION_NOT_FOUND: '这条处理过程已经不存在，请刷新工作台。',
     RUNTIME_ANALYSIS_REQUIRED: '分析 skill 附件需要一个可用的 ACP Agent runtime。',
     SKILL_ATTACHMENT_NO_TEXT_FILES: '附件中没有可分析的文本文件，请选择 SKILL.md 或 skill 文件夹。',
     RUNTIME_AGENT_RESPONSE_INVALID: '助手返回的分析格式不完整，请重试。',

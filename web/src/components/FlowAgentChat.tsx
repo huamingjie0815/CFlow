@@ -13,6 +13,7 @@ import {
 import { useMutation } from '@tanstack/react-query'
 import { api, readableError } from '../api'
 import { runStatusLabel } from '../copy'
+import { AgentTracePopover } from './AgentTracePopover'
 import {
   attachmentName,
   canApplyAgentRevision,
@@ -25,6 +26,8 @@ import type { AgentChatMessage, CFDraft, FlowDraft, RunDetail, RuntimeWithHealth
 type MessageUpdate = AgentChatMessage[] | ((current: AgentChatMessage[]) => AgentChatMessage[])
 
 type AgentSnapshot = {
+  invocationId?: string
+  messageId?: string
   runtimeId?: string
   flowDraft: FlowDraft
   cfDrafts: CFDraft[]
@@ -160,6 +163,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             : response.runtimeId
               ? `${props.runtimes.find((item) => item.id === response.runtimeId)?.name ?? response.runtimeId} · 当前草稿`
               : '当前草稿',
+          invocationId: response.invocationId,
         },
       ])
       props.onAttachmentsChange([])
@@ -173,6 +177,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           id: errorMessageId,
           role: 'assistant',
           body: `暂时无法处理：${readableError(error)}`,
+          invocationId: variables.snapshot.invocationId,
           meta: `${props.runtimes.find((item) => item.id === variables.snapshot.runtimeId)?.name ?? variables.snapshot.runtimeId ?? '本地流程分析'} · 当前草稿未修改`,
         },
       ])
@@ -183,7 +188,10 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
     const message = rawMessage.trim()
     if (!message || mutation.isPending || props.disabled) return
     const current = latestRef.current
+    const invocationId = idOf('agent')
     const snapshot: AgentSnapshot = {
+      invocationId,
+      messageId: invocationId,
       runtimeId: current.runtimeId,
       flowDraft: structuredClone(current.draft),
       cfDrafts: structuredClone(current.cfDrafts),
@@ -270,7 +278,10 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
               )}
             </span>
             <div className="agent-message-body">
-              <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+              <span className="agent-message-heading">
+                <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+                {message.invocationId && <AgentTracePopover invocationId={message.invocationId} />}
+              </span>
               <p>{message.body}</p>
               {message.meta && <small>{message.meta}</small>}
               {message.id === props.undoMessageId && (
@@ -302,7 +313,12 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
               <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
             </span>
             <div className="agent-message-body">
-              <strong>流程助手</strong>
+              <span className="agent-message-heading">
+                <strong>流程助手</strong>
+                <AgentTracePopover
+                  invocationId={(mutation.variables as any)?.snapshot?.invocationId}
+                />
+              </span>
               <p className="thinking">
                 <LoaderCircle className="spin" size={13} /> 正在读取当前草稿并处理…
               </p>

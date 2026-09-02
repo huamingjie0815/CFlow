@@ -155,6 +155,40 @@ export type LedgerEvent = {
   at: string
 }
 
+export type AgentInvocationKind = 'flow-node' | 'flow-proposal' | 'flow-assistant'
+export type AgentInvocationStatus = 'queued' | 'running' | 'completed' | 'failed' | 'interrupted'
+export type AgentTraceEventKind = 'stage' | 'plan' | 'tool' | 'notice' | 'error'
+
+export interface AgentInvocation {
+  id: string
+  kind: AgentInvocationKind
+  status: AgentInvocationStatus
+  runtimeId?: string
+  flowId?: string
+  runId?: string
+  node?: number
+  messageId?: string
+  result?: Json
+  error?: string
+  createdAt: string
+  updatedAt: string
+}
+
+export interface AgentTraceEvent {
+  invocationId: string
+  seq: number
+  kind: AgentTraceEventKind
+  title: string
+  detail?: string
+  status?: 'pending' | 'running' | 'completed' | 'failed'
+  technical?: Json
+  at: string
+}
+
+export type AgentTraceReporter = (
+  event: Omit<AgentTraceEvent, 'invocationId' | 'seq' | 'at'>,
+) => void
+
 export type RuntimeBackendKind = 'builtin' | 'acp' | 'cli'
 export type RuntimePromptTransport = 'stdin' | 'argument'
 export type RuntimeOutputMode = 'json' | 'text'

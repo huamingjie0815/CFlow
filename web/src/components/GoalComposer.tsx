@@ -8,6 +8,7 @@ import {
   snapshotFileList,
 } from '../workbench-ui'
 import type { AgentChatMessage, RuntimeWithHealth } from '../types'
+import { AgentTracePopover } from './AgentTracePopover'
 
 const TEXT_ACCEPT = '.md,.mdx,.txt,.json,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.sh'
 
@@ -25,6 +26,7 @@ type GoalComposerProps = {
   onRuntimeChange: (id: string) => void
   onSubmit: () => void
   retryMessageId?: string
+  pendingInvocationId?: string
   onRetry: () => void
 }
 
@@ -66,7 +68,12 @@ export function GoalComposer(props: GoalComposerProps) {
                 )}
               </span>
               <div>
-                <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+                <span className="agent-message-heading">
+                  <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+                  {message.invocationId && (
+                    <AgentTracePopover invocationId={message.invocationId} />
+                  )}
+                </span>
                 <p>{message.body}</p>
                 {message.meta && <small>{message.meta}</small>}
                 {message.id === props.retryMessageId && (
@@ -84,7 +91,10 @@ export function GoalComposer(props: GoalComposerProps) {
                 <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
               </span>
               <div>
-                <strong>流程助手</strong>
+                <span className="agent-message-heading">
+                  <strong>流程助手</strong>
+                  <AgentTracePopover invocationId={props.pendingInvocationId} />
+                </span>
                 <p className="thinking">
                   <LoaderCircle className="spin" size={14} />
                   正在根据你的目标挑选步骤…

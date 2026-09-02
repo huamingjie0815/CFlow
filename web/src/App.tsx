@@ -175,6 +175,7 @@ export function App() {
   const [goal, setGoal] = useState('')
   const [skillAttachments, setSkillAttachments] = useState<File[]>([])
   const [retryGoal, setRetryGoal] = useState<RetryGoal | null>(null)
+  const [proposalInvocationId, setProposalInvocationId] = useState<string | undefined>()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
   const [flowAgentRuntimeId, setFlowAgentRuntimeId] = useState('')
@@ -446,12 +447,15 @@ export function App() {
       objective,
       runtime,
       attachments,
+      invocationId,
     }: {
       objective: string
       runtime: string
       attachments: File[]
-    }) => api.propose(objective, runtime, attachments),
+      invocationId: string
+    }) => api.propose(objective, runtime, attachments, invocationId),
     onSuccess: (proposal, variables) => {
+      setProposalInvocationId(undefined)
       if (!proposal.flowDraft) {
         setConversation((current) => [
           ...current,
@@ -478,6 +482,7 @@ export function App() {
             ? `${proposal.assistantMessage ?? '已经生成一份可以调整的流程草案。'} 已只读分析 ${proposal.attachmentSummary.fileCount} 个附件${proposal.attachmentSummary.skippedCount ? `，跳过 ${proposal.attachmentSummary.skippedCount} 个不支持的文件` : ''}，并归档到 ${proposal.attachmentSummary.archivePath}。`
             : (proposal.assistantMessage ?? '已经生成一份可以调整的流程草案。'),
           meta: variables.runtime,
+          invocationId: proposal.invocationId,
         },
       ])
       setDirty(true)
@@ -485,6 +490,7 @@ export function App() {
       setPreview(null)
     },
     onError: (error, variables) => {
+      setProposalInvocationId(undefined)
       const detail = readableError(error)
       const messageId = uniqueId('message')
       setRetryGoal({
@@ -499,6 +505,7 @@ export function App() {
           role: 'assistant',
           body: `生成失败：${detail}`,
           meta: '可以恢复目标后更换助手重试',
+          invocationId: variables.invocationId,
         },
       ])
       setNotice({ tone: 'error', title: '生成失败', detail })
@@ -920,7 +927,12 @@ export function App() {
   }
   const arrangeLayout = () => {
     if (!draft) return
-    setPositions(arrangeCanvasPositions(draft.nodes.map((node) => node.id), draft.edges))
+    setPositions(
+      arrangeCanvasPositions(
+        draft.nodes.map((node) => node.id),
+        draft.edges,
+      ),
+    )
     setLayoutRevision((revision) => revision + 1)
   }
   const addCapabilityNode = () => {
@@ -955,10 +967,13 @@ export function App() {
     ])
     setGoal('')
     setRetryGoal(null)
+    const invocationId = uniqueId('agent')
+    setProposalInvocationId(invocationId)
     proposalMutation.mutate({
       objective,
       runtime: runtimeId,
       attachments: skillAttachments,
+      invocationId,
     })
   }
 
@@ -1187,6 +1202,7 @@ export function App() {
               onRuntimeChange={setRuntimeId}
               onSubmit={submitGoal}
               retryMessageId={retryGoal?.messageId}
+              pendingInvocationId={proposalInvocationId}
               onRetry={() => {
                 if (!retryGoal) return
                 setGoal(retryGoal.objective)

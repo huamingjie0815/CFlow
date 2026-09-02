@@ -7,6 +7,7 @@ import type {
   FlowNode,
   CapabilityEffect,
   RuntimeExecutionError,
+  AgentTraceReporter,
 } from './types.js'
 import { assertContract } from './contract.js'
 import { Store } from './db.js'
@@ -21,6 +22,7 @@ export interface Executor {
     resources?: ResolvedResource[],
     effects?: CapabilityEffect[],
     context?: { workspaceRoot: string },
+    trace?: AgentTraceReporter,
   ): Promise<Json>
 }
 export class ExecutorRegistry {
@@ -481,11 +483,53 @@ export class Engine {
       const executorId = node.executorProfile
         ? `${node.executorProfile.id}@${node.executorProfile.profileVersion}`
         : (node.executor ?? version.draft.defaultExecutor ?? 'echo')
-      const output = await this.executors
-        .get(executorId)
-        .execute(version.program.task, input, signal, resources, version.draft.effects ?? [], {
-          workspaceRoot: plan.workspaceRoot,
+      const invocationId = `agent-${randomUUID()}`
+      this.store.createAgentInvocation({
+        id: invocationId,
+        kind: 'flow-node',
+        status: 'running',
+        runtimeId: executorId.split('@')[0],
+        flowId: plan.flowId,
+        runId,
+        node: node.index,
+      })
+      this.store.append(runId, 'agent.invocation', node.index, { invocationId })
+      let output: Json
+      try {
+        output = await this.executors.get(executorId).execute(
+          version.program.task,
+          input,
+          signal,
+          resources,
+          version.draft.effects ?? [],
+          {
+            workspaceRoot: plan.workspaceRoot,
+          },
+          (event) => this.store.appendAgentTrace(invocationId, event),
+        )
+        if (!this.store.agentTraceEvents(invocationId).length)
+          this.store.appendAgentTrace(invocationId, {
+            kind: 'notice',
+            title: '该 Agent 未提供更细的过程事件',
+            detail: '已记录节点开始、完成和结果状态。',
+            status: 'completed',
+          })
+        this.store.setAgentInvocation(invocationId, 'completed')
+      } catch (error) {
+        this.store.appendAgentTrace(invocationId, {
+          kind: 'error',
+          title: 'Agent 处理失败',
+          status: 'failed',
+          detail: error instanceof Error ? error.message : String(error),
         })
+        this.store.setAgentInvocation(
+          invocationId,
+          signal.aborted ? 'interrupted' : 'failed',
+          undefined,
+          error instanceof Error ? error.message : String(error),
+        )
+        throw error
+      }
       assertContract(node.outputContract ?? version.draft.outputContract, output, 'CF_OUTPUT')
       return output
     }
