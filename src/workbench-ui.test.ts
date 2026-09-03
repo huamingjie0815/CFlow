@@ -1,8 +1,13 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  AGENT_PANEL_DEFAULT_WIDTH,
+  applyCurrentRuntime,
   canApplyAgentRevision,
   arrangeCanvasPositions,
+  clampPanelWidth,
+  constrainPanelWidths,
+  DETAIL_PANEL_DEFAULT_WIDTH,
   draftSaveStatus,
   flowTestCounts,
   nextSignalAction,
@@ -10,6 +15,28 @@ import {
   runStopControl,
   snapshotFileList,
 } from '../web/src/workbench-ui.js'
+
+test('retrying an assistant turn uses the session current Agent', () => {
+  const failedSnapshot = { runtimeId: 'codex', revision: 7 }
+  const retrySnapshot = applyCurrentRuntime(failedSnapshot, 'claude-code')
+
+  assert.deepEqual(retrySnapshot, { runtimeId: 'claude-code', revision: 7 })
+  assert.deepEqual(failedSnapshot, { runtimeId: 'codex', revision: 7 })
+})
+
+test('side panel resizing preserves the canvas and clamps extreme widths', () => {
+  assert.equal(clampPanelWidth(120, 1280, AGENT_PANEL_DEFAULT_WIDTH), 240)
+  assert.equal(clampPanelWidth(900, 1280, AGENT_PANEL_DEFAULT_WIDTH), 380)
+  assert.equal(clampPanelWidth(460, 1600, AGENT_PANEL_DEFAULT_WIDTH), 460)
+  assert.deepEqual(constrainPanelWidths({ left: 520, right: 520 }, 1280), { left: 360, right: 360 })
+  assert.deepEqual(
+    constrainPanelWidths(
+      { left: DETAIL_PANEL_DEFAULT_WIDTH, right: AGENT_PANEL_DEFAULT_WIDTH },
+      1280,
+    ),
+    { left: DETAIL_PANEL_DEFAULT_WIDTH, right: AGENT_PANEL_DEFAULT_WIDTH },
+  )
+})
 
 const ladder = {
   hasDraft: true,

@@ -4,6 +4,54 @@ export type RunMode = 'test' | 'live' | null
 export type TestState = 'idle' | 'running' | 'passed' | 'failed' | 'cancelled' | 'published'
 export type DrawerTab = 'log' | 'check'
 
+export const DETAIL_PANEL_DEFAULT_WIDTH = 300
+export const AGENT_PANEL_DEFAULT_WIDTH = 340
+export const PANEL_MIN_WIDTH = 240
+export const PANEL_MAX_WIDTH = 520
+export const PANEL_CENTER_MIN_WIDTH = 560
+
+export type PanelWidths = { left: number; right: number }
+
+function clamp(value: number, minimum: number, maximum: number) {
+  return Math.min(maximum, Math.max(minimum, value))
+}
+
+export function clampPanelWidth(
+  requestedWidth: number,
+  containerWidth: number,
+  oppositeWidth: number,
+) {
+  const availableMaximum = Math.max(
+    PANEL_MIN_WIDTH,
+    containerWidth - PANEL_CENTER_MIN_WIDTH - oppositeWidth,
+  )
+  return clamp(requestedWidth, PANEL_MIN_WIDTH, Math.min(PANEL_MAX_WIDTH, availableMaximum))
+}
+
+/** Keeps restored widths valid when the desktop window becomes narrower. */
+export function constrainPanelWidths(widths: PanelWidths, containerWidth: number): PanelWidths {
+  let left = clamp(widths.left, PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+  let right = clamp(widths.right, PANEL_MIN_WIDTH, PANEL_MAX_WIDTH)
+  const availableTotal = Math.max(PANEL_MIN_WIDTH * 2, containerWidth - PANEL_CENTER_MIN_WIDTH)
+  const overflow = left + right - availableTotal
+  if (overflow <= 0) return { left, right }
+
+  const leftRoom = left - PANEL_MIN_WIDTH
+  const rightRoom = right - PANEL_MIN_WIDTH
+  const totalRoom = leftRoom + rightRoom
+  const leftReduction = totalRoom > 0 ? Math.min(leftRoom, overflow * (leftRoom / totalRoom)) : 0
+  left -= leftReduction
+  right -= Math.min(rightRoom, overflow - leftReduction)
+  return { left: Math.round(left), right: Math.round(right) }
+}
+
+export function applyCurrentRuntime<T extends { runtimeId?: string }>(
+  snapshot: T,
+  runtimeId?: string,
+): T {
+  return { ...snapshot, runtimeId }
+}
+
 /** Which single action gets the one filled button on screen. */
 export type SignalAction = 'goal' | 'check' | 'test' | 'publish' | 'run' | null
 

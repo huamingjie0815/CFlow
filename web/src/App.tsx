@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CirclePlay,
@@ -24,6 +24,7 @@ import { DetailPanel } from './components/DetailPanel'
 import { FlowAgentChat } from './components/FlowAgentChat'
 import { FlowCanvas } from './components/FlowCanvas'
 import { GoalComposer } from './components/GoalComposer'
+import { PanelResizeHandle } from './components/PanelResizeHandle'
 import { RunLogPanel } from './components/RunLogPanel'
 import { SettingsView } from './components/SettingsView'
 import { TopBar } from './components/TopBar'
@@ -35,6 +36,9 @@ import {
   flowTestCounts,
   mergeAttachments,
   arrangeCanvasPositions,
+  AGENT_PANEL_DEFAULT_WIDTH,
+  constrainPanelWidths,
+  DETAIL_PANEL_DEFAULT_WIDTH,
   nextSignalAction,
   runStopControl,
   type DrawerTab,
@@ -68,6 +72,8 @@ type StoredWorkspace = {
   drawerTab?: DrawerTab | null
   leftCollapsed?: boolean
   rightCollapsed?: boolean
+  leftPanelWidth?: number
+  rightPanelWidth?: number
 }
 
 type AgentUndo = {
@@ -159,6 +165,11 @@ export function App() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [leftCollapsed, setLeftCollapsed] = useState(false)
   const [rightCollapsed, setRightCollapsed] = useState(false)
+  const [panelWidths, setPanelWidths] = useState({
+    left: DETAIL_PANEL_DEFAULT_WIDTH,
+    right: AGENT_PANEL_DEFAULT_WIDTH,
+  })
+  const [resizingPanel, setResizingPanel] = useState<'left' | 'right' | null>(null)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [testState, setTestState] = useState<TestState>('idle')
@@ -177,6 +188,7 @@ export function App() {
   const [retryGoal, setRetryGoal] = useState<RetryGoal | null>(null)
   const [proposalInvocationId, setProposalInvocationId] = useState<string | undefined>()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const workbenchRef = useRef<HTMLDivElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
   const [flowAgentRuntimeId, setFlowAgentRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
@@ -206,6 +218,15 @@ export function App() {
     setDrawerTab(stored.drawerTab ?? null)
     setLeftCollapsed(stored.leftCollapsed ?? false)
     setRightCollapsed(stored.rightCollapsed ?? false)
+    setPanelWidths(
+      constrainPanelWidths(
+        {
+          left: stored.leftPanelWidth ?? DETAIL_PANEL_DEFAULT_WIDTH,
+          right: stored.rightPanelWidth ?? AGENT_PANEL_DEFAULT_WIDTH,
+        },
+        workbenchRef.current?.getBoundingClientRect().width ?? window.innerWidth,
+      ),
+    )
     setDirty(Boolean(storedDraft))
     hydratedWorkspaceRef.current = root
     setWorkspaceHydrated(true)
@@ -261,6 +282,8 @@ export function App() {
           drawerTab,
           leftCollapsed,
           rightCollapsed,
+          leftPanelWidth: panelWidths.left,
+          rightPanelWidth: panelWidths.right,
         } satisfies StoredWorkspace),
       )
     } catch {
@@ -273,6 +296,8 @@ export function App() {
     drawerTab,
     inspectedRunId,
     leftCollapsed,
+    panelWidths.left,
+    panelWidths.right,
     positions,
     rightCollapsed,
     runId,
@@ -280,6 +305,21 @@ export function App() {
     data?.workspace.root,
     workspaceHydrated,
   ])
+
+  useEffect(() => {
+    const workbench = workbenchRef.current
+    if (!workbench) return
+    const constrain = () => {
+      const containerWidth = workbench.getBoundingClientRect().width
+      setPanelWidths((current) => {
+        const next = constrainPanelWidths(current, containerWidth)
+        return next.left === current.left && next.right === current.right ? current : next
+      })
+    }
+    const observer = new ResizeObserver(constrain)
+    observer.observe(workbench)
+    return () => observer.disconnect()
+  }, [draft?.flowId])
 
   useEffect(() => {
     if (!draft || !data?.flowCompilations.length) return
@@ -1108,52 +1148,15 @@ export function App() {
         onToggleRight={() => setRightCollapsed((value) => !value)}
       />
 
-      <div className="notice-stack">
-        {notice && (
-          <div className={`operation-notice ${notice.tone}`} role="status">
-            <span className="status-lamp" />
-            <div>
-              <strong>{notice.title}</strong>
-              <p>{notice.detail}</p>
-            </div>
-            <button type="button" onClick={() => setNotice(null)} aria-label="关闭提示">
-              <X size={14} />
-            </button>
-          </div>
-        )}
-        {runMode === 'live' &&
-          liveRunQuery.data?.run.status === 'waiting-approval' &&
-          waitingApprovalNode != null && (
-            <div className="approval-notice" role="status">
-              <span className="status-lamp" />
-              <div>
-                <strong>运行需要你确认</strong>
-                <p>有一个步骤正在等待批准。通过后流程会继续，拒绝后会按拒绝线路走。</p>
-              </div>
-              <div>
-                <button
-                  className="button signal"
-                  type="button"
-                  disabled={approvalMutation.isPending}
-                  onClick={() => approvalMutation.mutate('approved')}
-                >
-                  批准继续
-                </button>
-                <button
-                  className="button danger"
-                  type="button"
-                  disabled={approvalMutation.isPending}
-                  onClick={() => approvalMutation.mutate('rejected')}
-                >
-                  拒绝
-                </button>
-              </div>
-            </div>
-          )}
-      </div>
-
       <div
-        className={`workbench${leftCollapsed ? ' left-collapsed' : ''}${rightCollapsed ? ' right-collapsed' : ''}${draft ? '' : ' is-empty'}`}
+        ref={workbenchRef}
+        className={`workbench${leftCollapsed ? ' left-collapsed' : ''}${rightCollapsed ? ' right-collapsed' : ''}${resizingPanel ? ' is-resizing' : ''}${draft ? '' : ' is-empty'}`}
+        style={
+          {
+            '--detail-width': `${panelWidths.left}px`,
+            '--agent-width': `${panelWidths.right}px`,
+          } as CSSProperties
+        }
       >
         {draft && (
           <aside className="detail-panel" aria-label="详情">
@@ -1185,6 +1188,17 @@ export function App() {
               />
             )}
           </aside>
+        )}
+
+        {draft && !leftCollapsed && (
+          <PanelResizeHandle
+            side="left"
+            width={panelWidths.left}
+            oppositeWidth={rightCollapsed ? 50 : panelWidths.right}
+            defaultWidth={DETAIL_PANEL_DEFAULT_WIDTH}
+            onResize={(left) => setPanelWidths((current) => ({ ...current, left }))}
+            onResizeStateChange={(resizing) => setResizingPanel(resizing ? 'left' : null)}
+          />
         )}
 
         <main className="center-column">
@@ -1462,6 +1476,17 @@ export function App() {
           )}
         </main>
 
+        {draft && !rightCollapsed && (
+          <PanelResizeHandle
+            side="right"
+            width={panelWidths.right}
+            oppositeWidth={leftCollapsed ? 50 : panelWidths.left}
+            defaultWidth={AGENT_PANEL_DEFAULT_WIDTH}
+            onResize={(right) => setPanelWidths((current) => ({ ...current, right }))}
+            onResizeStateChange={(resizing) => setResizingPanel(resizing ? 'right' : null)}
+          />
+        )}
+
         {draft && (
           <aside className="agent-panel" aria-label="AI 助手">
             {rightCollapsed ? (
@@ -1520,6 +1545,50 @@ export function App() {
             )}
           </aside>
         )}
+      </div>
+
+      <div className="notice-stack">
+        {notice && (
+          <div className={`operation-notice ${notice.tone}`} role="status">
+            <span className="status-lamp" />
+            <div>
+              <strong>{notice.title}</strong>
+              <p>{notice.detail}</p>
+            </div>
+            <button type="button" onClick={() => setNotice(null)} aria-label="关闭提示">
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        {runMode === 'live' &&
+          liveRunQuery.data?.run.status === 'waiting-approval' &&
+          waitingApprovalNode != null && (
+            <div className="approval-notice" role="status">
+              <span className="status-lamp" />
+              <div>
+                <strong>运行需要你确认</strong>
+                <p>有一个步骤正在等待批准。通过后流程会继续，拒绝后会按拒绝线路走。</p>
+              </div>
+              <div>
+                <button
+                  className="button signal"
+                  type="button"
+                  disabled={approvalMutation.isPending}
+                  onClick={() => approvalMutation.mutate('approved')}
+                >
+                  批准继续
+                </button>
+                <button
+                  className="button danger"
+                  type="button"
+                  disabled={approvalMutation.isPending}
+                  onClick={() => approvalMutation.mutate('rejected')}
+                >
+                  拒绝
+                </button>
+              </div>
+            </div>
+          )}
       </div>
 
       {settingsOpen && data && (

@@ -15,6 +15,7 @@ import { api, readableError } from '../api'
 import { runStatusLabel } from '../copy'
 import { AgentTracePopover } from './AgentTracePopover'
 import {
+  applyCurrentRuntime,
   attachmentName,
   canApplyAgentRevision,
   mergeAttachments,
@@ -212,7 +213,10 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
 
   const retryFailedRequest = () => {
     if (!failedRequest || mutation.isPending || props.disabled) return
-    mutation.mutate({ message: failedRequest.message, snapshot: failedRequest.snapshot })
+    mutation.mutate({
+      message: failedRequest.message,
+      snapshot: applyCurrentRuntime(failedRequest.snapshot, latestRef.current.runtimeId),
+    })
   }
 
   const takeFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -298,7 +302,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
                   className="retry-button"
                   onClick={retryFailedRequest}
                   disabled={mutation.isPending || props.disabled}
-                  title="使用失败时的请求内容和工作台快照重试"
+                  title="使用当前选择的 Agent 和失败时的工作台快照重试"
                 >
                   <RotateCcw size={13} />
                   重试

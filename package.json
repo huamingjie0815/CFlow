@@ -1,6 +1,6 @@
 {
   "name": "@hmj-ai/cflow",
-  "version": "1.3.9",
+  "version": "1.3.11",
   "description": "以 Flow 为核心的本机多 Agent 编排工作台",
   "main": "dist/src/server.js",
   "bin": {
