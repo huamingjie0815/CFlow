@@ -1,7 +1,0 @@
-# cflow:local-data
-/cflow.sqlite
-/cflow.sqlite-shm
-/cflow.sqlite-wal
-/cflow.sqlite-journal
-/flows/
-# /cflow:local-data
