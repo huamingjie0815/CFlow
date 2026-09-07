@@ -13,7 +13,9 @@ import { Engine, builtins, newRunId } from './engine.js'
 import { RuntimeManager } from './runtime.js'
 import { sha256 } from './hash.js'
 import { initializeWorkspace, validateWorkspaceRoot } from './workspace.js'
+import { createHelloWorldDemoFlow, helloWorldDemoCapabilityIds } from './demo-flow.js'
 import { missingWorkspaceFiles, searchWorkspaceFiles } from './workspace-files.js'
+import { assertUserCapability, capabilityCatalog } from './builtin-catalog.js'
 import {
   collectGroundingFailures,
   groundingError,
@@ -51,7 +53,7 @@ import type {
 
 export function createApp(store = new Store(), requestedWorkspaceRoot = process.cwd()) {
   const workspaceRoot = validateWorkspaceRoot(requestedWorkspaceRoot, 'WORKSPACE_UNAVAILABLE')
-  const versions = () => store.list<CFVersion>('cf_versions')
+  const versions = () => capabilityCatalog(store.list<CFVersion>('cf_versions'))
   const flowCompilations = () => store.flowCompilations()
   const runtimes = new RuntimeManager(store, { projectRoot: workspaceRoot })
   const testPlans = new Map<string, FlowPlan>()
@@ -96,10 +98,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     const currentDir = fileURLToPath(new URL('.', import.meta.url))
     if (currentDir.includes(`${sep}dist${sep}`))
       return fileURLToPath(new URL('../public', import.meta.url))
-    const packaged = fileURLToPath(new URL('../dist/public/index.html', import.meta.url))
-    return existsSync(packaged)
-      ? fileURLToPath(new URL('../dist/public', import.meta.url))
-      : fileURLToPath(new URL('../public', import.meta.url))
+    return fileURLToPath(new URL('../dist/public', import.meta.url))
   })()
   const pinRuntimeProfiles = async (plan: FlowPlan, catalog: CFVersion[]) => {
     const nodes = await Promise.all(
@@ -108,6 +107,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         const version = catalog.find(
           (item) => item.cfId === node.cfRef.cfId && item.version === node.cfRef.version,
         )
+        if (version?.program.version === '0.3') {
+          const { executor: _executor, executorProfile: _profile, ...builtinNode } = node
+          return builtinNode
+        }
         const runtimeId =
           node.executor ?? version?.draft.defaultExecutor ?? runtimes.settings().defaultRuntimeId
         const profile = runtimes.profile(runtimeId)
@@ -131,7 +134,9 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     return {
       ...draft,
       nodes: draft.nodes.map((node) =>
-        node.kind === 'cf-call' && !node.executor ? { ...node, executor: selected } : node,
+        node.kind === 'cf-call' && !node.cfRef.cfId.startsWith('builtin:') && !node.executor
+          ? { ...node, executor: selected }
+          : node,
       ),
     }
   }
@@ -227,8 +232,12 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         : {}),
     }
   }
-  app.register(fastifyStatic, { root: runtimePublicRoot })
-  app.get('/', async (_, reply) => reply.sendFile('index.html'))
+  if (existsSync(join(runtimePublicRoot, 'index.html'))) {
+    app.register(fastifyStatic, { root: runtimePublicRoot })
+    app.get('/', async (_, reply) => reply.sendFile('index.html'))
+  } else {
+    app.get('/', async (_, reply) => reply.code(503).send({ error: 'WEB_BUILD_NOT_FOUND' }))
+  }
   app.get('/api/workspace', async () => ({ root: workspaceRoot }))
   app.post<{ Body: { query?: string; selected?: string[] } }>(
     '/api/workspace/files/search',
@@ -272,10 +281,11 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       return reply.code(404).send({ error: 'RUNTIME_NOT_FOUND' })
     return runtimes.health(req.params.id)
   })
-  app.get('/api/cfs', async () => store.list<CFVersion>('cf_versions'))
+  app.get('/api/cfs', async () => versions())
   app.get('/api/cf-drafts', async () => store.list<CFDraft>('cf_drafts'))
   app.get('/api/flow-compilations', async () => flowCompilations())
   app.put<{ Params: { id: string }; Body: CFDraft }>('/api/cf-drafts/:id', async (req) => {
+    assertUserCapability(req.body)
     if (req.params.id !== req.body.cfId) throw new Error('CF_DRAFT_ID_MISMATCH')
     if (!req.body.cfId?.trim() || !req.body.name?.trim() || !req.body.does?.trim())
       throw new Error('CF_DRAFT_INVALID')
@@ -290,6 +300,14 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   })
   app.get('/api/flows', async () => store.list<FlowPlan>('flow_versions'))
   app.get('/api/flow-drafts', async () => store.list<FlowDraft>('flow_drafts'))
+  app.post('/api/flow-drafts/demo', async () => {
+    const { flowDraft, cfDrafts } = createHelloWorldDemoFlow(workspaceRoot)
+    store.db.transaction(() => {
+      store.save('flow_drafts', flowDraft.flowId, flowDraft)
+      for (const cfDraft of cfDrafts) store.save('cf_drafts', cfDraft.cfId, cfDraft)
+    })()
+    return { flowDraft, cfDrafts }
+  })
   app.put<{
     Params: { id: string }
     Body: { flowDraft: FlowDraft; cfDrafts: CFDraft[] }
@@ -301,6 +319,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     if (!Array.isArray(cfDrafts)) throw new Error('CF_DRAFTS_REQUIRED')
     const ids = new Set<string>()
     for (const cfDraft of cfDrafts) {
+      assertUserCapability(cfDraft)
       if (!cfDraft.cfId?.trim() || !Number.isInteger(cfDraft.revision) || cfDraft.revision < 1)
         throw new Error('CF_DRAFT_INVALID')
       if (ids.has(cfDraft.cfId)) throw new Error('CF_DRAFT_DUPLICATE')
@@ -317,10 +336,27 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     return { flowDraft: draft, cfDrafts }
   })
   app.delete<{ Params: { id: string } }>('/api/flow-drafts/:id', async (req, reply) => {
-    const result = store.db.prepare('DELETE FROM flow_drafts WHERE id=?').run(req.params.id) as {
-      changes?: number
-    }
-    if (!result.changes) return reply.code(404).send({ error: 'FLOW_DRAFT_NOT_FOUND' })
+    const stored = store.get<FlowDraft>('flow_drafts', req.params.id)
+    if (!stored) return reply.code(404).send({ error: 'FLOW_DRAFT_NOT_FOUND' })
+    const demoCfIds = helloWorldDemoCapabilityIds(stored.flowId)
+    store.db.transaction(() => {
+      store.db.prepare('DELETE FROM flow_drafts WHERE id=?').run(req.params.id)
+      if (!demoCfIds.length) return
+      const referencedCfIds = new Set(
+        store
+          .list<FlowDraft>('flow_drafts')
+          .flatMap((draft) =>
+            draft.nodes.flatMap((node) => (node.kind === 'cf-call' ? [node.cfRef.cfId] : [])),
+          ),
+      )
+      const publishedCfIds = new Set(
+        store.list<CFVersion>('cf_versions').map((version) => version.cfId),
+      )
+      const removeCfDraft = store.db.prepare('DELETE FROM cf_drafts WHERE id=?')
+      for (const cfId of new Set(demoCfIds)) {
+        if (!referencedCfIds.has(cfId) && !publishedCfIds.has(cfId)) removeCfDraft.run(cfId)
+      }
+    })()
     store.deleteAgentInvocationsForFlow(req.params.id)
     return { deleted: true }
   })
@@ -362,7 +398,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         (effect) => effect.type === 'file-read' || effect.type === 'file-write',
       )
       if (!hasFileAccess || !version) continue
-      const fileReferences = version.draft.fileReferences ?? []
+      const fileReferences =
+        version.program.version === '0.3' && node.toolInput?.source.kind === 'files'
+          ? node.toolInput.source.paths
+          : (version.draft.fileReferences ?? [])
       for (const path of await missingWorkspaceFiles(workspaceRoot, fileReferences)) {
         warnings.push({
           code: 'INDEXED_FILE_MISSING',
@@ -795,30 +834,6 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     if (!engine.cancel(req.params.id)) return reply.code(409).send({ error: 'RUN_NOT_RUNNING' })
     return { cancelled: true }
   })
-  app.post<{ Params: { id: string; node: string }; Body: { decision: 'approved' | 'rejected' } }>(
-    '/api/runs/:id/approvals/:node',
-    async (req, reply) => {
-      if (!['approved', 'rejected'].includes(req.body.decision))
-        return reply.code(400).send({ error: 'APPROVAL_DECISION_INVALID' })
-      const run = store.getRun(req.params.id)
-      if (!run) return reply.code(404).send({ error: 'RUN_NOT_FOUND' })
-      const node = Number(req.params.node)
-      const plan =
-        testPlans.get(run.flow_version_id) ??
-        store.get<FlowPlan>('flow_versions', run.flow_version_id)
-      if (
-        !Number.isInteger(node) ||
-        !plan?.nodes.some((item) => item.index === node && item.kind === 'approval')
-      ) {
-        return reply.code(400).send({ error: 'APPROVAL_NODE_INVALID' })
-      }
-      if (run.status !== 'waiting-approval')
-        return reply.code(409).send({ error: 'RUN_NOT_WAITING_APPROVAL' })
-      store.decideApproval(req.params.id, node, req.body.decision)
-      if (plan) engine.start(req.params.id, plan)
-      return { runId: req.params.id, node, decision: req.body.decision }
-    },
-  )
   app.get<{ Params: { id: string } }>('/api/runs/:id', async (req, reply) => {
     const run = store.getRun(req.params.id)
     if (!run) return reply.code(404).send({ error: 'RUN_NOT_FOUND' })

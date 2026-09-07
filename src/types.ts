@@ -1,16 +1,59 @@
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 /**
- * Deterministic compiler output for one CF. A CF is exactly one bounded agent
- * capability, so the program carries the compiled task text and nothing else:
- * there is no internal control flow for the engine to interpret.
+ * Legacy deterministic agent task. Builtin programs use a separately versioned
+ * tool identity; neither program format contains internal control flow.
  */
-export interface CFProgram {
+export interface AgentCFProgram {
   version: '0.2'
   cfId: string
   sourceRevision: number
   task: string
 }
+export type CFProgram =
+  | AgentCFProgram
+  | {
+      version: '0.3'
+      kind: 'builtin'
+      cfId: string
+      sourceRevision: number
+      tool: 'file.extract-text'
+      toolVersion: '1'
+    }
+export type FileExtractionInput = {
+  source:
+    | { kind: 'files'; paths: string[] }
+    | { kind: 'flow-input'; pointer: string }
+    | { kind: 'upstream'; nodeId: string; pointer: string }
+  encoding?: 'utf-8' | 'gb18030'
+  maxChars?: number
+}
+export type TextRange = { start: number; end: number }
+export type ExtractedBlock = TextRange & {
+  kind: string
+  page?: number
+  slide?: number
+  sheet?: string
+  rows?: (TextRange & { row: number; column: number; rowSpan?: number; colSpan?: number })[][]
+}
+export type ExtractedDocument = {
+  path: string
+  format: string
+  status: 'completed' | 'failed'
+  text: string
+  blocks: ExtractedBlock[]
+  warnings: string[]
+  truncated: boolean
+  originalChars: number
+  error?: { code: string; message: string }
+}
+export type FileExtractionResult = {
+  kind: 'file-extraction'
+  documents: ExtractedDocument[]
+  succeeded: number
+  failed: number
+}
 export interface CFDraft {
+  execution?: { kind: 'builtin'; tool: 'file.extract-text'; version: '1' }
   cfId: string
   revision: number
   name: string
@@ -68,6 +111,7 @@ export type FlowNode =
       kind: 'cf-call'
       cfRef: { cfId: string; version: string }
       inputDefaults?: Json
+      toolInput?: FileExtractionInput
       executor?: string
       inputContract?: Json
       outputContract?: Json
@@ -87,14 +131,13 @@ export type FlowNode =
       mode: 'all' | 'any'
       onUpstreamFailure?: 'fail' | 'continue-eligible'
     }
-  | { id: string; kind: 'approval'; policyRef: string }
   | { id: string; kind: 'output'; outputId: string }
 export interface FlowEdge {
   id: string
   from: string | '$entry'
   to: string
   when?: {
-    outcome: 'completed' | 'failed' | 'branch-case' | 'approved' | 'rejected'
+    outcome: 'completed' | 'failed' | 'branch-case'
     caseId?: string
   }
 }

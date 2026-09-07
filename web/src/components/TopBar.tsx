@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Save,
   Settings2,
+  Workflow,
 } from 'lucide-react'
 import { FlowSwitcher } from './FlowSwitcher'
 import { testStateLabel } from '../copy'
@@ -31,6 +32,9 @@ type TopBarProps = {
   onSelectFlow: (row: FlowListRow) => void
   onDeleteFlow: (row: FlowListRow) => void
   onNewFlow: () => void
+  onAddDemo: () => void
+  isAddingDemo: boolean
+  isDemoDisabled: boolean
   onRefresh: () => void
   onSettings: () => void
   onToggleLeft: () => void
@@ -55,6 +59,16 @@ export function TopBar(props: TopBarProps) {
         onDelete={props.onDeleteFlow}
         onNew={props.onNewFlow}
       />
+      <button
+        className="button top-bar-demo-button"
+        type="button"
+        title="添加示例流程"
+        disabled={props.isDemoDisabled}
+        onClick={props.onAddDemo}
+      >
+        {props.isAddingDemo ? <LoaderCircle className="spin" size={14} /> : <Workflow size={14} />}
+        {props.isAddingDemo ? '正在添加' : '添加示例'}
+      </button>
       {props.draft && (
         <span className="top-bar-meta">
           <span className={`route-state is-${props.testState}`} />

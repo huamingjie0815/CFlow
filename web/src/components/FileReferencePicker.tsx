@@ -4,12 +4,14 @@ import { createPortal } from 'react-dom'
 import { api } from '../api'
 
 type FileReferencePickerProps = {
+  mode?: 'reference' | 'extract'
   active: boolean
   references: string[]
   onChange: (paths: string[]) => void
 }
 
 export function FileReferencePicker(props: FileReferencePickerProps) {
+  const extracting = props.mode === 'extract'
   const buttonRef = useRef<HTMLButtonElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
   const requestRef = useRef(0)
@@ -103,8 +105,12 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
     <div className={`file-references${props.active ? '' : ' is-inactive'}`}>
       <div className="file-reference-heading">
         <div>
-          <strong>引用文件</strong>
-          <span>{props.active ? 'Agent 会优先从这些路径查找' : '已保留，启用文件权限后生效'}</span>
+          <strong>{extracting ? '待解析文件' : '引用文件'}</strong>
+          {!extracting && (
+            <span>
+              {props.active ? 'Agent 会优先从这些路径查找' : '已保留，启用文件权限后生效'}
+            </span>
+          )}
         </div>
         <button
           ref={buttonRef}
@@ -117,7 +123,8 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
             setOpen(true)
           }}
         >
-          <AtSign size={13} /> 引用文件
+          {extracting ? <FileText size={13} /> : <AtSign size={13} />}{' '}
+          {extracting ? '选择文件' : '引用文件'}
         </button>
       </div>
 
@@ -158,8 +165,8 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
           >
             <header>
               <div>
-                <strong>引用工作区文件</strong>
-                <span>只记录路径，不读取文件内容</span>
+                <strong>{extracting ? '选择待解析文件' : '引用工作区文件'}</strong>
+                {!extracting && <span>只记录路径，不读取文件内容</span>}
               </div>
               <button
                 className="icon-button"

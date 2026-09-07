@@ -134,7 +134,7 @@ understand a protocol, a hash, or a DSL in order to do their job.
 
 The system is deliberately monochrome-dominant. Colour carries meaning, never
 decoration: the slate-blue accent means "this is the action to take now", green means
-"cleared", amber means "waiting on a person", red means "stopped". Everything else is
+"cleared", amber means "attention needed", red means "stopped". Everything else is
 neutral. Technical facts are never deleted — they are demoted behind an explicit
 disclosure so the one colleague who needs to reconcile a run can still find them.
 
@@ -165,7 +165,7 @@ three status hues are used at small scale only.
 | `accent`               | `#35569e`             | The single next action, active tab, focus ring, selection |
 | `accent-soft`          | `#eef1f8`             | Selected row, mark blocks, quiet chips                    |
 | `green` / `green-soft` | `#16794e` / `#e8f3ed` | Cleared, published, healthy                               |
-| `amber` / `amber-soft` | `#8f6314` / `#fbf2df` | Draft, waiting for a person                               |
+| `amber` / `amber-soft` | `#8f6314` / `#fbf2df` | Draft, warning, action needed                             |
 | `red` / `red-soft`     | `#b0392d` / `#fbecea` | Failed, destructive, blocked                              |
 
 Contrast rule: any coloured text sits on `surface`, `paper`, or its own `-soft`

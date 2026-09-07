@@ -60,7 +60,7 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
                 published.map((version) => (
                   <LibraryCard
                     key={`${version.cfId}@${version.version}`}
-                    badge="可用"
+                    badge={version.draft.execution?.kind === 'builtin' ? '内置' : '可用'}
                     name={version.draft.name}
                     summary={version.draft.does}
                     onAdd={() => props.onAddPublished(version)}
@@ -128,7 +128,7 @@ function LibraryCard(props: { badge: string; name: string; summary: string; onAd
       <div className="library-card-row">
         <button type="button" className="library-card-main" onClick={props.onAdd}>
           <span className={`capability-mark${props.badge === '草稿' ? ' candidate' : ''}`}>
-            {props.badge === '草稿' ? '草稿' : '能力'}
+            {props.badge === '草稿' ? '草稿' : props.badge === '内置' ? '内置' : '能力'}
           </span>
           <span>
             <strong>{props.name.trim() || '空能力节点'}</strong>

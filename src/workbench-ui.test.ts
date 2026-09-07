@@ -151,24 +151,24 @@ test('refreshes canvas content without dropping measured node state', () => {
 
 test('arranges branch successors on one level without overlap', () => {
   const positions = arrangeCanvasPositions(
-    ['prepare', 'branch-1', 'approve', 'reject', 'output-1'],
+    ['prepare', 'branch-1', 'route-a', 'route-b', 'output-1'],
     [
       { id: 'entry-prepare', from: '$entry', to: 'prepare' },
       { id: 'prepare-branch', from: 'prepare', to: 'branch-1' },
-      { id: 'branch-approve', from: 'branch-1', to: 'approve' },
-      { id: 'branch-reject', from: 'branch-1', to: 'reject' },
-      { id: 'approve-output', from: 'approve', to: 'output-1' },
-      { id: 'reject-output', from: 'reject', to: 'output-1' },
+      { id: 'branch-a', from: 'branch-1', to: 'route-a' },
+      { id: 'branch-b', from: 'branch-1', to: 'route-b' },
+      { id: 'a-output', from: 'route-a', to: 'output-1' },
+      { id: 'b-output', from: 'route-b', to: 'output-1' },
     ],
   )
 
   assert.equal(positions.$entry.y < positions.prepare.y, true)
   assert.equal(positions.prepare.y < positions['branch-1'].y, true)
-  assert.equal(positions.approve.y, positions.reject.y)
-  assert.notEqual(positions.approve.x, positions.reject.x)
-  assert.equal(positions.approve.x < positions.reject.x, true)
-  assert.equal(positions['branch-1'].y < positions.approve.y, true)
-  assert.equal(positions.approve.y < positions['output-1'].y, true)
+  assert.equal(positions['route-a'].y, positions['route-b'].y)
+  assert.notEqual(positions['route-a'].x, positions['route-b'].x)
+  assert.equal(positions['route-a'].x < positions['route-b'].x, true)
+  assert.equal(positions['branch-1'].y < positions['route-a'].y, true)
+  assert.equal(positions['route-a'].y < positions['output-1'].y, true)
 })
 
 test('agent revisions only apply to the exact flow revision that was sent', () => {

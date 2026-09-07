@@ -12,6 +12,7 @@ import {
   RuntimeManager,
 } from './runtime.js'
 import { Store } from './db.js'
+import type { RuntimeProfile } from './types.js'
 
 test('discovers generic ACP runtime commands from PATH', () => {
   const directory = join('/tmp', `cf-acp-discovery-${randomUUID()}`)
@@ -293,6 +294,66 @@ test('hides builtin echo and migrates a legacy echo default to Codex', () => {
   }
 })
 
+test('repairs and protects the hidden demo runtime', async () => {
+  const root = join('/tmp', `cf-runtime-demo-${randomUUID()}`)
+  mkdirSync(root, { recursive: true })
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    assert.equal(manager.profile('cflow-demo')?.backend, 'builtin')
+    assert.ok(manager.profiles().every((profile) => profile.id !== 'cflow-demo'))
+    const health = await manager.health('cflow-demo')
+    assert.equal(health.status, 'available')
+    assert.throws(
+      () => manager.validateSettings({ defaultRuntimeId: 'cflow-demo' }),
+      /DEFAULT_RUNTIME_NOT_SELECTABLE/,
+    )
+    assert.throws(
+      () =>
+        manager.saveProfile({
+          id: 'cflow-demo',
+          name: 'External demo replacement',
+          backend: 'cli',
+          command: '/bin/false',
+        }),
+      /RUNTIME_ID_RESERVED/,
+    )
+
+    const builtin = manager.profile('cflow-demo')!
+    store.saveRuntimeProfile({
+      ...builtin,
+      profileVersion: store.nextRuntimeProfileVersion('cflow-demo'),
+      name: 'Legacy collision',
+      enabled: false,
+      backend: 'cli',
+      command: '/bin/false',
+      discovery: { source: 'manual' },
+      createdAt: new Date().toISOString(),
+    } as RuntimeProfile)
+    const repaired = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    assert.equal(repaired.profile('cflow-demo')?.backend, 'builtin')
+    assert.equal(repaired.profile('cflow-demo')?.enabled, true)
+    assert.equal(repaired.profile('cflow-demo')?.discovery?.source, 'builtin')
+
+    const result = await repaired.execute('cflow-demo', 'ignored', {}, AbortSignal.timeout(1_000))
+    assert.equal((result as { title?: string }).title, 'Hello World')
+    assert.match(String((result as { html?: string }).html), /你好，世界/)
+  } finally {
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('marks an ACP runtime available only after an initialize handshake', async () => {
   const root = join('/tmp', `cf-acp-health-${randomUUID()}`)
   const executable = join(root, 'fake-agent-acp')
@@ -396,23 +457,28 @@ test('ACP health reports handshake timeout, stderr and resolved launch details',
   writeFileSync(hanging, '#!/usr/bin/env node\nprocess.stdin.resume()\n')
   writeFileSync(
     failing,
-    '#!/usr/bin/env node\nprocess.stderr.write("adapter setup failed\\n")\nprocess.exit(2)\n',
+    '#!/bin/sh\nprintf "adapter setup failed\\n" >&2\nexit 2\n',
   )
   chmodSync(hanging, 0o755)
   chmodSync(failing, 0o755)
   process.env.PATH = [root, previousPath].filter(Boolean).join(delimiter)
   const store = new Store(join(root, 'runtime.sqlite'))
   try {
-    const manager = new RuntimeManager(store, {
+    const discovery = {
       projectRoot: root,
       userManifestDirectory: false,
       projectManifestDirectory: false,
       packageRoot: false,
       includeBuiltins: false,
+    } as const
+    const timedOut = await new RuntimeManager(store, {
+      ...discovery,
       healthTimeoutMs: 500,
-    })
-    const timedOut = await manager.health('hanging-acp')
-    const failed = await manager.health('failing-acp')
+    }).health('hanging-acp')
+    const failed = await new RuntimeManager(store, {
+      ...discovery,
+      healthTimeoutMs: 5_000,
+    }).health('failing-acp')
     assert.equal(timedOut.status, 'unavailable')
     assert.match(timedOut.error ?? '', /ACP_HANDSHAKE_TIMEOUT/)
     assert.match(timedOut.error ?? '', /\[launch=native /)

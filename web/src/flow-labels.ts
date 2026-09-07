@@ -5,7 +5,7 @@ import type { CFDraft, CFVersion, FlowDraft, FlowNode } from './types'
  * Turns Flow structure into the words a non-technical colleague reads.
  *
  * The product rule these functions enforce: no internal identifier (cfId,
- * version, policyRef, outputId, branch case id) ever becomes primary reading
+ * version, outputId, branch case id) ever becomes primary reading
  * matter. Identifiers stay available through the inspector's technical
  * disclosure, never as a node title or an edge label.
  */
@@ -39,15 +39,12 @@ export function describeNode(node: FlowNode, cfs: CFVersion[], candidates: CFDra
         '还没有写分支条件',
     }
   if (node.kind === 'join') return { label: '汇合', subtitle: joinModeLabel(node.mode) }
-  if (node.kind === 'approval') return { label: '人工审批', subtitle: '需要有人确认后才能继续' }
   return { label: '流程结果', subtitle: '流程走到这里就结束' }
 }
 
 const outcomeLabels: Record<string, string> = {
   completed: '完成',
   failed: '失败',
-  approved: '批准',
-  rejected: '拒绝',
 }
 
 export function edgeLabel(edge: FlowDraft['edges'][number], nodes: FlowNode[]): string | undefined {
@@ -66,6 +63,8 @@ export function edgeLabel(edge: FlowDraft['edges'][number], nodes: FlowNode[]): 
 /** The quiet chip under a step card: retry policy, else which agent runs it. */
 export function nodeConfigNote(node: FlowNode): string | undefined {
   if (node.kind !== 'cf-call') return undefined
+  if (node.cfRef.cfId.startsWith('builtin:')) return '本地解析'
   if (node.onError?.action === 'retry') return `失败时重试 ${node.onError.maxAttempts ?? 1} 次`
+  if (node.executor === 'cflow-demo') return '演示执行，不调用本机助手'
   return node.executor ? `由 ${node.executor} 执行` : undefined
 }

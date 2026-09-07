@@ -15,6 +15,8 @@ type CheckPanelProps = {
   candidateCfs: CFDraft[]
   onRuntimeChange: (id: string) => void
   onCompile: () => void
+  runInput: string
+  onRunInputChange: (value: string) => void
 }
 
 /**
@@ -37,20 +39,24 @@ export function CheckPanel(props: CheckPanelProps) {
   return (
     <div className="check-panel">
       <div className="check-bar">
-        <label className="check-runtime">
-          <span>用哪个助手检查</span>
-          <select value={runtimeId} onChange={(event) => onRuntimeChange(event.target.value)}>
-            {runtimes.map((runtime) => (
-              <option
-                key={runtime.id}
-                value={runtime.id}
-                disabled={!runtime.enabled || runtime.health?.status !== 'available'}
-              >
-                {runtime.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        {draft.nodes.some(
+          (node) => node.kind === 'cf-call' && !node.cfRef.cfId.startsWith('builtin:'),
+        ) && (
+          <label className="check-runtime">
+            <span>用哪个助手检查</span>
+            <select value={runtimeId} onChange={(event) => onRuntimeChange(event.target.value)}>
+              {runtimes.map((runtime) => (
+                <option
+                  key={runtime.id}
+                  value={runtime.id}
+                  disabled={!runtime.enabled || runtime.health?.status !== 'available'}
+                >
+                  {runtime.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <span className="check-counts">
           {preview
             ? `${preview.plan.nodes.length} 个步骤 · ${preview.plan.edges.length} 条连线 · v${preview.plan.flowVersion}`
@@ -84,6 +90,19 @@ export function CheckPanel(props: CheckPanelProps) {
       )}
 
       <div className="check-body">
+        <details className="tech-disclosure run-input-editor">
+          <summary>运行输入</summary>
+          <label className="field">
+            <span>输入数据（JSON）</span>
+            <textarea
+              aria-label="运行输入 JSON"
+              rows={4}
+              value={props.runInput}
+              onChange={(event) => props.onRunInputChange(event.target.value)}
+              spellCheck={false}
+            />
+          </label>
+        </details>
         {preview ? (
           <>
             <ol className="check-steps">

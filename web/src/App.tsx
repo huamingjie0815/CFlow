@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   Plus,
   ScrollText,
-  ShieldCheck,
   Upload,
   Workflow,
   X,
@@ -48,6 +47,7 @@ import type {
   CanvasPosition,
   CFDraft,
   CompilationPreview,
+  DraftBundle,
   FlowCompilationSnapshot,
   FlowDraft,
   FlowNode,
@@ -190,12 +190,22 @@ export function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const workbenchRef = useRef<HTMLDivElement>(null)
   const [runtimeId, setRuntimeId] = useState('')
+  const [runInputs, setRunInputs] = useState<Record<string, string>>({})
+  const runInputText = draft ? (runInputs[draft.flowId] ?? '{}') : '{}'
+  const parseRunInput = () => {
+    try {
+      return JSON.parse(runInputText)
+    } catch {
+      throw new Error('运行输入不是有效的 JSON，请在「检查」中修正。')
+    }
+  }
   const [flowAgentRuntimeId, setFlowAgentRuntimeId] = useState('')
   const [compileRuntimeId, setCompileRuntimeId] = useState('')
   const [testingRuntimeId, setTestingRuntimeId] = useState<string | null>(null)
   const hydratedWorkspaceRef = useRef<string | null>(null)
   const [workspaceHydrated, setWorkspaceHydrated] = useState(false)
   const latestDraftRef = useRef({ draft, candidateCfs })
+  const demoCreationRef = useRef(false)
   latestDraftRef.current = { draft, candidateCfs }
 
   const bootstrap = useQuery({ queryKey: ['bootstrap'], queryFn: api.bootstrap })
@@ -560,6 +570,7 @@ export function App() {
         candidateCfs,
         data?.settings.defaultResourceProfileId,
         compileRuntimeId,
+        parseRunInput(),
       )
       return { ...result, testedDraft }
     },
@@ -608,7 +619,12 @@ export function App() {
   })
   const liveRunMutation = useMutation({
     mutationFn: (plan: FlowPlan) =>
-      api.run(plan.flowId, plan.flowVersion, data?.settings.defaultResourceProfileId),
+      api.run(
+        plan.flowId,
+        plan.flowVersion,
+        data?.settings.defaultResourceProfileId,
+        parseRunInput(),
+      ),
     onMutate: () => {
       setRunMode('live')
       setNotice({ tone: 'info', title: '流程已开始运行', detail: '进度和输出会显示在右侧活动里。' })
@@ -643,23 +659,6 @@ export function App() {
     () => Object.fromEntries(nodeRunStates) as Record<string, NodeRunState>,
     [nodeRunStates],
   )
-  const waitingApprovalNode = [...(liveRunQuery.data?.events ?? [])]
-    .reverse()
-    .find((event) => event.type === 'approval.requested')?.node
-  const approvalMutation = useMutation({
-    mutationFn: (decision: 'approved' | 'rejected') =>
-      api.decideApproval(runId!, waitingApprovalNode!, decision),
-    onSuccess: (_, decision) => {
-      setNotice({
-        tone: 'success',
-        title: decision === 'approved' ? '已批准继续' : '已拒绝',
-        detail: decision === 'approved' ? '运行正在继续。' : '运行将按拒绝线路推进。',
-      })
-      void liveRunQuery.refetch()
-    },
-    onError: (error) =>
-      setNotice({ tone: 'error', title: '审批失败', detail: readableError(error) }),
-  })
   const cancelMutation = useMutation({
     mutationFn: api.cancelRun,
     onSuccess: () =>
@@ -676,16 +675,6 @@ export function App() {
     }
     const runStateKey = `${currentRunId}:${status}`
     if (handledRunStateRef.current === runStateKey) return
-    if (
-      status === 'waiting-approval' &&
-      runMode === 'test' &&
-      waitingApprovalNode != null &&
-      !approvalMutation.isPending
-    ) {
-      handledRunStateRef.current = runStateKey
-      approvalMutation.mutate('approved')
-      return
-    }
     if (status === 'completed') {
       handledRunStateRef.current = runStateKey
       if (runMode === 'test') {
@@ -725,14 +714,7 @@ export function App() {
       setRunMode(null)
       void queryClient.invalidateQueries({ queryKey: ['bootstrap'] })
     }
-  }, [
-    approvalMutation,
-    queryClient,
-    runMode,
-    liveRunQuery.data?.run.id,
-    liveRunQuery.data?.run.status,
-    waitingApprovalNode,
-  ])
+  }, [queryClient, runMode, liveRunQuery.data?.run.id, liveRunQuery.data?.run.status])
 
   const publishMutation = useMutation({
     mutationFn: () => api.publish(draft!, candidateCfs),
@@ -884,6 +866,84 @@ export function App() {
     if (!(await persistCurrentDraft())) return
     clearWorkspace()
   }
+  const createBlankFlow = () => {
+    if (!data?.workspace.root || !workspaceAvailable) return
+    clearWorkspace()
+    updateDraft({
+      flowId: uniqueId('flow'),
+      revision: 1,
+      name: '新流程',
+      objective: '办公文件处理',
+      workspaceRoot: data.workspace.root,
+      nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
+      edges: [],
+    })
+    setLibraryOpen(true)
+  }
+
+  const createDemoMutation = useMutation({
+    mutationFn: api.createDemoFlow,
+    onSuccess: (bundle: DraftBundle) => {
+      queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) => {
+        if (!current) return current
+        const cfById = new Map(current.cfDrafts.map((cf) => [cf.cfId, cf]))
+        for (const cf of bundle.cfDrafts) cfById.set(cf.cfId, cf)
+        const flowDrafts = current.flowDrafts.some(
+          (item) => item.flowId === bundle.flowDraft.flowId,
+        )
+          ? current.flowDrafts.map((item) =>
+              item.flowId === bundle.flowDraft.flowId ? bundle.flowDraft : item,
+            )
+          : [bundle.flowDraft, ...current.flowDrafts]
+        return { ...current, flowDrafts, cfDrafts: [...cfById.values()] }
+      })
+      setSettingsOpen(false)
+      setDraft(structuredClone(bundle.flowDraft))
+      setConversation([])
+      setAgentUndo(null)
+      setCandidateCfs(structuredClone(bundle.cfDrafts))
+      setPositions({})
+      setDirty(false)
+      setTestState('idle')
+      setRunId(null)
+      setRunMode(null)
+      setInspectedRunId(null)
+      setDrawerTab(null)
+      setPreview(null)
+      setPreviewError(null)
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
+      setNotice({
+        tone: 'success',
+        title: '已添加示例流程',
+        detail: '这是演示执行，不会调用本机助手。可以先检查，再点测试。',
+      })
+    },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '添加示例失败', detail: readableError(error) }),
+  })
+
+  const addDemoFlow = async () => {
+    if (
+      demoCreationRef.current ||
+      saveMutation.isPending ||
+      createDemoMutation.isPending ||
+      proposalMutation.isPending ||
+      compileMutation.isPending ||
+      publishMutation.isPending ||
+      isRunning
+    )
+      return
+    demoCreationRef.current = true
+    try {
+      if (!(await persistCurrentDraft())) return
+      await createDemoMutation.mutateAsync()
+    } catch {
+      // The mutation error handler presents the failure without leaving an unhandled rejection.
+    } finally {
+      demoCreationRef.current = false
+    }
+  }
 
   const deleteDraft = (target: FlowDraft) => {
     if (
@@ -961,7 +1021,26 @@ export function App() {
 
   const addNode = (node: FlowNode) => {
     if (!draft) return
-    updateDraft({ ...draft, revision: draft.revision + 1, nodes: [...draft.nodes, node] })
+    const firstStep =
+      node.kind === 'cf-call' &&
+      draft.nodes.length === 1 &&
+      draft.nodes[0].kind === 'output' &&
+      draft.edges.length === 0
+    updateDraft({
+      ...draft,
+      revision: draft.revision + 1,
+      nodes: firstStep ? [node, ...draft.nodes] : [...draft.nodes, node],
+      edges: firstStep
+        ? [
+            { id: uniqueId('edge'), from: '$entry', to: node.id },
+            { id: uniqueId('edge'), from: node.id, to: draft.nodes[0].id },
+          ]
+        : draft.edges,
+    })
+    if (firstStep) {
+      setPositions({})
+      setLayoutRevision((value) => value + 1)
+    }
     setSelectedEdgeId(null)
     setSelectedNodeId(node.id)
   }
@@ -1142,6 +1221,16 @@ export function App() {
         onSelectFlow={selectFlowRow}
         onDeleteFlow={deleteFlowRow}
         onNewFlow={newFlow}
+        onAddDemo={addDemoFlow}
+        isAddingDemo={createDemoMutation.isPending}
+        isDemoDisabled={
+          createDemoMutation.isPending ||
+          saveMutation.isPending ||
+          proposalMutation.isPending ||
+          compileMutation.isPending ||
+          publishMutation.isPending ||
+          isRunning
+        }
         onRefresh={() => bootstrap.refetch()}
         onSettings={() => setSettingsOpen(true)}
         onToggleLeft={() => setLeftCollapsed((value) => !value)}
@@ -1217,6 +1306,9 @@ export function App() {
               onSubmit={submitGoal}
               retryMessageId={retryGoal?.messageId}
               pendingInvocationId={proposalInvocationId}
+              onAddDemo={addDemoFlow}
+              onCreateBlank={createBlankFlow}
+              isAddingDemo={createDemoMutation.isPending}
               onRetry={() => {
                 if (!retryGoal) return
                 setGoal(retryGoal.objective)
@@ -1255,17 +1347,6 @@ export function App() {
                   整理布局
                 </button>
                 <span className="toolbar-divider" />
-                <button
-                  type="button"
-                  onClick={() =>
-                    addNode({ id: uniqueId('approval'), kind: 'approval', policyRef: 'manual' })
-                  }
-                  className="button is-icon"
-                  title="添加审批步骤"
-                  aria-label="添加审批步骤"
-                >
-                  <ShieldCheck size={15} />
-                </button>
                 <button
                   type="button"
                   onClick={() =>
@@ -1397,6 +1478,9 @@ export function App() {
                       kind: 'cf-call',
                       cfRef: { cfId: version.cfId, version: version.version },
                       executor: version.draft.defaultExecutor,
+                      ...(version.draft.execution?.kind === 'builtin'
+                        ? { toolInput: { source: { kind: 'files' as const, paths: [] } } }
+                        : {}),
                     })
                   }
                   onAddCandidate={(cf) =>
@@ -1468,6 +1552,10 @@ export function App() {
                         setPreviewError(null)
                       }}
                       onCompile={() => compileMutation.mutate()}
+                      runInput={runInputText}
+                      onRunInputChange={(value) =>
+                        setRunInputs((current) => ({ ...current, [draft.flowId]: value }))
+                      }
                     />
                   )}
                 </BottomDrawer>
@@ -1560,35 +1648,6 @@ export function App() {
             </button>
           </div>
         )}
-        {runMode === 'live' &&
-          liveRunQuery.data?.run.status === 'waiting-approval' &&
-          waitingApprovalNode != null && (
-            <div className="approval-notice" role="status">
-              <span className="status-lamp" />
-              <div>
-                <strong>运行需要你确认</strong>
-                <p>有一个步骤正在等待批准。通过后流程会继续，拒绝后会按拒绝线路走。</p>
-              </div>
-              <div>
-                <button
-                  className="button signal"
-                  type="button"
-                  disabled={approvalMutation.isPending}
-                  onClick={() => approvalMutation.mutate('approved')}
-                >
-                  批准继续
-                </button>
-                <button
-                  className="button danger"
-                  type="button"
-                  disabled={approvalMutation.isPending}
-                  onClick={() => approvalMutation.mutate('rejected')}
-                >
-                  拒绝
-                </button>
-              </div>
-            </div>
-          )}
       </div>
 
       {settingsOpen && data && (

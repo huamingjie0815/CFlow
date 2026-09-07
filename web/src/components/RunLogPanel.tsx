@@ -11,6 +11,7 @@ import {
 import { runStatusLabel } from '../copy'
 import type { CFDraft, CFVersion, FlowDraft, RunDetail, RunSummary } from '../types'
 import { AgentTracePopover } from './AgentTracePopover'
+import { FileExtractionResult } from './FileExtractionResult'
 
 const RECENT_RUN_LIMIT = 4
 
@@ -36,6 +37,7 @@ function EntryRow({ entry }: { entry: RunLogEntry }) {
         <strong>{entry.title}</strong>
         <p>{entry.detail}</p>
         <small>{entry.at}</small>
+        {entry.extraction && <FileExtractionResult result={entry.extraction} />}
       </div>
     </article>
   )

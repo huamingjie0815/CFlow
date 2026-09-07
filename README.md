@@ -39,10 +39,10 @@ FlowDraft（已发布能力的组合）
   -> Runtime 执行每个 CF
 ```
 
-- **CF** 是一个有明确输入、输出、过程约束和 effects 的 Agent 能力。CF 内部没有可供 Engine 解释的控制流。
-- **Flow** 是由 `cf-call`、`branch`、`join`、`approval`、`output` 节点组成的 DAG。条件、并发、汇合、审批、重试和取消都属于 Flow 层。
-- 数据沿边传递完整的 Flow 输入以及已完成上游节点的输出，不维护字段级 Binding。
-- 助手只能根据本轮传入的工作台快照回答问题，或返回线性的 CF 步骤草案。助手不能直接写入边、hash、审批结果、已发布版本或运行事实；服务端会重新编译并校验结果。
+- **CF** 是一个有明确输入、输出和 effects 的能力，执行方式可以是 Agent 或系统内置工具。CF 内部没有可供 Engine 解释的控制流。
+- **Flow** 是由 `cf-call`、`branch`、`join`、`output` 节点组成的 DAG。条件、并发、汇合、重试和取消都属于 Flow 层。
+- 数据沿边传递完整的 Flow 输入以及已完成上游节点的输出；内置工具通过节点参数明确指定所需字段。
+- 助手只能根据本轮传入的工作台快照回答问题，或返回线性的 CF 步骤草案。助手不能直接写入边、hash、已发布版本或运行事实；服务端会重新编译并校验结果。
 
 ### 草案、检查、测试与发布分离
 
@@ -50,10 +50,26 @@ FlowDraft（已发布能力的组合）
 
 - FlowPlan 及其 `planHash`；
 - 每个 CF 的精确 `cfId@version` 和 `programHash`；
-- 每个节点使用的 Runtime Profile 版本；
+- Agent 节点使用的 Runtime Profile 版本，或内置节点的工具版本；
 - 当前工作区根目录和资源绑定。
 
 因此，之后修改草案、Runtime 设置或 Agent manifest，不会改变已经发布版本的执行含义。
+
+### 内置能力：文件内容提取
+
+能力库中的「文件内容提取」直接调用本机 `officeparser@7.8.0`，不调用 Agent，不执行宏、不修改源文件，也不做 OCR、总结或语义分析。无需 Java、Python 或 Office。依赖中包含 OCR 组件，但本工具不会启动它或下载模型。
+
+没有配置 Agent 时，可在首页点「空白流程」，再从能力库添加「文件内容提取」。第一个能力步骤自动连接开始和流程结果。
+
+支持 DOCX、XLSX、PPTX、文本型 PDF、CSV、Markdown、HTML、TXT、JSON、XML（以及 `.markdown`、`.htm`、`.text` 扩展名）。旧版 DOC/XLS/PPT、图片、压缩包和音视频需先转换。PDF 只保留文本层和页码，不承诺恢复视觉表格；DOCX 不推测分页；XLSX 读取缓存的公式值，不重新计算。JSON/XML 按原始文本读取，HTML 不执行脚本或加载远程资源。
+
+在 Flow 中加入能力后，节点的「文件来源」有三种配置：选择工作目录文件、读取流程输入字段、读取指定直接上游结果字段。后两者使用 JSON Pointer，例如 `/files` 或 `/documents/0/path`，空路径表示整个输入值；值必须是一个路径字符串或非空路径数组。流程输入可在「检查 → 运行输入」中填写，例如 `{"files":["资料/报告.pdf"]}`，用于本次会话的测试和正式运行。配置随 Flow 保存，运行输入随 Run 保存，不写回 Flow。
+
+结果为 `{kind:"file-extraction",documents,succeeded,failed}`。每份文档包含 `path`、`format`、`status`、`text`、`blocks`、`warnings`、`truncated`、`originalChars` 及失败时的 `error`。块和单元格的 `start/end` 是正文内的 UTF-16 偏移（左闭右开），页码和幻灯片编号从 1 开始，表格行列从 0 开始；结构不重复保存正文。日志中可查看、复制和下载文本及来源表格。
+
+默认返回全文，可设置每文件字符上限，截断会同步裁剪结构并明确标记。部分文件失败时保留成功结果继续流程，全部失败则停止并保留逐文件错误。扫描 PDF 无文本层会失败，混合 PDF 会标记无文本页面。文本默认 UTF-8，识别 UTF-8/UTF-16 BOM，可切换 GB18030。
+
+首版限制为每节点最多 100 文件、单文件 50 MiB、每文件解析 60 秒、ZIP 解压内容 256 MiB、节点序列化输出 16 MiB。超过限制会明确报错，取消会终止解析 worker。内置能力不可被用户覆盖，历史 Agent CF 的 `0.2` 程序和哈希保持兼容。解析阶段无模型 token 消耗；后续 Agent 阅读提取结果仍会消耗 token。
 
 ## 架构
 
@@ -82,26 +98,26 @@ FlowDraft（已发布能力的组合）
 
 ### 模块职责
 
-| 模块 | 位置 | 职责 |
-| --- | --- | --- |
-| 类型与领域模型 | `src/types.ts` | 定义 CF、Flow、Plan、Runtime、Run 和资源的边界 |
-| CF/Flow 编译器 | `src/compiler.ts` | 校验契约和图结构，生成确定性的版本与 hash |
-| 持久化 | `src/db.ts` | 保存草稿、版本、编译快照、运行、事件、job、审批和设置 |
-| 执行引擎 | `src/engine.ts` | 管理节点状态、并发、分支、join、审批、重试、取消和恢复 |
-| Runtime 管理 | `src/runtime.ts` | 管理 Profile，执行 ACP 握手、CLI 探测、权限分析和输出校验 |
-| 进程边界 | `src/runtime-process.ts` | 解析可执行文件、使用 argv 启动进程、限制环境和 cwd、处理终止 |
-| Agent manifest | `src/runtime-manifest.ts` | 合并内置、PATH ACP、npm、用户级和项目级 Runtime 配置 |
-| HTTP 服务 | `src/server.ts` | 组装依赖、提供 API、固定版本、启动恢复循环和 SSE |
-| React 工作台 | `web/src/` | 提供流程切换、目标输入、画布、检查、日志、设置和助手界面 |
+| 模块           | 位置                      | 职责                                                         |
+| -------------- | ------------------------- | ------------------------------------------------------------ |
+| 类型与领域模型 | `src/types.ts`            | 定义 CF、Flow、Plan、Runtime、Run 和资源的边界               |
+| CF/Flow 编译器 | `src/compiler.ts`         | 校验契约和图结构，生成确定性的版本与 hash                    |
+| 持久化         | `src/db.ts`               | 保存草稿、版本、编译快照、运行、事件、job 和设置             |
+| 执行引擎       | `src/engine.ts`           | 管理节点状态、并发、分支、join、重试、取消和恢复             |
+| Runtime 管理   | `src/runtime.ts`          | 管理 Profile，执行 ACP 握手、CLI 探测、权限分析和输出校验    |
+| 进程边界       | `src/runtime-process.ts`  | 解析可执行文件、使用 argv 启动进程、限制环境和 cwd、处理终止 |
+| Agent manifest | `src/runtime-manifest.ts` | 合并内置、PATH ACP、npm、用户级和项目级 Runtime 配置         |
+| HTTP 服务      | `src/server.ts`           | 组装依赖、提供 API、固定版本、启动恢复循环和 SSE             |
+| React 工作台   | `web/src/`                | 提供流程切换、目标输入、画布、检查、日志、设置和助手界面     |
 
 ### 运行时序
 
 1. `/api/flow-tests` 或发布接口接收 FlowDraft，并把必要的临时 CFDraft 编译成 CFVersion。
-2. `compileFlow` 检查入口、可达性、环、终点、分支和审批边，计算 `programHash` 与 `planHash`。
+2. `compileFlow` 检查入口、可达性、环、终点和分支边，计算 `programHash` 与 `planHash`。
 3. 服务端解析资源绑定并 pin 当前 Runtime Profile 版本，保存编译快照或 FlowVersion。
 4. 创建 Run 和 Job。恢复循环通过 lease 领取 Job，避免进程重启后丢失排队任务。
 5. Engine 校验 `planHash`，从 Run Ledger 恢复状态；发现副作用可能已发生但事实不完整的节点时，Run 进入 `needs-reconciliation`，不会盲目重放。
-6. 就绪节点按 `maxConcurrency` 调度。节点完成、失败、阻塞、分支选择、审批和 Run 状态变化都写入有序 Ledger Event。
+6. 就绪节点按 `maxConcurrency` 调度。节点完成、失败、阻塞、分支选择和 Run 状态变化都写入有序 Ledger Event。
 7. Engine 调用 Executor；Runtime 将 task、输入、资源和 effects 交给 Agent，要求返回符合 output contract 的 JSON，无法满足契约时 fail closed。
 8. 前端通过 `/api/runs/:id/events` 的 SSE 读取事件，运行结束或连接关闭后停止推送。
 
@@ -119,16 +135,15 @@ FlowDraft（已发布能力的组合）
 
 SQLite 使用 WAL 和 busy timeout。主要数据表及用途：
 
-| 表 | 内容 |
-| --- | --- |
-| `cf_drafts` / `cf_versions` | CF 草稿与不可变 CF 版本 |
-| `flow_drafts` / `flow_versions` | Flow 草稿与不可变 FlowPlan |
-| `flow_compilations` | preview/test 编译快照 |
-| `runs` / `ledger_events` | Run 当前状态与追加式执行事实 |
-| `jobs` | 带 lease 的待执行任务 |
-| `approvals` | 人工审批决定 |
-| `runtime_profiles` / `runtime_current` | Runtime Profile 历史与当前指针 |
-| `resource_profiles` / `workspace_settings` | 资源绑定和工作区设置 |
+| 表                                         | 内容                           |
+| ------------------------------------------ | ------------------------------ |
+| `cf_drafts` / `cf_versions`                | CF 草稿与不可变 CF 版本        |
+| `flow_drafts` / `flow_versions`            | Flow 草稿与不可变 FlowPlan     |
+| `flow_compilations`                        | preview/test 编译快照          |
+| `runs` / `ledger_events`                   | Run 当前状态与追加式执行事实   |
+| `jobs`                                     | 带 lease 的待执行任务          |
+| `runtime_profiles` / `runtime_current`     | Runtime Profile 历史与当前指针 |
+| `resource_profiles` / `workspace_settings` | 资源绑定和工作区设置           |
 
 `CF_DB` 已不再支持。设置该变量会在监听端口前退出，以保证启动目录始终是唯一数据作用域；旧版 `data/cf.sqlite` 不会自动读取、迁移或删除。
 
@@ -155,11 +170,11 @@ Runtime 发现包括：内置 adapter、PATH 中的 ACP、npm 包 `cflowAgent` �
 
 `backend` 支持 `acp` 和 `cli`。所有进程都使用 argv 数组启动，不经过 shell 拼接。Process Runtime 提供独立子进程、工作区内限定 cwd、环境变量白名单、参数化启动、超时、取消和输出大小限制；除非具体 adapter 声明，否则不承诺网络隔离或主机级文件系统沙箱。
 
-权限以 CF 的 effects 为依据：已声明且位于工作区内的读写和命令操作可以自动授权；未声明能力或工作区外路径会被拒绝。Flow 中的人工审批节点仍需明确批准。密钥值不写入 CFlow 数据库，只按允许的变量名从服务端环境继承。
+权限以 CF 的 effects 为依据：已声明且位于工作区内的读写和命令操作可以自动授权；未声明能力或工作区外路径会被拒绝。密钥值不写入 CFlow 数据库，只按允许的变量名从服务端环境继承。
 
 ## 安装与运行
 
-需要 Node.js 22 或更高版本。
+需要 Node.js 22.13.0 或更高版本（PDF 解析依赖的最低要求）。
 
 从 npm 启动：
 
@@ -183,7 +198,7 @@ pnpm run build
 pnpm start
 ```
 
-默认访问 `http://127.0.0.1:3000`。服务默认只监听回环地址，因为 Runtime 可以启动本机受控进程。只有配置好外部认证和网络访问控制后，才应通过 `HOST` 改为其他监听地址。
+默认访问 `http://127.0.0.1:3000`。打开工作台后，可添加一条 Hello World 示例流程；示例用内置演示执行器试跑，不需要先配置本机助手。服务默认只监听回环地址，因为 Runtime 可以启动本机受控进程。只有配置好外部认证和网络访问控制后，才应通过 `HOST` 改为其他监听地址。
 
 开发模式：
 
@@ -201,7 +216,7 @@ pnpm run dev:web   # Vite，默认 127.0.0.1:5173，/api 代理到 3000
 - `/api/cfs`、`/api/cf-drafts/*`：CF 草稿与版本；
 - `/api/flows`、`/api/flow-drafts/*`、`/api/flow-compilations`：Flow 草稿、版本和编译快照；
 - `/api/flow-tests`：使用临时版本执行测试；
-- `/api/runs`：启动、取消、审批、查看运行详情和 SSE 事件；
+- `/api/runs`：启动、取消、查看运行详情和 SSE 事件；
 - `/api/flow-agent/chat`：基于工作台快照进行回答或草案修订；
 - `/api/resource-profiles/*`：资源 Profile 的管理和绑定。
 

@@ -10,7 +10,9 @@ CFlow serves non-technical staff in functions such as HR, finance, and operation
 
 ## Product Purpose
 
-CFlow turns a plain-language objective into an inspectable Flow, lets the user refine it on a desktop workbench, and keeps checking, testing, publishing, execution, and run history explicit. Success means a colleague can understand what will happen, approve the next step, and recover execution facts without engineering help.
+CFlow turns a plain-language objective into an inspectable Flow, lets the user refine it on a desktop workbench, and keeps checking, testing, publishing, execution, and run history explicit. Success means a colleague can understand what will happen, choose the next action, and recover execution facts without engineering help.
+
+CF capabilities can run through an Agent or a deterministic built-in tool. The built-in file content extractor reads common office documents locally, preserves text and source structure, and requires no Agent. Its configuration belongs to each Flow node. It does not perform OCR, semantic analysis, or modify source files.
 
 ## Brand Personality
 

@@ -1,5 +1,7 @@
 import { sha256 } from './hash.js'
 import { assertContractSchema } from './contract.js'
+import { assertUserCapability } from './builtin-catalog.js'
+import { assertExtractionInput } from './file-extraction-config.js'
 import type { CFDraft, CFVersion, FlowDraft, FlowEdge, FlowPlan } from './types.js'
 
 type NormalizedFlowEdge = Omit<FlowEdge, 'from' | 'to'> & {
@@ -53,6 +55,7 @@ function checkGraph(
   assert(seen.size === nodes.length, 'UNREACHABLE_NODE: all nodes must be reachable')
 }
 export function compileCF(draft: CFDraft): CFVersion {
+  assertUserCapability(draft)
   assertFileReferences(draft.fileReferences)
   if (draft.effects) {
     const validTypes = new Set(['file-read', 'file-write', 'command'])
@@ -112,13 +115,19 @@ export function compileCF(draft: CFDraft): CFVersion {
     createdAt: new Date().toISOString(),
   }
 }
-export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>): FlowPlan {
+export function compileFlow(
+  draft: FlowDraft,
+  versions: Map<string, CFVersion>,
+  options: { allowUnconfiguredTools?: boolean } = {},
+): FlowPlan {
   assert(draft.workspaceRoot?.trim().length > 0, 'FLOW_WORKSPACE_REQUIRED')
   assert(draft.nodes.length > 0, 'FLOW_EMPTY')
   assert((draft.limits?.maxConcurrency ?? 2) > 0, 'FLOW_INVALID_CONCURRENCY')
   assert((draft.limits?.maxNodeDispatches ?? 32) > 0, 'FLOW_INVALID_DISPATCH_LIMIT')
   const ids = new Set<string>()
+  const nodeKinds = new Set(['cf-call', 'branch', 'join', 'output'])
   draft.nodes.forEach((n) => {
+    assert(nodeKinds.has(n.kind), `FLOW_NODE_KIND_INVALID:${n.kind}`)
     assert(n.id.trim().length > 0, 'FLOW_NODE_ID_REQUIRED')
     assert(!ids.has(n.id), 'FLOW_DUPLICATE_NODE')
     ids.add(n.id)
@@ -129,6 +138,25 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       )
       assertContractSchema(n.inputContract, `FLOW_INPUT_${n.id}`)
       assertContractSchema(n.outputContract, `FLOW_OUTPUT_${n.id}`)
+      const version = versions.get(`${n.cfRef.cfId}@${n.cfRef.version}`)!
+      if (version.program.version === '0.3') {
+        if (
+          options.allowUnconfiguredTools &&
+          (!n.toolInput ||
+            (n.toolInput.source.kind === 'files' && !n.toolInput.source.paths.length))
+        )
+          return
+        assertExtractionInput(n.toolInput)
+        if (n.toolInput.source.kind === 'files')
+          assertFileReferences([...new Set(n.toolInput.source.paths)])
+        if (n.toolInput.source.kind === 'upstream') {
+          const sourceId = n.toolInput.source.nodeId
+          assert(
+            draft.edges.some((edge) => edge.from === sourceId && edge.to === n.id),
+            `文件来源必须是直接上游步骤：${n.id}`,
+          )
+        }
+      } else assert(n.toolInput === undefined, '普通 Agent 能力不支持内置工具配置。')
     }
   })
   const index = new Map(draft.nodes.map((n, i) => [n.id, i]))
@@ -139,6 +167,10 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
   assert(entries.length > 0, 'FLOW_NO_ENTRY')
   const edgeIds = new Set<string>()
   const edges: NormalizedFlowEdge[] = draft.edges.map((e) => {
+    assert(
+      !e.when || ['completed', 'failed', 'branch-case'].includes(e.when.outcome),
+      `FLOW_EDGE_OUTCOME_INVALID:${e.when?.outcome}`,
+    )
     assert(e.id.trim().length > 0, 'FLOW_EDGE_ID_REQUIRED')
     assert(!edgeIds.has(e.id), 'FLOW_DUPLICATE_EDGE')
     edgeIds.add(e.id)
@@ -187,10 +219,6 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       assert(source?.kind === 'branch', 'BRANCH_EDGE_SOURCE_REQUIRED')
       assert(source.cases.includes(e.when.caseId ?? ''), 'UNKNOWN_BRANCH_CASE')
     }
-    if (e.when?.outcome === 'approved' || e.when?.outcome === 'rejected') {
-      const source = typeof e.from === 'number' ? draft.nodes[e.from] : undefined
-      assert(source?.kind === 'approval', 'APPROVAL_EDGE_SOURCE_REQUIRED')
-    }
   }
   if (draft.resources) {
     const requirementIds = new Set<string>()
@@ -208,6 +236,13 @@ export function compileFlow(draft: FlowDraft, versions: Map<string, CFVersion>):
       ? { programHash: versions.get(`${n.cfRef.cfId}@${n.cfRef.version}`)!.programHash }
       : {}),
   }))
+  for (const node of nodes) {
+    if (
+      node.kind === 'cf-call' &&
+      versions.get(`${node.cfRef.cfId}@${node.cfRef.version}`)?.program.version === '0.3'
+    )
+      delete node.executor
+  }
   const base = {
     version: '0.6' as const,
     flowId: draft.flowId,

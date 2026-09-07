@@ -3,6 +3,7 @@ import { nodeKindLabel } from '../copy'
 import { describeNode } from '../flow-labels'
 import { FileMentionField } from './FileMentionField'
 import { FileReferencePicker } from './FileReferencePicker'
+import { FileExtractionSettings } from './FileExtractionSettings'
 import type {
   CFDraft,
   CFVersion,
@@ -297,8 +298,6 @@ export function DetailPanel(props: DetailPanelProps) {
                 <option value="completed">上一步成功时</option>
                 <option value="failed">上一步失败时</option>
                 <option value="branch-case">走到某一条分支时</option>
-                <option value="approved">审批通过时</option>
-                <option value="rejected">审批拒绝时</option>
               </select>
             </label>
             {selectedEdge.when?.outcome === 'branch-case' &&
@@ -343,177 +342,191 @@ export function DetailPanel(props: DetailPanelProps) {
               </div>
               <span className="tag">{nodeKindLabel(selectedNode.kind)}</span>
             </div>
-            {selectedNode.kind === 'cf-call' && (
-              <>
-                <div className="inspector-callout">
-                  <strong>
-                    {selectedCapability &&
-                    (selectedCapability.name.trim() || selectedCapability.does.trim())
-                      ? selectedCapabilityIsCandidate
-                        ? '这是草稿能力，还可以改'
-                        : '这是已发布的能力'
-                      : '新步骤'}
-                  </strong>
-                  <span>
-                    {selectedCapability &&
-                    (selectedCapability.name.trim() || selectedCapability.does.trim())
-                      ? selectedCapabilityIsCandidate
-                        ? '这里的说明会在下次检查和测试时用到。'
-                        : '改动只会用于当前流程，不会修改已经发布的能力。'
-                      : '先填写能力名称、任务和处理约束。输入与产出会由流程运行时自动处理。'}
-                  </span>
-                </div>
-                <label className="field">
-                  <span>由谁执行</span>
-                  <select
-                    value={selectedNode.executor ?? ''}
-                    onChange={(event) =>
-                      updateNode({ ...selectedNode, executor: event.target.value || undefined })
-                    }
-                  >
-                    <option value="">使用这项能力的默认助手</option>
-                    {runtimes.map((runtime) => {
-                      const available = runtime.enabled && runtime.health?.status === 'available'
-                      return (
-                        <option key={runtime.id} value={runtime.id} disabled={!available}>
-                          {runtime.name} ·{' '}
-                          {runtime.health?.status === 'available' ? '可用' : '不可用'}
-                        </option>
-                      )
-                    })}
-                  </select>
-                </label>
-                {selectedCapability && (
-                  <>
-                    <Field
-                      label="能力名称"
-                      value={selectedCapability.name}
-                      onChange={(name) => updateCapability({ name })}
-                    />
-                    <FileMentionField
-                      value={selectedCapability.does}
-                      references={selectedCapability.fileReferences ?? []}
-                      active={hasFileAccess}
-                      onChange={(does) => updateCapability({ does })}
-                    />
-                    <div className="field field-auto-context">
-                      <span>数据上下文</span>
-                      <div className="auto-context-note">
-                        <strong>自动接收上游结果</strong>
-                        <span>
-                          运行时会把 Flow 输入和所有直接上游节点的完整结果交给
-                          Agent，由任务描述决定如何使用。
-                        </span>
-                      </div>
-                    </div>
-                    <Field
-                      label="处理时要注意什么"
-                      value={selectedCapability.process ?? ''}
-                      multiline
-                      onChange={(process) => updateCapability({ process })}
-                    />
-                    <div className="field effects-field">
-                      <span>会产生什么影响</span>
-                      {/(修改|写入|修正|更新).*(文件|文档)/.test(selectedCapability.does) &&
-                        !(selectedCapability.effects ?? []).some(
-                          (effect) => effect.type === 'file-write',
-                        ) && (
-                          <small className="effect-warning">
-                            当前任务涉及修改文件，请勾选“会修改工作区内的文件”，否则测试时 Agent
-                            会拒绝执行。
-                          </small>
+            {selectedNode.kind === 'cf-call' &&
+              selectedCapability?.execution?.kind === 'builtin' && (
+                <FileExtractionSettings
+                  key={selectedNode.id}
+                  node={selectedNode}
+                  draft={draft}
+                  onChange={updateNode}
+                />
+              )}
+            {selectedNode.kind === 'cf-call' &&
+              selectedCapability?.execution?.kind !== 'builtin' && (
+                <>
+                  <div className="inspector-callout">
+                    <strong>
+                      {selectedCapability &&
+                      (selectedCapability.name.trim() || selectedCapability.does.trim())
+                        ? selectedCapabilityIsCandidate
+                          ? '这是草稿能力，还可以改'
+                          : '这是已发布的能力'
+                        : '新步骤'}
+                    </strong>
+                    <span>
+                      {selectedCapability &&
+                      (selectedCapability.name.trim() || selectedCapability.does.trim())
+                        ? selectedCapabilityIsCandidate
+                          ? '这里的说明会在下次检查和测试时用到。'
+                          : '改动只会用于当前流程，不会修改已经发布的能力。'
+                        : '先填写能力名称、任务和处理约束。输入与产出会由流程运行时自动处理。'}
+                    </span>
+                  </div>
+                  <label className="field">
+                    <span>由谁执行</span>
+                    <select
+                      value={selectedNode.executor ?? ''}
+                      onChange={(event) =>
+                        updateNode({ ...selectedNode, executor: event.target.value || undefined })
+                      }
+                    >
+                      <option value="">使用这项能力的默认助手</option>
+                      {selectedNode.executor === 'cflow-demo' &&
+                        !runtimes.some((runtime) => runtime.id === 'cflow-demo') && (
+                          <option value="cflow-demo">演示执行 · 不调用本机助手</option>
                         )}
-                      {/(执行|运行|调用|启动).*(脚本|命令|程序|PowerShell|Python|bash|shell)/i.test(
-                        `${selectedCapability.does} ${selectedCapability.process ?? ''}`,
-                      ) &&
-                        !(selectedCapability.effects ?? []).some(
-                          (effect) => effect.type === 'command',
-                        ) && (
-                          <small className="effect-warning">
-                            当前任务涉及执行命令，请勾选“会执行工作区内的命令”，否则测试时 Agent
-                            会拒绝执行。
-                          </small>
-                        )}
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={(selectedCapability.effects ?? []).some(
-                            (effect) => effect.type === 'file-read',
-                          )}
-                          onChange={(event) => {
-                            const effects = (selectedCapability.effects ?? []).filter(
-                              (effect) => effect.type !== 'file-read',
-                            )
-                            if (event.target.checked)
-                              effects.push({
-                                type: 'file-read',
-                                scope: 'workspace',
-                                description: '读取工作区内的文件',
-                              })
-                            updateCapability({ effects })
-                          }}
-                        />
-                        会读取工作区内的文件
-                      </label>
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={(selectedCapability.effects ?? []).some(
-                            (effect) => effect.type === 'file-write',
-                          )}
-                          onChange={(event) => {
-                            const effects = (selectedCapability.effects ?? []).filter(
-                              (effect) => effect.type !== 'file-write',
-                            )
-                            if (event.target.checked)
-                              effects.push({
-                                type: 'file-write',
-                                scope: 'workspace',
-                                description: '修改用户工作区内指定文件',
-                              })
-                            updateCapability({ effects })
-                          }}
-                        />
-                        会修改工作区内的文件
-                      </label>
-                      <label className="checkbox-row">
-                        <input
-                          type="checkbox"
-                          checked={(selectedCapability.effects ?? []).some(
-                            (effect) => effect.type === 'command',
-                          )}
-                          onChange={(event) => {
-                            const effects = (selectedCapability.effects ?? []).filter(
-                              (effect) => effect.type !== 'command',
-                            )
-                            if (event.target.checked)
-                              effects.push({
-                                type: 'command',
-                                scope: 'workspace',
-                                description: '执行工作区内的命令或脚本',
-                              })
-                            updateCapability({ effects })
-                          }}
-                        />
-                        会执行工作区内的命令
-                      </label>
-                      <FileReferencePicker
-                        active={hasFileAccess}
-                        references={selectedCapability.fileReferences ?? []}
-                        onChange={(fileReferences) => updateCapability({ fileReferences })}
+                      {runtimes.map((runtime) => {
+                        const available = runtime.enabled && runtime.health?.status === 'available'
+                        return (
+                          <option key={runtime.id} value={runtime.id} disabled={!available}>
+                            {runtime.name} ·{' '}
+                            {runtime.health?.status === 'available' ? '可用' : '不可用'}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </label>
+                  {selectedCapability && (
+                    <>
+                      <Field
+                        label="能力名称"
+                        value={selectedCapability.name}
+                        onChange={(name) => updateCapability({ name })}
                       />
-                      {fileWarnings.length > 0 && (
-                        <div className="file-reference-warnings" role="status">
-                          {fileWarnings.map((warning) => (
-                            <span key={`${warning.code}:${warning.path}`}>{warning.message}</span>
-                          ))}
+                      <FileMentionField
+                        value={selectedCapability.does}
+                        references={selectedCapability.fileReferences ?? []}
+                        active={hasFileAccess}
+                        onChange={(does) => updateCapability({ does })}
+                      />
+                      <div className="field field-auto-context">
+                        <span>数据上下文</span>
+                        <div className="auto-context-note">
+                          <strong>自动接收上游结果</strong>
+                          <span>
+                            运行时会把 Flow 输入和所有直接上游节点的完整结果交给
+                            Agent，由任务描述决定如何使用。
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  </>
-                )}
-              </>
-            )}
+                      </div>
+                      <Field
+                        label="处理时要注意什么"
+                        value={selectedCapability.process ?? ''}
+                        multiline
+                        onChange={(process) => updateCapability({ process })}
+                      />
+                      <div className="field effects-field">
+                        <span>会产生什么影响</span>
+                        {/(修改|写入|修正|更新).*(文件|文档)/.test(selectedCapability.does) &&
+                          !(selectedCapability.effects ?? []).some(
+                            (effect) => effect.type === 'file-write',
+                          ) && (
+                            <small className="effect-warning">
+                              当前任务涉及修改文件，请勾选“会修改工作区内的文件”，否则测试时 Agent
+                              会拒绝执行。
+                            </small>
+                          )}
+                        {/(执行|运行|调用|启动).*(脚本|命令|程序|PowerShell|Python|bash|shell)/i.test(
+                          `${selectedCapability.does} ${selectedCapability.process ?? ''}`,
+                        ) &&
+                          !(selectedCapability.effects ?? []).some(
+                            (effect) => effect.type === 'command',
+                          ) && (
+                            <small className="effect-warning">
+                              当前任务涉及执行命令，请勾选“会执行工作区内的命令”，否则测试时 Agent
+                              会拒绝执行。
+                            </small>
+                          )}
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={(selectedCapability.effects ?? []).some(
+                              (effect) => effect.type === 'file-read',
+                            )}
+                            onChange={(event) => {
+                              const effects = (selectedCapability.effects ?? []).filter(
+                                (effect) => effect.type !== 'file-read',
+                              )
+                              if (event.target.checked)
+                                effects.push({
+                                  type: 'file-read',
+                                  scope: 'workspace',
+                                  description: '读取工作区内的文件',
+                                })
+                              updateCapability({ effects })
+                            }}
+                          />
+                          会读取工作区内的文件
+                        </label>
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={(selectedCapability.effects ?? []).some(
+                              (effect) => effect.type === 'file-write',
+                            )}
+                            onChange={(event) => {
+                              const effects = (selectedCapability.effects ?? []).filter(
+                                (effect) => effect.type !== 'file-write',
+                              )
+                              if (event.target.checked)
+                                effects.push({
+                                  type: 'file-write',
+                                  scope: 'workspace',
+                                  description: '修改用户工作区内指定文件',
+                                })
+                              updateCapability({ effects })
+                            }}
+                          />
+                          会修改工作区内的文件
+                        </label>
+                        <label className="checkbox-row">
+                          <input
+                            type="checkbox"
+                            checked={(selectedCapability.effects ?? []).some(
+                              (effect) => effect.type === 'command',
+                            )}
+                            onChange={(event) => {
+                              const effects = (selectedCapability.effects ?? []).filter(
+                                (effect) => effect.type !== 'command',
+                              )
+                              if (event.target.checked)
+                                effects.push({
+                                  type: 'command',
+                                  scope: 'workspace',
+                                  description: '执行工作区内的命令或脚本',
+                                })
+                              updateCapability({ effects })
+                            }}
+                          />
+                          会执行工作区内的命令
+                        </label>
+                        <FileReferencePicker
+                          active={hasFileAccess}
+                          references={selectedCapability.fileReferences ?? []}
+                          onChange={(fileReferences) => updateCapability({ fileReferences })}
+                        />
+                        {fileWarnings.length > 0 && (
+                          <div className="file-reference-warnings" role="status">
+                            {fileWarnings.map((warning) => (
+                              <span key={`${warning.code}:${warning.path}`}>{warning.message}</span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </>
+              )}
             {selectedNode.kind === 'branch' && (
               <>
                 <Field
@@ -594,13 +607,6 @@ export function DetailPanel(props: DetailPanelProps) {
                   <option value="any">任一步完成后继续</option>
                 </select>
               </label>
-            )}
-            {selectedNode.kind === 'approval' && (
-              <Field
-                label="怎么审批"
-                value={selectedNode.policyRef}
-                onChange={(policyRef) => updateNode({ ...selectedNode, policyRef })}
-              />
             )}
             {selectedNode.kind === 'output' && (
               <Field

@@ -60,45 +60,45 @@ export const flowRevisionOutputSchema = (grounded = false) =>
 
 function stageSchema(grounded: boolean): Record<string, unknown> {
   return {
-  type: 'object',
-  additionalProperties: false,
-  required: grounded
-    ? ['kind', 'name', 'does', 'cfId', 'cond', 'routes', 'sourceQuote']
-    : ['kind', 'name', 'does', 'cfId', 'cond', 'routes'],
-  properties: {
-    kind: { type: 'string', enum: ['cf-call', 'branch'] },
-    name: { type: 'string' },
-    does: { type: ['string', 'null'] },
-    cfId: { type: ['string', 'null'] },
-    cond: { type: ['string', 'null'] },
-    routes: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: grounded
-          ? ['caseId', 'condition', 'endsFlow', 'stages', 'sourceQuote']
-          : ['caseId', 'condition', 'endsFlow', 'stages'],
-        properties: {
-          caseId: { type: 'string' },
-          condition: { type: 'string' },
-          endsFlow: { type: 'boolean' },
-          sourceQuote: { type: ['string', 'null'] },
-          stages: {
-            type: 'array',
-            minItems: 0,
-            maxItems: 6,
-            items: capabilitySchema(grounded),
+    type: 'object',
+    additionalProperties: false,
+    required: grounded
+      ? ['kind', 'name', 'does', 'cfId', 'cond', 'routes', 'sourceQuote']
+      : ['kind', 'name', 'does', 'cfId', 'cond', 'routes'],
+    properties: {
+      kind: { type: 'string', enum: ['cf-call', 'branch'] },
+      name: { type: 'string' },
+      does: { type: ['string', 'null'] },
+      cfId: { type: ['string', 'null'] },
+      cond: { type: ['string', 'null'] },
+      routes: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: grounded
+            ? ['caseId', 'condition', 'endsFlow', 'stages', 'sourceQuote']
+            : ['caseId', 'condition', 'endsFlow', 'stages'],
+          properties: {
+            caseId: { type: 'string' },
+            condition: { type: 'string' },
+            endsFlow: { type: 'boolean' },
+            sourceQuote: { type: ['string', 'null'] },
+            stages: {
+              type: 'array',
+              minItems: 0,
+              maxItems: 6,
+              items: capabilitySchema(grounded),
+            },
           },
         },
       },
+      input: { type: ['string', 'null'] },
+      output: { type: ['string', 'null'] },
+      process: { type: ['string', 'null'] },
+      sourceQuote: { type: ['string', 'null'] },
+      effects: { type: 'array', items: { type: 'object' } },
     },
-    input: { type: ['string', 'null'] },
-    output: { type: ['string', 'null'] },
-    process: { type: ['string', 'null'] },
-    sourceQuote: { type: ['string', 'null'] },
-    effects: { type: 'array', items: { type: 'object' } },
-  },
   }
 }
 
@@ -315,6 +315,14 @@ export function buildProposalGraph(
     if (!name || !does) throw new Error(`RUNTIME_PROPOSAL_STAGE_INVALID:${index}`)
     const id = `step-${nodes.length + 1}`
     const match = stage?.cfId ? catalog.find((item) => item.cfId === String(stage.cfId)) : undefined
+    if (match?.program.version === '0.3')
+      return {
+        id,
+        name,
+        kind: 'cf-call',
+        cfRef: { cfId: match.cfId, version: match.version },
+        toolInput: { source: { kind: 'files', paths: [] } },
+      }
     if (match)
       return withExecutor({
         id,
@@ -490,6 +498,17 @@ export function applyFlowRevision(
       ...(executor ? { executor } : {}),
     })
 
+    if (published?.program.version === '0.3')
+      return {
+        id,
+        name,
+        kind: 'cf-call',
+        cfRef: { cfId: published.cfId, version: published.version },
+        toolInput:
+          matched?.kind === 'cf-call'
+            ? (matched.toolInput ?? { source: { kind: 'files', paths: [] } })
+            : { source: { kind: 'files', paths: [] } },
+      }
     if (published) return withMeta(published.cfId, published.version)
 
     if (candidate) {
@@ -607,6 +626,7 @@ export function applyFlowRevision(
   compileFlow(
     flowDraft,
     new Map(compiled.map((version) => [`${version.cfId}@${version.version}`, version])),
+    { allowUnconfiguredTools: true },
   )
   return { flowDraft, cfDrafts }
 }

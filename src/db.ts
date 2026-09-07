@@ -21,7 +21,7 @@ export class Store {
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('busy_timeout = 5000')
     this.db.exec(
-      `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_compilations (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, flow_revision INTEGER NOT NULL, mode TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS approvals (run_id TEXT NOT NULL, node INTEGER NOT NULL, decision TEXT, decided_at TEXT, PRIMARY KEY(run_id,node)); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+      `CREATE TABLE IF NOT EXISTS cf_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS cf_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_drafts (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_versions (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS flow_compilations (id TEXT PRIMARY KEY, flow_id TEXT NOT NULL, flow_revision INTEGER NOT NULL, mode TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, flow_version_id TEXT NOT NULL, status TEXT NOT NULL, value TEXT NOT NULL, input TEXT NOT NULL DEFAULT '{}', resource_profile_id TEXT, resources TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS ledger_events (run_id TEXT NOT NULL, seq INTEGER NOT NULL, type TEXT NOT NULL, node INTEGER, data TEXT, at TEXT NOT NULL, PRIMARY KEY(run_id, seq)); CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL, lease_until INTEGER, attempts INTEGER NOT NULL DEFAULT 0); CREATE TABLE IF NOT EXISTS resource_profiles (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_profiles (id TEXT PRIMARY KEY, runtime_id TEXT NOT NULL, profile_version INTEGER NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_current (runtime_id TEXT PRIMARY KEY, profile_id TEXT NOT NULL); CREATE TABLE IF NOT EXISTS workspace_settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);`,
     )
     this.db.exec(
       `CREATE TABLE IF NOT EXISTS agent_invocations (id TEXT PRIMARY KEY, kind TEXT NOT NULL, status TEXT NOT NULL, runtime_id TEXT, flow_id TEXT, run_id TEXT, node INTEGER, message_id TEXT, result TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE IF NOT EXISTS agent_trace_events (invocation_id TEXT NOT NULL, seq INTEGER NOT NULL, value TEXT NOT NULL, at TEXT NOT NULL, PRIMARY KEY(invocation_id, seq), FOREIGN KEY(invocation_id) REFERENCES agent_invocations(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS agent_invocations_run_node ON agent_invocations(run_id,node);`,
@@ -270,21 +270,6 @@ export class Store {
   }
   finishJob(id: string) {
     this.db.prepare("UPDATE jobs SET status='done',lease_until=NULL WHERE id=?").run(id)
-  }
-  approval(runId: string, node: number) {
-    return (
-      (
-        this.db
-          .prepare('SELECT decision FROM approvals WHERE run_id=? AND node=?')
-          .get(runId, node) as { decision: string | null } | undefined
-      )?.decision ?? undefined
-    )
-  }
-  decideApproval(runId: string, node: number, decision: 'approved' | 'rejected') {
-    this.db
-      .prepare('INSERT OR REPLACE INTO approvals(run_id,node,decision,decided_at) VALUES(?,?,?,?)')
-      .run(runId, node, decision, new Date().toISOString())
-    this.append(runId, `approval.${decision}`, node)
   }
   saveResourceProfile(id: string, value: object) {
     this.db

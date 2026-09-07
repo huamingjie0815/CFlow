@@ -458,49 +458,6 @@ test('previews complete compiler output without publishing or running', async ()
   store.close()
 })
 
-test('approval API rejects non-approval nodes and runs in the wrong state', async () => {
-  const store = new Store(`/tmp/cf-approval-api-${randomUUID()}.sqlite`)
-  const app = createTestApp(store)
-  await app.ready()
-  const plan = {
-    version: '0.4' as const,
-    flowId: 'approval-flow',
-    flowVersion: '1.0.0',
-    objective: 'approval',
-    workspaceRoot: process.cwd(),
-    entries: [0],
-    nodes: [
-      { index: 0, id: 'approval', kind: 'approval' as const, policyRef: 'manual' },
-      { index: 1, id: 'output', kind: 'output' as const, outputId: 'result' },
-    ],
-    edges: [],
-    limits: { maxConcurrency: 1, maxNodeDispatches: 4 },
-    planHash: 'test',
-  }
-  store.save('flow_versions', 'approval-flow@1.0.0', plan)
-  store.createRun('wrong-node', 'approval-flow@1.0.0')
-  const wrongNodeJob = store.claimJob()
-  if (wrongNodeJob) store.finishJob(wrongNodeJob.id)
-  store.setRun('wrong-node', 'waiting-approval')
-  const wrongNode = await app.inject({
-    method: 'POST',
-    url: '/api/runs/wrong-node/approvals/1',
-    payload: { decision: 'approved' },
-  })
-  assert.equal(wrongNode.statusCode, 400)
-  store.createRun('wrong-state', 'approval-flow@1.0.0')
-  const wrongStateJob = store.claimJob()
-  if (wrongStateJob) store.finishJob(wrongStateJob.id)
-  const wrongState = await app.inject({
-    method: 'POST',
-    url: '/api/runs/wrong-state/approvals/0',
-    payload: { decision: 'approved' },
-  })
-  assert.equal(wrongState.statusCode, 409)
-  await app.close()
-  store.close()
-})
-
 test('resolves required resource bindings into a Run and Ledger', async () => {
   const store = new Store(`/tmp/cf-resource-api-${randomUUID()}.sqlite`)
   const app = createTestApp(store)
@@ -585,6 +542,7 @@ test('persists workspace settings and immutable Runtime Profile versions', async
   assert.equal(initial.statusCode, 200)
   assert.ok(initial.json().some((runtime: any) => runtime.id === 'codex'))
   assert.ok(initial.json().every((runtime: any) => runtime.id !== 'echo'))
+  assert.ok(initial.json().every((runtime: any) => runtime.id !== 'cflow-demo'))
   const discovered = await app.inject({ method: 'POST', url: '/api/runtimes/discover' })
   assert.equal(discovered.statusCode, 200)
   assert.ok(Array.isArray(discovered.json().runtimes))
@@ -611,6 +569,18 @@ test('persists workspace settings and immutable Runtime Profile versions', async
   const created = create.json() as any
   assert.equal(created.profileVersion, 2)
   assert.equal(created.health.status, 'available')
+  const reserved = await app.inject({
+    method: 'POST',
+    url: '/api/runtimes',
+    payload: {
+      id: 'cflow-demo',
+      name: 'External demo replacement',
+      backend: 'cli',
+      command: '/bin/false',
+    },
+  })
+  assert.equal(reserved.statusCode, 400)
+  assert.match(reserved.body, /RUNTIME_ID_RESERVED/)
   const update = await app.inject({
     method: 'POST',
     url: '/api/runtimes',
@@ -711,6 +681,91 @@ test('executes a Flow through the builtin Runtime without process adapters', asy
     },
   })
   assert.deepEqual((startedEvent?.data as any).executor, { id: 'echo', profileVersion: 1 })
+})
+
+test('creates a Hello World demo draft and test-runs it without process adapters', async () => {
+  const store = new Store(`/tmp/cf-demo-flow-${randomUUID()}.sqlite`)
+  const app = createTestApp(store)
+  await app.ready()
+  const created = await app.inject({ method: 'POST', url: '/api/flow-drafts/demo' })
+  assert.equal(created.statusCode, 200)
+  const bundle = created.json() as { flowDraft: any; cfDrafts: any[] }
+  assert.match(bundle.flowDraft.flowId, /^cflow-demo-/)
+  assert.equal(bundle.flowDraft.name, '示例：写出 Hello World 页面')
+  const kinds = new Set(bundle.flowDraft.nodes.map((node: { kind: string }) => node.kind))
+  assert.ok(['cf-call', 'branch', 'join', 'output'].every((kind) => kinds.has(kind)))
+  assert.ok(
+    bundle.cfDrafts.every((cf: { defaultExecutor: string }) => cf.defaultExecutor === 'cflow-demo'),
+  )
+
+  const listed = await app.inject({ method: 'GET', url: '/api/flow-drafts' })
+  assert.ok(
+    listed.json().some((draft: { flowId: string }) => draft.flowId === bundle.flowDraft.flowId),
+  )
+
+  const testRun = await app.inject({
+    method: 'POST',
+    url: '/api/flow-tests',
+    payload: { flowDraft: bundle.flowDraft, cfDrafts: bundle.cfDrafts, input: {} },
+  })
+  assert.equal(testRun.statusCode, 200, testRun.body)
+  const runId = testRun.json().runId as string
+  for (let i = 0; i < 200; i++) {
+    if (['completed', 'failed'].includes(store.getRun(runId)?.status ?? '')) break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  const finalRun = store.getRun(runId)
+  const events = store.events(runId)
+  assert.equal(finalRun?.status, 'completed', JSON.stringify(finalRun))
+  const output = (
+    finalRun?.value as { outputId?: string; value?: { html?: string; title?: string } }
+  )?.value
+  assert.equal((finalRun?.value as { outputId?: string })?.outputId, 'result')
+  assert.equal(output?.title, 'Hello World')
+  assert.match(String(output?.html ?? ''), /Hello World/)
+  assert.ok(events.some((event) => event.type === 'node.inactive'))
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'node.started' &&
+        (event.data as { executor?: { id?: string } } | undefined)?.executor?.id === 'cflow-demo',
+    ),
+  )
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === 'node.completed' &&
+        bundle.flowDraft.nodes[event.node ?? -1]?.kind === 'join',
+    ),
+  )
+
+  const publishedCf = await app.inject({
+    method: 'POST',
+    url: '/api/cfs',
+    payload: bundle.cfDrafts[0],
+  })
+  assert.equal(publishedCf.statusCode, 200)
+  const removed = await app.inject({
+    method: 'DELETE',
+    url: `/api/flow-drafts/${bundle.flowDraft.flowId}`,
+  })
+  assert.equal(removed.statusCode, 200)
+  const remainingCfDrafts = (await app.inject({ method: 'GET', url: '/api/cf-drafts' })).json()
+  assert.ok(
+    remainingCfDrafts.some(
+      (storedCf: { cfId: string }) => storedCf.cfId === bundle.cfDrafts[0].cfId,
+    ),
+  )
+  assert.ok(
+    bundle.cfDrafts
+      .slice(1)
+      .every(
+        (demoCf: { cfId: string }) =>
+          !remainingCfDrafts.some((storedCf: { cfId: string }) => storedCf.cfId === demoCf.cfId),
+      ),
+  )
+  await app.close()
+  store.close()
 })
 
 test('persists and removes Flow drafts through the workspace API', async () => {

@@ -4,7 +4,6 @@ export function nodeKindLabel(kind: string) {
       'cf-call': '能力',
       branch: '分支',
       join: '汇合',
-      approval: '审批',
       output: '输出',
     }[kind] ?? kind
   )
@@ -88,7 +87,6 @@ export function runStatusLabel(status: string) {
       failed: '未完成',
       cancelled: '已取消',
       'needs-reconciliation': '待处理',
-      'waiting-approval': '等待审批',
     }[status] ?? status
   )
 }
