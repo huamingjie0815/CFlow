@@ -62,7 +62,7 @@ test('falls back to the capability name, then to a plain placeholder', () => {
   assert.doesNotMatch(unknown.label + unknown.subtitle, /cf-ghost/)
 })
 
-test('branch, approval and output read as plain language', () => {
+test('branch and output read as plain language', () => {
   const branch = describeNode(
     {
       id: 'b',
@@ -75,14 +75,6 @@ test('branch, approval and output read as plain language', () => {
     [],
   )
   assert.equal(branch.subtitle, '金额超过 2000 元 · 金额在 2000 元以内')
-
-  const approval = describeNode(
-    { id: 'a', kind: 'approval', policyRef: 'finance-sign-off' },
-    [],
-    [],
-  )
-  assert.equal(approval.subtitle, '需要有人确认后才能继续')
-  assert.doesNotMatch(approval.subtitle, /finance-sign-off/)
 
   const output = describeNode({ id: 'o', kind: 'output', outputId: 'result' }, [], [])
   assert.doesNotMatch(output.label + output.subtitle, /result/)
@@ -114,10 +106,6 @@ test('a branch edge shows the routing rule, falling back to the case id', () => 
     'low',
   )
   assert.equal(edgeLabel({ id: 'e3', from: 'b', to: 'z' }, nodes), undefined)
-  assert.equal(
-    edgeLabel({ id: 'e4', from: 'a', to: 'z', when: { outcome: 'approved' } }, nodes),
-    '批准',
-  )
 })
 
 test('the config chip prefers the retry policy over the executor', () => {
@@ -139,6 +127,15 @@ test('the config chip prefers the retry policy over the executor', () => {
       executor: 'codex',
     }),
     '由 codex 执行',
+  )
+  assert.equal(
+    nodeConfigNote({
+      id: 's',
+      kind: 'cf-call',
+      cfRef: { cfId: 'c', version: '1.0.0' },
+      executor: 'cflow-demo',
+    }),
+    '演示执行，不调用本机助手',
   )
   assert.equal(nodeConfigNote({ id: 'o', kind: 'output', outputId: 'result' }), undefined)
 })

@@ -1,4 +1,4 @@
-import { FileText, LoaderCircle, RotateCcw, Send, Split, Wrench, X } from 'lucide-react'
+import { FileText, LoaderCircle, RotateCcw, Send, Split, Workflow, Wrench, X } from 'lucide-react'
 import { useRef } from 'react'
 import {
   attachmentName,
@@ -28,6 +28,9 @@ type GoalComposerProps = {
   retryMessageId?: string
   pendingInvocationId?: string
   onRetry: () => void
+  onAddDemo?: () => void
+  onCreateBlank?: () => void
+  isAddingDemo?: boolean
 }
 
 /**
@@ -55,6 +58,35 @@ export function GoalComposer(props: GoalComposerProps) {
             <span className="view-kicker">从一句话开始</span>
             <h2>先说你想完成什么</h2>
             <p>助手会把目标拆成一串可以调整的步骤。你确认无误后，依次检查、试运行，最后发布。</p>
+            {props.onAddDemo && (
+              <div className="goal-demo">
+                <button
+                  type="button"
+                  className="goal-demo-button"
+                  onClick={props.onAddDemo}
+                  disabled={props.isPending || props.isAddingDemo}
+                >
+                  {props.isAddingDemo ? (
+                    <LoaderCircle className="spin" size={14} />
+                  ) : (
+                    <Workflow size={14} />
+                  )}
+                  添加示例流程
+                </button>
+                <span>不需要本机助手，可直接检查和测试</span>
+                {props.onCreateBlank && (
+                  <button
+                    type="button"
+                    className="goal-demo-button"
+                    onClick={props.onCreateBlank}
+                    disabled={props.isPending}
+                  >
+                    <FileText size={14} />
+                    空白流程
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
         <div className="messages">
@@ -121,7 +153,7 @@ export function GoalComposer(props: GoalComposerProps) {
               event.currentTarget.form?.requestSubmit()
             }
           }}
-          placeholder="例如：收到报销单后核对发票，金额超过 2000 元的先请主管确认，再录入台账并回复申请人"
+          placeholder="例如：收到报销单后核对发票，金额超过 2000 元的标记为异常，其他录入台账并回复申请人"
           aria-label="你想完成的目标"
         />
         <input

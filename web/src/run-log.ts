@@ -2,6 +2,7 @@ import { describeNode, nodeConfigNote } from './flow-labels'
 import { foldNodeEventState, nodeIdByIndex, type NodeRunState } from './run'
 import { nodeKindLabel } from './copy'
 import type { CFDraft, CFVersion, FlowDraft, LedgerEvent, RunDetail } from './types'
+import type { FileExtractionResult } from '../../src/types'
 
 /**
  * Run log: turns the flat, seq-ordered ledger into something a colleague who
@@ -26,6 +27,7 @@ export type RunLogEntry = {
   detail: string
   /** Raw payload, shown only inside a 技术细节 disclosure. */
   technical?: string
+  extraction?: FileExtractionResult
 }
 
 export type RunLogGroup = {
@@ -103,6 +105,22 @@ export function describeLedgerEvent(
     nodeLabel ? `${nodeLabel} ${suffix}` : fallback
 
   switch (event.type) {
+    case 'tool.file.started':
+      return { title: '正在提取文件', detail: String(readField(event, 'path') ?? '') }
+    case 'tool.file.completed':
+      return {
+        title: readField(event, 'truncated') ? '文件已提取（已截断）' : '文件已提取',
+        detail: `${readField(event, 'path')} · ${readField(event, 'chars')} 字符`,
+        technical: formatJson(event.data),
+      }
+    case 'tool.file.failed':
+      return {
+        title: '文件提取失败',
+        detail: `${readField(event, 'path')}：${(readField(event, 'error') as { message?: string })?.message ?? '解析失败'}`,
+        technical: formatJson(event.data),
+      }
+    case 'tool.result':
+      return { title: '文件提取结果', detail: '逐文件结果已保留。' }
     case 'run.started':
       return { title: '运行开始', detail: '已经开始执行这次运行。' }
     case 'run.completed': {
@@ -151,12 +169,6 @@ export function describeLedgerEvent(
         technical: formatJson(event.data),
       }
     }
-    case 'approval.requested':
-      return { title: named('需要审批', '需要审批'), detail: '等待有人确认后才会继续。' }
-    case 'approval.approved':
-      return { title: named('已批准', '已批准'), detail: '已批准，流程继续。' }
-    case 'approval.rejected':
-      return { title: named('已拒绝', '已拒绝'), detail: '已拒绝，按拒绝线路走。' }
     case 'node.started':
       return { title: named('开始', '步骤开始'), detail: '这一步开始执行。' }
     case 'node.completed': {
@@ -200,7 +212,7 @@ export function describeLedgerEvent(
 }
 
 export function eventTone(event: LedgerEvent): EventTone {
-  if (['run.completed', 'approval.approved', 'node.completed'].includes(event.type))
+  if (['run.completed', 'node.completed', 'tool.file.completed'].includes(event.type))
     return 'completed'
   if (
     [
@@ -209,7 +221,7 @@ export function eventTone(event: LedgerEvent): EventTone {
       'run.needs-reconciliation',
       'node.failed',
       'node.blocked',
-      'approval.rejected',
+      'tool.file.failed',
     ].includes(event.type)
   )
     return 'failed'
@@ -278,6 +290,10 @@ export function buildRunLog(
       at: event.at,
       tone: eventTone(event),
       ...described,
+      ...(['node.completed', 'tool.result'].includes(event.type) &&
+      (readField(event, 'value') as FileExtractionResult)?.kind === 'file-extraction'
+        ? { extraction: readField(event, 'value') as FileExtractionResult }
+        : {}),
     })
     target.firstSeq = Math.min(target.firstSeq, event.seq)
     target.lastAt = event.at

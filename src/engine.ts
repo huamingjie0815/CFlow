@@ -12,6 +12,9 @@ import type {
 import { assertContract } from './contract.js'
 import { Store } from './db.js'
 import { sha256 } from './hash.js'
+import { DEMO_RUNTIME_ID, executeDemoCapability } from './demo-runtime.js'
+import { extractFiles } from './file-extraction.js'
+import { builtinCapabilities } from './builtin-catalog.js'
 
 export interface Executor {
   id: string
@@ -185,19 +188,6 @@ export class Engine {
             this.isReady(node.index, plan, state.statuses, state.values),
         )
         .map((node) => node.index)
-      const approval = ready
-        .map((index) => plan.nodes[index])
-        .find((node) => node.kind === 'approval')
-      if (approval && this.store.approval(runId, approval.index) === undefined) {
-        this.store.setRun(runId, 'waiting-approval', {
-          node: approval.index,
-          policyRef: approval.policyRef,
-        })
-        this.store.append(runId, 'approval.requested', approval.index, {
-          policyRef: approval.policyRef,
-        })
-        return
-      }
       while (
         ready.length &&
         inFlight.size < Math.max(1, plan.limits.maxConcurrency) &&
@@ -215,10 +205,12 @@ export class Engine {
           node.kind === 'cf-call'
             ? {
                 cfRef: node.cfRef,
-                executor: node.executorProfile ?? {
-                  id: node.executor ?? 'default',
-                  profileVersion: 0,
-                },
+                executor: node.cfRef.cfId.startsWith('builtin:')
+                  ? { id: 'file.extract-text', profileVersion: 1 }
+                  : (node.executorProfile ?? {
+                      id: node.executor ?? 'default',
+                      profileVersion: 0,
+                    }),
               }
             : { kind: node.kind },
         )
@@ -349,11 +341,6 @@ export class Engine {
         statuses.set(event.node, 'inactive')
         started.delete(event.node)
       }
-      if (event.type === 'approval.approved' || event.type === 'approval.rejected') {
-        values.set(event.node, event.type.slice('approval.'.length) as Json)
-        statuses.set(event.node, 'completed')
-        started.delete(event.node)
-      }
     }
     return {
       statuses,
@@ -373,9 +360,9 @@ export class Engine {
     if (!source || source === 'running' || source === 'pending') return 'pending'
     const outcome = edge.when?.outcome ?? 'completed'
     if (outcome === 'failed') return source === 'failed' ? 'active' : 'inactive'
-    if (outcome === 'branch-case' || outcome === 'approved' || outcome === 'rejected')
+    if (outcome === 'branch-case')
       return source === 'completed'
-        ? values.get(edge.from) === (edge.when?.caseId ?? outcome)
+        ? values.get(edge.from) === edge.when?.caseId
           ? 'active'
           : 'inactive'
         : 'inactive'
@@ -469,7 +456,8 @@ export class Engine {
         (value) => value.cfId === node.cfRef.cfId && value.version === node.cfRef.version,
       )
       if (!version) throw new Error('CF_VERSION_NOT_FOUND')
-      if (version.program.version !== '0.2') throw new Error('CF_PROGRAM_VERSION_UNSUPPORTED')
+      if (!['0.2', '0.3'].includes(version.program.version))
+        throw new Error('CF_PROGRAM_VERSION_UNSUPPORTED')
       if (
         sha256({
           inputContract: version.draft.inputContract,
@@ -480,6 +468,40 @@ export class Engine {
         throw new Error('PROGRAM_HASH_MISMATCH')
       assertContract(node.inputContract ?? version.draft.inputContract, input, 'CF_INPUT')
       if (signal.aborted) throw new Error('ABORTED')
+      if (version.program.version === '0.3') {
+        const builtin = builtinCapabilities().find(
+          (item) => item.cfId === version.cfId && item.version === version.version,
+        )
+        if (!builtin || builtin.programHash !== version.programHash)
+          throw new Error('BUILTIN_PROGRAM_UNSUPPORTED')
+        try {
+          const output = await extractFiles(
+            node.toolInput!,
+            input,
+            plan.workspaceRoot,
+            signal,
+            (type, data) => this.store.append(runId, type, node.index, data),
+          )
+          assertContract(
+            node.outputContract ?? version.draft.outputContract,
+            output as unknown as Json,
+            'CF_OUTPUT',
+          )
+          return output as unknown as Json
+        } catch (error) {
+          const result = (error as { result?: Json }).result
+          if (result) this.store.append(runId, 'tool.result', node.index, { value: result })
+          throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+            details: {
+              layer: 'engine',
+              code: (error as { code?: string }).code ?? 'EXTRACTION_FAILED',
+              message: error instanceof Error ? error.message : String(error),
+              retryable: false,
+              effectState: 'none',
+            },
+          })
+        }
+      }
       const executorId = node.executorProfile
         ? `${node.executorProfile.id}@${node.executorProfile.profileVersion}`
         : (node.executor ?? version.draft.defaultExecutor ?? 'echo')
@@ -535,7 +557,6 @@ export class Engine {
     }
     if (node.kind === 'branch') return this.evaluate(node.cond, input)
     if (node.kind === 'join') return input
-    if (node.kind === 'approval') return 'approved'
     if (node.kind === 'output') {
       const upstream = (input as any)?.upstream
       if (Array.isArray(upstream) && upstream.length === 1) return upstream[0]?.output ?? null
@@ -606,10 +627,15 @@ export class Engine {
   }
 }
 export function builtins() {
-  return new ExecutorRegistry().register({
-    id: 'echo',
-    execute: async (task, input) => ({ task, input }),
-  })
+  return new ExecutorRegistry()
+    .register({
+      id: 'echo',
+      execute: async (task, input) => ({ task, input }),
+    })
+    .register({
+      id: DEMO_RUNTIME_ID,
+      execute: executeDemoCapability,
+    })
 }
 export function newRunId() {
   return randomUUID()

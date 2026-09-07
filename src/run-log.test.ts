@@ -80,17 +80,6 @@ test('run-level events stay in the run group, never in a step group', () => {
   )
 })
 
-test('approval events land inside their own step group', () => {
-  seq = 0
-  const log = buildRunLog(
-    draft,
-    runOf([ev('approval.requested', 1, { policyRef: 'manual' }), ev('approval.approved', 1)]),
-  )
-  assert.equal(log!.nodes.length, 1)
-  assert.equal(log!.nodes[0].nodeId, 'step-2')
-  assert.equal(log!.nodes[0].state, 'completed')
-})
-
 test('an out-of-range step index is marked stale instead of borrowing a name', () => {
   seq = 0
   const log = buildRunLog(draft, runOf([ev('node.started', 9), ev('node.completed', 9)]))
@@ -137,9 +126,6 @@ test('no event type produces a raw identifier as its title', () => {
     'node.inactive',
     'node.blocked',
     'node.retry',
-    'approval.requested',
-    'approval.approved',
-    'approval.rejected',
     'some.future.event',
   ]
   for (const type of everyType) {

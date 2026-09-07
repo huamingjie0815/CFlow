@@ -157,7 +157,6 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         id: edge.id,
         source: edge.from,
         target: edge.to,
-        type: 'bezier',
         label: edgeLabel(edge, draft.nodes),
         selected: selectedEdgeId === edge.id,
         reconnectable: edge.from !== '$entry',

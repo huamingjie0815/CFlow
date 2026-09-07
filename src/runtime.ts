@@ -20,6 +20,7 @@ import type {
 import type { ExecutorRegistry } from './engine.js'
 import { Store } from './db.js'
 import { isWithinDirectory } from './workspace.js'
+import { DEMO_RUNTIME_ID, executeDemoCapability, isBuiltinRuntimeId } from './demo-runtime.js'
 import {
   adapterDescriptorForId,
   adapterDescriptorRecord,
@@ -259,6 +260,7 @@ export class RuntimeManager {
   }
   ensureDefaults() {
     this.discover()
+    this.ensureDemoRuntime()
     const preferredRuntimeId = this.activeRuntimeIds.has('codex')
       ? 'codex'
       : ([...this.activeRuntimeIds][0] ?? 'codex')
@@ -282,9 +284,13 @@ export class RuntimeManager {
   }
   discover() {
     const discovery = discoverRuntimeProfiles(this.discoveryOptions)
-    const defaults = discovery.profiles
+    const reserved = discovery.profiles.filter((profile) => profile.id === DEMO_RUNTIME_ID)
+    const defaults = discovery.profiles.filter((profile) => profile.id !== DEMO_RUNTIME_ID)
     this.activeRuntimeIds = new Set(defaults.map((profile) => profile.id))
-    this.lastDiscoveryWarnings = discovery.warnings
+    this.lastDiscoveryWarnings = [
+      ...discovery.warnings,
+      ...reserved.map(() => `${DEMO_RUNTIME_ID}: reserved runtime id ignored`),
+    ]
     const changed: RuntimeProfile[] = []
     for (const profile of defaults) {
       const current = this.store.runtimeProfile(profile.id)
@@ -310,6 +316,46 @@ export class RuntimeManager {
     }
     return changed
   }
+  private ensureDemoRuntime() {
+    const current = this.store.runtimeProfile(DEMO_RUNTIME_ID)
+    if (
+      current?.backend === 'builtin' &&
+      current.enabled &&
+      current.discovery?.source === 'builtin'
+    )
+      return
+    this.store.saveRuntimeProfile({
+      id: DEMO_RUNTIME_ID,
+      profileVersion: current ? this.store.nextRuntimeProfileVersion(DEMO_RUNTIME_ID) : 1,
+      name: '演示执行',
+      description: '内置演示执行器，不调用本机助手。',
+      enabled: true,
+      backend: 'builtin',
+      args: [],
+      versionArgs: [],
+      promptTransport: 'stdin',
+      outputMode: 'json',
+      timeoutMs: 5_000,
+      maxOutputBytes: 65_536,
+      envAllowlist: [],
+      capabilities: ['structured-output'],
+      discovery: { source: 'builtin' },
+      traits: defaultTraits({
+        backendKind: 'builtin',
+        sessionMode: 'stateless',
+        structuredOutput: true,
+        streaming: false,
+        toolEvents: false,
+        permissionPrompts: false,
+        tokenAccounting: 'unavailable',
+        cancellation: 'cooperative',
+        filesystemIsolation: 'sandboxed',
+        networkIsolation: 'enforced',
+      }),
+      adapterBuild: ADAPTER_BUILD,
+      createdAt: new Date(0).toISOString(),
+    })
+  }
   discoveryWarnings() {
     return this.lastDiscoveryWarnings
   }
@@ -319,6 +365,7 @@ export class RuntimeManager {
       .currentRuntimeProfiles()
       .filter(
         (profile) =>
+          profile.id !== DEMO_RUNTIME_ID &&
           profile.backend !== 'builtin' &&
           (this.activeRuntimeIds.has(profile.id) ||
             profile.discovery?.source === 'manual' ||
@@ -380,11 +427,13 @@ export class RuntimeManager {
   validateProfile(input: Partial<RuntimeProfile> & { id: string; name: string }) {
     const id = input.id.trim().toLowerCase()
     if (!/^[a-z0-9][a-z0-9._-]{1,63}$/.test(id)) throw new Error('RUNTIME_ID_INVALID')
+    if (id === DEMO_RUNTIME_ID) throw new Error('RUNTIME_ID_RESERVED')
     if (!input.name?.trim() || input.name.trim().length > 80)
       throw new Error('RUNTIME_NAME_INVALID')
     const backend = input.backend ?? 'acp'
     if (!['builtin', 'acp', 'cli'].includes(backend)) throw new Error('RUNTIME_BACKEND_INVALID')
-    if (backend === 'builtin' && id !== 'echo') throw new Error('RUNTIME_BUILTIN_RESERVED')
+    if (backend === 'builtin' && !isBuiltinRuntimeId(id))
+      throw new Error('RUNTIME_BUILTIN_RESERVED')
     const command = input.command?.trim()
     if ((backend === 'acp' || backend === 'cli') && !command)
       throw new Error('RUNTIME_COMMAND_REQUIRED')
@@ -467,12 +516,18 @@ export class RuntimeManager {
     return profile
   }
   register(registry: ExecutorRegistry, profile: RuntimeProfile, exactOnly = false) {
+    if (profile.id === DEMO_RUNTIME_ID) {
+      registry.register({
+        id: `${profile.id}@${profile.profileVersion}`,
+        execute: executeDemoCapability,
+      })
+      if (!exactOnly) registry.register({ id: profile.id, execute: executeDemoCapability })
+      return
+    }
     if (profile.backend === 'builtin') {
-      const echo = {
-        execute: async (task: string, input: Json) => ({ task, input }) as Json,
-      }
-      registry.register({ id: `${profile.id}@${profile.profileVersion}`, ...echo })
-      if (!exactOnly) registry.register({ id: profile.id, ...echo })
+      const execute = async (task: string, input: Json) => ({ task, input }) as Json
+      registry.register({ id: `${profile.id}@${profile.profileVersion}`, execute })
+      if (!exactOnly) registry.register({ id: profile.id, execute })
       return
     }
     const executor = (id: string) =>
@@ -637,6 +692,8 @@ export class RuntimeManager {
     analysis?: RuntimeAnalysisOptions,
     trace?: AgentTraceReporter,
   ): Promise<Json> {
+    if (profile.id === DEMO_RUNTIME_ID)
+      return executeDemoCapability(task, input, signal, resources, effects, context, trace)
     if (!profile.enabled) throw new Error(`RUNTIME_DISABLED:${profile.id}`)
     trace?.({
       kind: 'stage',
@@ -644,7 +701,9 @@ export class RuntimeManager {
       status: 'completed',
       detail: `${profile.name} · ${profile.backend.toUpperCase()}`,
     })
-    if (profile.backend === 'builtin') return { task, input }
+    if (profile.backend === 'builtin') {
+      return { task, input }
+    }
     const prompt = [
       'You are executing one bounded CF capability inside a fixed Flow.',
       'Complete only the current task. Do not choose the next Flow node or change the Flow.',

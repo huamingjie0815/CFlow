@@ -1,15 +1,7 @@
 import type { FlowDraft, RunDetail } from './types'
 
 export type NodeRunState =
-  | 'draft'
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'blocked'
-  | 'inactive'
-  | 'waiting-approval'
-  | 'published'
+  'draft' | 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'inactive' | 'published'
 
 const statusLabels: Record<NodeRunState, string> = {
   draft: '草稿',
@@ -19,7 +11,6 @@ const statusLabels: Record<NodeRunState, string> = {
   failed: '失败',
   blocked: '被阻塞',
   inactive: '未启用',
-  'waiting-approval': '待审批',
   published: '已发布',
 }
 
@@ -31,7 +22,6 @@ export function nodeRunStateTone(state: NodeRunState) {
   switch (state) {
     case 'running':
     case 'pending':
-    case 'waiting-approval':
       return 'running'
     case 'completed':
     case 'published':
@@ -74,11 +64,6 @@ export function foldNodeEventState(
       return 'blocked'
     case 'node.inactive':
       return 'inactive'
-    case 'approval.requested':
-      return 'waiting-approval'
-    case 'approval.approved':
-    case 'approval.rejected':
-      return 'completed'
     default:
       return current
   }
@@ -95,7 +80,7 @@ export function deriveNodeRunStates(draft: FlowDraft | null, run: RunDetail | nu
     const next = foldNodeEventState(states.get(nodeId), event.type)
     if (next) states.set(nodeId, next)
   }
-  if (['running', 'waiting-approval'].includes(run.run.status)) {
+  if (run.run.status === 'running') {
     for (const node of draft.nodes) {
       if (!states.has(node.id)) states.set(node.id, 'pending')
     }

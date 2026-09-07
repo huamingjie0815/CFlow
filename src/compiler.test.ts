@@ -108,6 +108,43 @@ test('rejects invalid contracts and duplicate flow identifiers', () => {
   )
 })
 
+test('rejects removed node kinds and edge outcomes', () => {
+  const removedNode = {
+    flowId: 'removed-node',
+    revision: 1,
+    name: 'Removed node',
+    objective: 'run',
+    workspaceRoot: process.cwd(),
+    nodes: [
+      { id: 'approval', kind: 'approval', policyRef: 'manual' },
+      { id: 'output', kind: 'output', outputId: 'result' },
+    ],
+    edges: [
+      { id: 'start', from: '$entry', to: 'approval' },
+      { id: 'end', from: 'approval', to: 'output' },
+    ],
+  } as unknown as FlowDraft
+  assert.throws(() => compileFlow(removedNode, new Map()), /FLOW_NODE_KIND_INVALID:approval/)
+
+  const removedOutcome = {
+    flowId: 'removed-outcome',
+    revision: 1,
+    name: 'Removed outcome',
+    objective: 'run',
+    workspaceRoot: process.cwd(),
+    nodes: [{ id: 'output', kind: 'output', outputId: 'result' }],
+    edges: [
+      {
+        id: 'start',
+        from: '$entry',
+        to: 'output',
+        when: { outcome: 'approved' },
+      },
+    ],
+  } as unknown as FlowDraft
+  assert.throws(() => compileFlow(removedOutcome, new Map()), /FLOW_EDGE_OUTCOME_INVALID:approved/)
+})
+
 test('compiles a sequential Flow into a hashed plan', () => {
   const version = compileCF(cf)
   const draft: FlowDraft = {

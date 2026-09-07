@@ -449,48 +449,6 @@ test('retries a failed CF call only within its declared bound', async () => {
   store.close()
 })
 
-test('pauses for approval and resumes on an explicit decision', async () => {
-  const flow: FlowDraft = {
-    flowId: 'approval-flow',
-    revision: 1,
-    name: 'Approval',
-    objective: 'approve',
-    workspaceRoot: process.cwd(),
-    nodes: [
-      { id: 'review', kind: 'approval', policyRef: 'manual-review' },
-      { id: 'approved', kind: 'output', outputId: 'approved' },
-      { id: 'rejected', kind: 'output', outputId: 'rejected' },
-    ],
-    edges: [
-      { id: 'entry', from: '$entry', to: 'review' },
-      { id: 'yes', from: 'review', to: 'approved', when: { outcome: 'approved' } },
-      { id: 'no', from: 'review', to: 'rejected', when: { outcome: 'rejected' } },
-    ],
-  }
-  const plan = compileFlow(flow, new Map())
-  const store = new Store(`/tmp/cf-approval-${randomUUID()}.sqlite`)
-  const runId = randomUUID()
-  store.createRun(runId, `${plan.flowId}@${plan.flowVersion}`)
-  const engine = new Engine(store, builtins(), () => [])
-  engine.start(runId, plan)
-  for (let i = 0; i < 100; i++) {
-    if (store.getRun(runId)?.status === 'waiting-approval') break
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  assert.equal(store.getRun(runId)?.status, 'waiting-approval')
-  await new Promise((resolve) => setTimeout(resolve, 20))
-  store.decideApproval(runId, 0, 'approved')
-  engine.start(runId, plan)
-  for (let i = 0; i < 100; i++) {
-    const run = store.getRun(runId)
-    if (run?.status === 'completed' || run?.status === 'failed') break
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
-  assert.equal(store.getRun(runId)?.status, 'completed')
-  assert.equal((store.getRun(runId)?.value as any).outputId, 'approved')
-  store.close()
-})
-
 test('does not auto-replay a ledger node that started but never committed', async () => {
   const cf: CFDraft = {
     cfId: 'uncommitted',

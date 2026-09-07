@@ -127,6 +127,9 @@ export const api = {
       body: JSON.stringify({ flowDraft, cfDrafts }),
     })
   },
+  createDemoFlow() {
+    return request<DraftBundle>('/api/flow-drafts/demo', { method: 'POST', body: '{}' })
+  },
   searchWorkspaceFiles(query: string, selected: string[]) {
     return request<WorkspaceFileSearchResult>('/api/workspace/files/search', {
       method: 'POST',
@@ -150,12 +153,18 @@ export const api = {
       body: JSON.stringify({ flowDraft, cfDrafts, runtimeId }),
     })
   },
-  test(flowDraft: FlowDraft, cfDrafts: CFDraft[], resourceProfileId?: string, runtimeId?: string) {
+  test(
+    flowDraft: FlowDraft,
+    cfDrafts: CFDraft[],
+    resourceProfileId?: string,
+    runtimeId?: string,
+    input: unknown = {},
+  ) {
     return request<{ runId: string; test: true; plan: FlowPlan; programs: CFVersion[] }>(
       '/api/flow-tests',
       {
         method: 'POST',
-        body: JSON.stringify({ flowDraft, cfDrafts, input: {}, resourceProfileId, runtimeId }),
+        body: JSON.stringify({ flowDraft, cfDrafts, input, resourceProfileId, runtimeId }),
       },
     )
   },
@@ -167,17 +176,11 @@ export const api = {
       `/api/agent-invocations/${encodeURIComponent(id)}`,
     )
   },
-  run(flowId: string, flowVersion: string, resourceProfileId?: string) {
+  run(flowId: string, flowVersion: string, resourceProfileId?: string, input: unknown = {}) {
     return request<{ runId: string }>('/api/runs', {
       method: 'POST',
-      body: JSON.stringify({ flowId, flowVersion, input: {}, resourceProfileId }),
+      body: JSON.stringify({ flowId, flowVersion, input, resourceProfileId }),
     })
-  },
-  decideApproval(runId: string, node: number, decision: 'approved' | 'rejected') {
-    return request<{ runId: string; node: number; decision: string }>(
-      `/api/runs/${encodeURIComponent(runId)}/approvals/${node}`,
-      { method: 'POST', body: JSON.stringify({ decision }) },
-    )
   },
   cancelRun(runId: string) {
     return request<{ cancelled: true }>(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
