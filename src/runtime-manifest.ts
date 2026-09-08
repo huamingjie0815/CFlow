@@ -1,5 +1,16 @@
-import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type {
@@ -9,7 +20,9 @@ import type {
   RuntimeOutputMode,
   RuntimePermissionMode,
   RuntimePromptTransport,
+  ProjectAgentConfig,
 } from './types.js'
+import { isWithinDirectory } from './workspace.js'
 
 export type AgentManifest = {
   schemaVersion: 1
@@ -44,8 +57,8 @@ export type AdapterDescriptor = {
   modelEnvironment?: string
   nativeCommand?: {
     adapterEnvironment: string
+    command: string
     overrideEnvironment: string
-    bundled: 'codex' | 'adapter'
   }
   permissionMode?: {
     environment: string
@@ -70,7 +83,7 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
       id: 'codex',
       name: 'Codex',
       description:
-        '用 CFlow 随包提供的 Codex 来执行步骤。默认只读；能力声明 workspace 写入后可修改工作区文件。',
+        '通过 CFlow 随包提供的 ACP adapter 连接本机安装的 Codex。默认只读；能力声明 workspace 写入后可修改工作区文件。',
       backend: 'acp',
       command: 'codex-acp',
       envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'CODEX_HOME', 'OPENAI_API_KEY'],
@@ -82,8 +95,8 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
     modelEnvironment: 'CODEX_CONFIG',
     nativeCommand: {
       adapterEnvironment: 'CODEX_PATH',
+      command: 'codex',
       overrideEnvironment: 'CFLOW_CODEX_PATH',
-      bundled: 'codex',
     },
     permissionMode: {
       environment: 'INITIAL_AGENT_MODE',
@@ -97,7 +110,7 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
       schemaVersion: 1,
       id: 'claude-code',
       name: 'Claude Code',
-      description: '用 CFlow 随包提供的 Claude Code 来执行步骤。',
+      description: '通过 CFlow 随包提供的 ACP adapter 连接本机安装的 Claude Code。',
       backend: 'acp',
       command: 'claude-agent-acp',
       envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'ANTHROPIC_API_KEY'],
@@ -108,8 +121,8 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
     modelEnvironment: 'CLAUDE_MODEL_CONFIG',
     nativeCommand: {
       adapterEnvironment: 'CLAUDE_CODE_EXECUTABLE',
+      command: 'claude',
       overrideEnvironment: 'CFLOW_CLAUDE_PATH',
-      bundled: 'adapter',
     },
   },
 ]
@@ -242,7 +255,7 @@ const normalizePermissionArgs = (
   return output
 }
 
-const normalizeManifest = (value: unknown, baseDirectory?: string): AgentManifest => {
+export const normalizeManifest = (value: unknown, baseDirectory?: string): AgentManifest => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('OBJECT_INVALID')
   const input = value as Record<string, unknown>
   if (input.schemaVersion !== 1) throw new Error('SCHEMA_VERSION_UNSUPPORTED')
@@ -291,6 +304,99 @@ const normalizeManifest = (value: unknown, baseDirectory?: string): AgentManifes
     permissionArgs: normalizePermissionArgs(input.permissionArgs),
     traits: normalizeTraits(input.traits),
   }
+}
+
+const projectAgentConfig = (manifest: AgentManifest): ProjectAgentConfig => ({
+  id: manifest.id,
+  name: manifest.name,
+  description: manifest.description,
+  command: manifest.command,
+  args: manifest.args ?? [],
+  outputMode: manifest.outputMode ?? 'json',
+  envAllowlist: manifest.envAllowlist ?? [],
+  timeoutMs: manifest.timeoutMs ?? 300_000,
+  maxOutputBytes: manifest.maxOutputBytes ?? 1_048_576,
+})
+
+const projectManifestDirectory = (projectRoot: string, create = false) => {
+  const root = realpathSync(resolve(projectRoot))
+  const directory = join(root, '.cflow', 'agents.d')
+  if (create) mkdirSync(directory, { recursive: true })
+  if (!existsSync(directory)) return directory
+  const actual = realpathSync(directory)
+  if (!isWithinDirectory(root, actual)) throw new Error('PROJECT_AGENT_FILE_UNSAFE')
+  return actual
+}
+
+const projectRecords = (projectRoot: string) =>
+  loadAgentManifestRecords({
+    projectRoot,
+    includeBuiltins: false,
+    packageRoot: false,
+    userManifestDirectory: false,
+  }).records.filter((item) => item.source === 'project-manifest')
+
+const safeProjectManifestPath = (projectRoot: string, manifestPath: string) => {
+  const directory = projectManifestDirectory(projectRoot)
+  if (!isWithinDirectory(directory, manifestPath)) throw new Error('PROJECT_AGENT_FILE_UNSAFE')
+  const status = lstatSync(manifestPath)
+  if (!status.isFile() || status.isSymbolicLink()) throw new Error('PROJECT_AGENT_FILE_UNSAFE')
+  return manifestPath
+}
+
+export const listProjectAgentConfigs = (projectRoot: string) =>
+  projectRecords(projectRoot).map((item) => projectAgentConfig(item.manifest))
+
+export const normalizeProjectAgentConfig = (value: unknown): ProjectAgentConfig => {
+  if (!value || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('PROJECT_AGENT_INVALID')
+  const input = value as Record<string, unknown>
+  const manifest = normalizeManifest({
+    schemaVersion: 1,
+    id: input.id,
+    name: input.name,
+    description: input.description,
+    backend: 'acp',
+    command: input.command,
+    args: input.args,
+    outputMode: input.outputMode,
+    envAllowlist: input.envAllowlist,
+    timeoutMs: input.timeoutMs,
+    maxOutputBytes: input.maxOutputBytes,
+  })
+  return projectAgentConfig(manifest)
+}
+
+export const saveProjectAgentConfig = (
+  projectRoot: string,
+  value: unknown,
+  originalId?: string,
+) => {
+  const config = normalizeProjectAgentConfig(value)
+  if (originalId && config.id !== originalId) throw new Error('PROJECT_AGENT_ID_IMMUTABLE')
+  const existing = projectRecords(projectRoot).find((item) => item.manifest.id === config.id)
+  if (originalId && !existing) throw new Error('PROJECT_AGENT_NOT_FOUND')
+  if (!originalId && existing) throw new Error('PROJECT_AGENT_ID_CONFLICT')
+  const directory = projectManifestDirectory(projectRoot, true)
+  const target = existing?.manifestPath
+    ? safeProjectManifestPath(projectRoot, existing.manifestPath)
+    : join(directory, `${config.id}.json`)
+  if (!originalId && existsSync(target)) throw new Error('PROJECT_AGENT_ID_CONFLICT')
+  const manifest: AgentManifest = { schemaVersion: 1, backend: 'acp', ...config }
+  const temporary = join(directory, `.${config.id}-${randomUUID()}.tmp`)
+  try {
+    writeFileSync(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx' })
+    renameSync(temporary, target)
+  } finally {
+    rmSync(temporary, { force: true })
+  }
+  return config
+}
+
+export const deleteProjectAgentConfig = (projectRoot: string, id: string) => {
+  const record = projectRecords(projectRoot).find((item) => item.manifest.id === id)
+  if (!record?.manifestPath) throw new Error('PROJECT_AGENT_NOT_FOUND')
+  rmSync(safeProjectManifestPath(projectRoot, record.manifestPath))
 }
 
 const record = (

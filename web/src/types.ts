@@ -10,6 +10,7 @@ export type {
   LedgerEvent,
   ResourceProfile,
   RuntimeProfile,
+  ProjectAgentConfig,
   WorkspaceInfo,
   WorkspaceSettings,
   AgentInvocation,
@@ -27,6 +28,7 @@ import type {
   FlowPlan,
   ResourceProfile,
   RuntimeProfile,
+  ProjectAgentConfig,
   WorkspaceInfo,
   WorkspaceSettings,
 } from '../../src/types'
@@ -42,6 +44,12 @@ export type RuntimeWithHealth = RuntimeProfile & {
 }
 
 export type RuntimeDiscoveryResult = {
+  runtimes: RuntimeWithHealth[]
+  warnings: string[]
+}
+
+export type ProjectAgentMutationResult = {
+  projectAgents: ProjectAgentConfig[]
   runtimes: RuntimeWithHealth[]
   warnings: string[]
 }
@@ -155,6 +163,7 @@ export type BootstrapData = {
   flowCompilations: FlowCompilationSnapshot[]
   resources: ResourceProfile[]
   runtimes: RuntimeWithHealth[]
+  projectAgents: ProjectAgentConfig[]
   runtimeDiscoveryWarnings: string[]
   settings: WorkspaceSettings
   flowDrafts: FlowDraft[]

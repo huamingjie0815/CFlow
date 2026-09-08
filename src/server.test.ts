@@ -1,7 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
 import { createApp, isDirectExecution } from './server.js'
@@ -605,6 +614,191 @@ test('persists workspace settings and immutable Runtime Profile versions', async
   assert.equal(settings.json().autoSaveDrafts, false)
   await app.close()
   store.close()
+})
+
+test('manages project ACP agents without deleting runtime history', async (t) => {
+  const root = join('/tmp', `cf-project-agents-${randomUUID()}`)
+  const adapter = join(root, 'project-agent-acp')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  const newline = buffer.indexOf('\\n')
+  if (newline < 0) return
+  const request = JSON.parse(buffer.slice(0, newline))
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+    protocolVersion: request.params.protocolVersion,
+    agentCapabilities: {}, authMethods: [], agentInfo: { name: 'Project Agent', version: '1.0' }
+  } }) + '\\n')
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
+  const packageAgentDirectory = join(root, 'node_modules', 'external-agent')
+  mkdirSync(packageAgentDirectory, { recursive: true })
+  writeFileSync(
+    join(packageAgentDirectory, 'package.json'),
+    JSON.stringify({
+      name: 'external-agent',
+      version: '1.0.0',
+      cflowAgent: {
+        schemaVersion: 1,
+        id: 'external-helper',
+        name: 'External helper',
+        backend: 'acp',
+        command: adapter,
+      },
+    }),
+  )
+  const store = new Store(join(root, '.cflow', 'test.sqlite'))
+  const app = createApp(store, root)
+  t.after(async () => {
+    await app.close()
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+  await app.ready()
+  const config = {
+    id: 'project-helper',
+    name: '项目助手',
+    description: '处理当前项目任务',
+    command: adapter,
+    args: ['--project'],
+    outputMode: 'json',
+    envAllowlist: ['PATH', 'HOME', 'PROJECT_TOKEN'],
+    timeoutMs: 120_000,
+    maxOutputBytes: 2_097_152,
+  }
+
+  const conflict = await app.inject({
+    method: 'POST',
+    url: '/api/project-agents',
+    payload: { ...config, id: 'codex' },
+  })
+  assert.equal(conflict.statusCode, 409)
+  assert.equal(conflict.json().error, 'PROJECT_AGENT_ID_CONFLICT')
+
+  const externalConflict = await app.inject({
+    method: 'POST',
+    url: '/api/project-agents',
+    payload: { ...config, id: 'external-helper' },
+  })
+  assert.equal(externalConflict.statusCode, 409)
+  assert.equal(externalConflict.json().error, 'PROJECT_AGENT_ID_CONFLICT')
+
+  const invalid = await app.inject({
+    method: 'POST',
+    url: '/api/project-agents',
+    payload: { ...config, envAllowlist: ['PROJECT_TOKEN=value'] },
+  })
+  assert.equal(invalid.statusCode, 400)
+  assert.equal(invalid.json().error, 'ENV_ALLOWLIST_INVALID')
+
+  const created = await app.inject({
+    method: 'POST',
+    url: '/api/project-agents',
+    payload: config,
+  })
+  assert.equal(created.statusCode, 200)
+  assert.equal(created.json().projectAgents[0].id, config.id)
+  assert.equal(
+    created.json().runtimes.find((runtime: any) => runtime.id === config.id).health.status,
+    'available',
+  )
+  const manifestPath = join(root, '.cflow', 'agents.d', `${config.id}.json`)
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+  assert.equal(manifest.schemaVersion, 1)
+  assert.equal(manifest.backend, 'acp')
+  assert.equal(manifest.envAllowlist.includes('PROJECT_TOKEN'), true)
+  assert.equal(JSON.stringify(manifest).includes('PROJECT_TOKEN=value'), false)
+
+  const renamed = await app.inject({
+    method: 'PUT',
+    url: `/api/project-agents/${config.id}`,
+    payload: { ...config, id: 'renamed-helper' },
+  })
+  assert.equal(renamed.statusCode, 400)
+  assert.equal(renamed.json().error, 'PROJECT_AGENT_ID_IMMUTABLE')
+
+  const updated = await app.inject({
+    method: 'PUT',
+    url: `/api/project-agents/${config.id}`,
+    payload: { ...config, name: '项目助手（已更新）' },
+  })
+  assert.equal(updated.statusCode, 200)
+  assert.equal(updated.json().projectAgents[0].name, '项目助手（已更新）')
+  assert.equal(store.runtimeProfileHistory(config.id).length, 2)
+
+  const makeDefault = await app.inject({
+    method: 'PUT',
+    url: '/api/settings',
+    payload: { defaultRuntimeId: config.id },
+  })
+  assert.equal(makeDefault.statusCode, 200)
+  const protectedDelete = await app.inject({
+    method: 'DELETE',
+    url: `/api/project-agents/${config.id}`,
+  })
+  assert.equal(protectedDelete.statusCode, 409)
+  assert.equal(protectedDelete.json().error, 'PROJECT_AGENT_IS_DEFAULT')
+
+  await app.inject({
+    method: 'PUT',
+    url: '/api/settings',
+    payload: { defaultRuntimeId: 'codex' },
+  })
+  const removed = await app.inject({
+    method: 'DELETE',
+    url: `/api/project-agents/${config.id}`,
+  })
+  assert.equal(removed.statusCode, 200)
+  assert.equal(removed.json().projectAgents.length, 0)
+  assert.equal(
+    removed.json().runtimes.some((runtime: any) => runtime.id === config.id),
+    false,
+  )
+  assert.ok(store.runtimeProfile(config.id))
+  assert.equal(store.runtimeProfileHistory(config.id).length, 2)
+
+  const outside = join(root, 'outside-agent.json')
+  writeFileSync(
+    outside,
+    JSON.stringify({
+      schemaVersion: 1,
+      id: 'unsafe-agent',
+      name: 'Unsafe agent',
+      backend: 'acp',
+      command: adapter,
+    }),
+  )
+  symlinkSync(outside, join(root, '.cflow', 'agents.d', 'unsafe-agent.json'))
+  const unsafeDelete = await app.inject({
+    method: 'DELETE',
+    url: '/api/project-agents/unsafe-agent',
+  })
+  assert.equal(unsafeDelete.statusCode, 400)
+  assert.equal(unsafeDelete.json().error, 'PROJECT_AGENT_FILE_UNSAFE')
+
+  const unavailable = await app.inject({
+    method: 'POST',
+    url: '/api/project-agents',
+    payload: { ...config, id: 'offline-helper', command: join(root, 'missing-agent') },
+  })
+  assert.equal(unavailable.statusCode, 200)
+  assert.equal(
+    unavailable.json().projectAgents.some((agent: any) => agent.id === 'offline-helper'),
+    true,
+  )
+  assert.equal(
+    unavailable.json().runtimes.find((runtime: any) => runtime.id === 'offline-helper').health
+      .status,
+    'unavailable',
+  )
+  assert.equal(existsSync(join(root, '.cflow', 'agents.d', 'offline-helper.json')), true)
 })
 
 test('executes a Flow through the builtin Runtime without process adapters', async () => {

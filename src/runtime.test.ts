@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { delimiter, join } from 'node:path'
 import {
@@ -404,9 +404,113 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
-test('bundled Codex and Claude adapters initialize without global agent CLIs', async () => {
-  const root = join('/tmp', `cf-bundled-adapters-${randomUUID()}`)
+test('retries a bundled ACP runtime after a transient cold-start failure', async () => {
+  const root = join('/tmp', `cf-acp-cold-start-${randomUUID()}`)
+  const executable = join(root, 'cold-start-acp')
+  const attempts = join(root, 'attempts')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync, readFileSync } = require('node:fs')
+const attempts = ${JSON.stringify(attempts)}
+appendFileSync(attempts, '1')
+if (readFileSync(attempts, 'utf8').length === 1) process.exit(1)
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  const newline = buffer.indexOf('\\n')
+  if (newline < 0) return
+  const request = JSON.parse(buffer.slice(0, newline))
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+    protocolVersion: request.params.protocolVersion,
+    agentCapabilities: {}, authMethods: []
+  } }) + '\\n')
+})
+`,
+  )
+  chmodSync(executable, 0o755)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    const codex = manager.profile('codex')!
+    store.saveRuntimeProfile({
+      ...codex,
+      profileVersion: store.nextRuntimeProfileVersion('codex'),
+      command: executable,
+    })
+    const health = await manager.health('codex')
+    assert.equal(health.status, 'available', health.error)
+    assert.equal(readFileSync(attempts, 'utf8'), '11')
+  } finally {
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('coalesces concurrent health checks for the same runtime profile', async () => {
+  const root = join('/tmp', `cf-acp-coalesced-health-${randomUUID()}`)
+  const executable = join(root, 'coalesced-acp')
+  const attempts = join(root, 'attempts')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(
+    executable,
+    `#!/usr/bin/env node
+const { appendFileSync } = require('node:fs')
+appendFileSync(${JSON.stringify(attempts)}, '1')
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  const newline = buffer.indexOf('\\n')
+  if (newline < 0) return
+  const request = JSON.parse(buffer.slice(0, newline))
+  setTimeout(() => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+    protocolVersion: request.params.protocolVersion,
+    agentCapabilities: {}, authMethods: []
+  } }) + '\\n'), 100)
+})
+`,
+  )
+  chmodSync(executable, 0o755)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      includeBuiltins: false,
+    })
+    manager.saveProfile({
+      id: 'coalesced-acp',
+      name: 'Coalesced ACP',
+      backend: 'acp',
+      command: executable,
+    })
+    const [first, second] = await Promise.all([
+      manager.health('coalesced-acp'),
+      manager.health('coalesced-acp'),
+    ])
+    assert.equal(first.status, 'available')
+    assert.deepEqual(second, first)
+    assert.equal(readFileSync(attempts, 'utf8'), '1')
+  } finally {
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('bundled adapters require installed Codex and Claude CLIs', async () => {
+  const root = join('/tmp', `cf-missing-agent-clis-${randomUUID()}`)
   const bin = join(root, 'bin')
+  const adapter = join(root, 'fake-acp')
   const previousPath = process.env.PATH
   const previousCodex = process.env.CFLOW_CODEX_PATH
   const previousClaude = process.env.CFLOW_CLAUDE_PATH
@@ -414,6 +518,24 @@ test('bundled Codex and Claude adapters initialize without global agent CLIs', a
   mkdirSync(bin, { recursive: true })
   mkdirSync(join(root, 'codex-home'), { recursive: true })
   symlinkSync(process.execPath, join(bin, 'node'))
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  const newline = buffer.indexOf('\\n')
+  if (newline < 0) return
+  const request = JSON.parse(buffer.slice(0, newline))
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+    protocolVersion: request.params.protocolVersion,
+    agentCapabilities: {}, authMethods: []
+  } }) + '\\n')
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
   process.env.PATH = bin
   delete process.env.CFLOW_CODEX_PATH
   delete process.env.CFLOW_CLAUDE_PATH
@@ -427,14 +549,33 @@ test('bundled Codex and Claude adapters initialize without global agent CLIs', a
       packageRoot: false,
       healthTimeoutMs: 8_000,
     })
+    for (const id of ['codex', 'claude-code']) {
+      const profile = manager.profile(id)!
+      store.saveRuntimeProfile({
+        ...profile,
+        profileVersion: store.nextRuntimeProfileVersion(id),
+        command: adapter,
+      })
+    }
     const [codex, claude] = await Promise.all([
       manager.health('codex'),
       manager.health('claude-code'),
     ])
-    assert.equal(codex.status, 'available', codex.error)
-    assert.equal(claude.status, 'available', claude.error)
-    assert.match(codex.version ?? '', /bundled-bin/)
-    assert.match(claude.version ?? '', /bundled-bin/)
+    assert.equal(codex.status, 'unavailable')
+    assert.equal(claude.status, 'unavailable')
+    assert.match(codex.error ?? '', /CODEX_CLI_NOT_FOUND:codex/)
+    assert.match(claude.error ?? '', /CLAUDE_CODE_CLI_NOT_FOUND:claude/)
+
+    for (const command of ['codex', 'claude']) {
+      writeFileSync(join(bin, command), '#!/bin/sh\nexit 0\n')
+      chmodSync(join(bin, command), 0o755)
+    }
+    const [installedCodex, installedClaude] = await Promise.all([
+      manager.health('codex'),
+      manager.health('claude-code'),
+    ])
+    assert.equal(installedCodex.status, 'available', installedCodex.error)
+    assert.equal(installedClaude.status, 'available', installedClaude.error)
   } finally {
     store.close()
     process.env.PATH = previousPath
@@ -455,10 +596,7 @@ test('ACP health reports handshake timeout, stderr and resolved launch details',
   const hanging = join(root, 'hanging-acp')
   const failing = join(root, 'failing-acp')
   writeFileSync(hanging, '#!/usr/bin/env node\nprocess.stdin.resume()\n')
-  writeFileSync(
-    failing,
-    '#!/bin/sh\nprintf "adapter setup failed\\n" >&2\nexit 2\n',
-  )
+  writeFileSync(failing, '#!/bin/sh\nprintf "adapter setup failed\\n" >&2\nexit 2\n')
   chmodSync(hanging, 0o755)
   chmodSync(failing, 0o755)
   process.env.PATH = [root, previousPath].filter(Boolean).join(delimiter)

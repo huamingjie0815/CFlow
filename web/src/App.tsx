@@ -13,7 +13,6 @@ import {
   ScrollText,
   Upload,
   Workflow,
-  X,
 } from 'lucide-react'
 import { api, readableError } from './api'
 import { BottomDrawer } from './components/BottomDrawer'
@@ -26,6 +25,7 @@ import { GoalComposer } from './components/GoalComposer'
 import { PanelResizeHandle } from './components/PanelResizeHandle'
 import { RunLogPanel } from './components/RunLogPanel'
 import { SettingsView } from './components/SettingsView'
+import { Notice, type NoticeValue } from './components/Notice'
 import { TopBar } from './components/TopBar'
 import { runtimeHealthErrorSummary } from './copy'
 import type { FlowListRow } from './flow-list'
@@ -39,6 +39,8 @@ import {
   constrainPanelWidths,
   DETAIL_PANEL_DEFAULT_WIDTH,
   nextSignalAction,
+  persistedDraftRevision,
+  reconcileRestoredDraft,
   runStopControl,
   type DrawerTab,
   type TestState,
@@ -55,6 +57,8 @@ import type {
   RunDetail,
   AgentChatMessage,
   BootstrapData,
+  ProjectAgentConfig,
+  ProjectAgentMutationResult,
 } from './types'
 
 const workspaceKeyPrefix = 'cf-platform-react-workbench-v3:'
@@ -74,6 +78,7 @@ type StoredWorkspace = {
   rightCollapsed?: boolean
   leftPanelWidth?: number
   rightPanelWidth?: number
+  dirty?: boolean
 }
 
 type AgentUndo = {
@@ -115,11 +120,11 @@ function readStoredWorkspace(root: string): StoredWorkspace {
   }
 }
 
-function planToDraft(plan: FlowPlan): FlowDraft {
+function planToDraft(plan: FlowPlan, draftRevision: number): FlowDraft {
   const idByIndex = new Map(plan.nodes.map((node) => [node.index, node.id]))
   return {
     flowId: plan.flowId,
-    revision: Number.parseInt(plan.flowVersion, 10),
+    revision: draftRevision,
     name: plan.objective,
     objective: plan.objective,
     workspaceRoot: plan.workspaceRoot,
@@ -150,6 +155,19 @@ function draftBundleSignature(flowDraft: FlowDraft, cfDrafts: CFDraft[]) {
   return JSON.stringify([flowDraft, cfDrafts])
 }
 
+function candidateDraftsForFlow(draft: FlowDraft, data: Pick<BootstrapData, 'cfs' | 'cfDrafts'>) {
+  return data.cfDrafts.filter((cf) =>
+    draft.nodes.some(
+      (node) =>
+        node.kind === 'cf-call' &&
+        node.cfRef.cfId === cf.cfId &&
+        !data.cfs.some(
+          (version) => version.cfId === node.cfRef.cfId && version.version === node.cfRef.version,
+        ),
+    ),
+  )
+}
+
 export function App() {
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState<FlowDraft | null>(null)
@@ -178,11 +196,7 @@ export function App() {
   const [inspectedRunId, setInspectedRunId] = useState<string | null>(null)
   const [preview, setPreview] = useState<CompilationPreview | null>(null)
   const [previewError, setPreviewError] = useState<string | null>(null)
-  const [notice, setNotice] = useState<{
-    tone: 'info' | 'success' | 'error'
-    title: string
-    detail: string
-  } | null>(null)
+  const [notice, setNotice] = useState<NoticeValue | null>(null)
   const [goal, setGoal] = useState('')
   const [skillAttachments, setSkillAttachments] = useState<File[]>([])
   const [retryGoal, setRetryGoal] = useState<RetryGoal | null>(null)
@@ -218,9 +232,18 @@ export function App() {
     if (!root || hydratedWorkspaceRef.current === root) return
     const stored = readStoredWorkspace(root)
     const storedDraft = stored.draft ? { ...stored.draft, workspaceRoot: root } : null
-    setDraft(storedDraft)
+    const restored = reconcileRestoredDraft(
+      storedDraft,
+      stored.dirty ?? Boolean(storedDraft),
+      data.flowDrafts,
+    )
+    setDraft(restored.draft)
     setPositions(stored.positions ?? {})
-    setCandidateCfs(stored.candidateCfs ?? [])
+    setCandidateCfs(
+      restored.source === 'server' && restored.draft
+        ? candidateDraftsForFlow(restored.draft, data)
+        : (stored.candidateCfs ?? []),
+    )
     setConversation(stored.conversation ?? [])
     setRunId(stored.runId ?? null)
     setRunMode(stored.runMode ?? null)
@@ -237,7 +260,7 @@ export function App() {
         workbenchRef.current?.getBoundingClientRect().width ?? window.innerWidth,
       ),
     )
-    setDirty(Boolean(storedDraft))
+    setDirty(restored.dirty)
     hydratedWorkspaceRef.current = root
     setWorkspaceHydrated(true)
   }, [data?.workspace.root])
@@ -294,6 +317,7 @@ export function App() {
           rightCollapsed,
           leftPanelWidth: panelWidths.left,
           rightPanelWidth: panelWidths.right,
+          dirty,
         } satisfies StoredWorkspace),
       )
     } catch {
@@ -304,6 +328,7 @@ export function App() {
     conversation,
     draft,
     drawerTab,
+    dirty,
     inspectedRunId,
     leftCollapsed,
     panelWidths.left,
@@ -377,6 +402,7 @@ export function App() {
   }
 
   const saveMutation = useMutation({
+    scope: { id: 'flow-draft-autosave' },
     mutationFn: (snapshot: { flowDraft: FlowDraft; cfDrafts: CFDraft[]; signature: string }) =>
       api.saveDraft(snapshot.flowDraft, snapshot.cfDrafts),
     onSuccess: (saved, variables) => {
@@ -796,12 +822,64 @@ export function App() {
     onError: (error) =>
       setNotice({ tone: 'error', title: '识别失败', detail: readableError(error) }),
   })
+  const applyProjectAgentResult = (result: ProjectAgentMutationResult) => {
+    queryClient.setQueryData<BootstrapData>(['bootstrap'], (current) =>
+      current
+        ? {
+            ...current,
+            projectAgents: result.projectAgents,
+            runtimes: result.runtimes,
+            runtimeDiscoveryWarnings: result.warnings,
+          }
+        : current,
+    )
+  }
+  const projectAgentMutation = useMutation({
+    mutationFn: ({ config, editing }: { config: ProjectAgentConfig; editing: boolean }) =>
+      editing ? api.updateProjectAgent(config) : api.createProjectAgent(config),
+    onSuccess: (result, { config, editing }) => {
+      applyProjectAgentResult(result)
+      const runtime = result.runtimes.find((item) => item.id === config.id)
+      const connected = runtime?.health?.status === 'available'
+      setNotice(
+        connected
+          ? {
+              tone: 'success',
+              title: editing ? '项目助手已更新' : '项目助手已接入',
+              detail: `${config.name} 已完成连接测试，可以使用。`,
+            }
+          : {
+              tone: 'error',
+              title: '配置已保存，但连接未通过',
+              detail: `${runtimeHealthErrorSummary(runtime?.health?.error)} 请检查启动命令、参数和环境变量后再编辑。`,
+            },
+      )
+    },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '项目助手保存失败', detail: readableError(error) }),
+  })
+  const deleteProjectAgentMutation = useMutation({
+    mutationFn: api.deleteProjectAgent,
+    onSuccess: (result) => {
+      applyProjectAgentResult(result)
+      setNotice({
+        tone: 'success',
+        title: '项目助手已删除',
+        detail: '它不会再用于新流程，已发布流程保留原有的助手版本。',
+      })
+    },
+    onError: (error) =>
+      setNotice({ tone: 'error', title: '项目助手删除失败', detail: readableError(error) }),
+  })
 
   const currentDrafts = useMemo(() => {
     const drafts = [...(data?.flowDrafts ?? [])]
-    if (draft && !drafts.some((item) => item.flowId === draft.flowId)) drafts.unshift(draft)
-    return drafts.map((item) => (draft?.flowId === item.flowId ? draft : item))
-  }, [data?.flowDrafts, draft])
+    if (draft && testState !== 'published' && !drafts.some((item) => item.flowId === draft.flowId))
+      drafts.unshift(draft)
+    return drafts.map((item) =>
+      testState !== 'published' && draft?.flowId === item.flowId ? draft : item,
+    )
+  }, [data?.flowDrafts, draft, testState])
   const testCounts = useMemo(
     () => flowTestCounts(data?.flowCompilations ?? []),
     [data?.flowCompilations],
@@ -969,19 +1047,7 @@ export function App() {
     setDraft(structuredClone(next))
     setConversation([])
     setAgentUndo(null)
-    setCandidateCfs(
-      (data?.cfDrafts ?? []).filter((cf) =>
-        next.nodes.some(
-          (node) =>
-            node.kind === 'cf-call' &&
-            node.cfRef.cfId === cf.cfId &&
-            !(data?.cfs ?? []).some(
-              (version) =>
-                version.cfId === node.cfRef.cfId && version.version === node.cfRef.version,
-            ),
-        ),
-      ),
-    )
+    setCandidateCfs(data ? candidateDraftsForFlow(next, data) : [])
     setPositions({})
     setDirty(false)
     setTestState('idle')
@@ -993,7 +1059,7 @@ export function App() {
   }
   const selectPlan = (plan: FlowPlan) => {
     setSettingsOpen(false)
-    setDraft(planToDraft(plan))
+    setDraft(planToDraft(plan, persistedDraftRevision(plan.flowId, data?.flowDrafts ?? [])))
     setConversation([])
     setAgentUndo(null)
     setCandidateCfs([])
@@ -1635,20 +1701,7 @@ export function App() {
         )}
       </div>
 
-      <div className="notice-stack">
-        {notice && (
-          <div className={`operation-notice ${notice.tone}`} role="status">
-            <span className="status-lamp" />
-            <div>
-              <strong>{notice.title}</strong>
-              <p>{notice.detail}</p>
-            </div>
-            <button type="button" onClick={() => setNotice(null)} aria-label="关闭提示">
-              <X size={14} />
-            </button>
-          </div>
-        )}
-      </div>
+      <Notice notice={notice} onClose={() => setNotice(null)} />
 
       {settingsOpen && data && (
         <div className="settings-layer" role="dialog" aria-modal="true" aria-label="工作台设置">
@@ -1656,10 +1709,17 @@ export function App() {
             workspaceRoot={data.workspace.root}
             settings={data.settings}
             runtimes={runtimes}
+            projectAgents={data.projectAgents}
             discoveryWarnings={data.runtimeDiscoveryWarnings ?? []}
             isSaving={settingsMutation.isPending}
             isDiscovering={runtimeDiscoveryMutation.isPending}
             testingRuntimeId={testingRuntimeId}
+            isSavingProjectAgent={projectAgentMutation.isPending}
+            deletingProjectAgentId={
+              deleteProjectAgentMutation.isPending
+                ? (deleteProjectAgentMutation.variables ?? null)
+                : null
+            }
             onClose={() => setSettingsOpen(false)}
             onSave={(next) => settingsMutation.mutate(next)}
             onTestRuntime={(id) => {
@@ -1667,6 +1727,12 @@ export function App() {
               runtimeMutation.mutate(id)
             }}
             onDiscoverRuntimes={() => runtimeDiscoveryMutation.mutate()}
+            onSaveProjectAgent={(config, editing) =>
+              projectAgentMutation.mutateAsync({ config, editing }).then(() => undefined)
+            }
+            onDeleteProjectAgent={(id) =>
+              deleteProjectAgentMutation.mutateAsync(id).then(() => undefined)
+            }
           />
         </div>
       )}

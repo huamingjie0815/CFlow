@@ -92,7 +92,8 @@ export function runStatusLabel(status: string) {
 }
 
 export function runtimeBlurb(runtime: { id: string; description?: string }) {
-  if (runtime.id === 'codex') return '用 CFlow 随附的 Codex 来执行步骤。默认只读，不会改你的文件。'
-  if (runtime.id === 'claude-code') return '用 CFlow 随附的 Claude Code 来执行步骤。'
+  if (runtime.id === 'codex')
+    return '通过 CFlow 随附的 ACP 组件连接本机安装的 Codex。默认只读，不会改你的文件。'
+  if (runtime.id === 'claude-code') return '通过 CFlow 随附的 ACP 组件连接本机安装的 Claude Code。'
   return runtime.description || '使用本机当前配置'
 }

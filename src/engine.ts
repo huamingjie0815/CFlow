@@ -34,6 +34,9 @@ export class ExecutorRegistry {
     this.map.set(executor.id, executor)
     return this
   }
+  unregister(id: string) {
+    this.map.delete(id)
+  }
   get(id: string) {
     const executor = this.map.get(id)
     if (!executor) throw new Error(`UNKNOWN_EXECUTOR:${id}`)

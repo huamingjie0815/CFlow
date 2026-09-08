@@ -10,11 +10,24 @@ import {
   DETAIL_PANEL_DEFAULT_WIDTH,
   draftSaveStatus,
   flowTestCounts,
+  persistedDraftRevision,
+  reconcileRestoredDraft,
   nextSignalAction,
   reconcileCanvasNodes,
   runStopControl,
   snapshotFileList,
 } from '../web/src/workbench-ui.js'
+import type { FlowDraft } from '../web/src/types.js'
+
+const restoredDraft = (revision: number, name = 'Flow'): FlowDraft => ({
+  flowId: 'flow-a',
+  revision,
+  name,
+  objective: 'Do work',
+  workspaceRoot: process.cwd(),
+  nodes: [{ id: 'out', kind: 'output', outputId: 'result' }],
+  edges: [{ id: 'entry', from: '$entry', to: 'out' }],
+})
 
 test('retrying an assistant turn uses the session current Agent', () => {
   const failedSnapshot = { runtimeId: 'codex', revision: 7 }
@@ -100,6 +113,27 @@ test('hides the draft save status after autosave succeeds', () => {
   assert.equal(draftSaveStatus({ isPending: false, isError: true, dirty: false }), null)
   assert.equal(draftSaveStatus({ isPending: true, isError: false, dirty: true }), '保存中')
   assert.equal(draftSaveStatus({ isPending: false, isError: true, dirty: true }), '保存失败')
+})
+
+test('published flow versions never become draft revisions', () => {
+  assert.equal(persistedDraftRevision('flow-a', [restoredDraft(9)]), 9)
+  assert.equal(persistedDraftRevision('flow-new', [restoredDraft(9)]), 0)
+})
+
+test('restoring a stale local draft uses the newer server draft without resaving it', () => {
+  const local = restoredDraft(2, 'Old local copy')
+  const server = restoredDraft(9, 'Current server copy')
+
+  assert.deepEqual(reconcileRestoredDraft(local, true, [server]), {
+    draft: server,
+    dirty: false,
+    source: 'server',
+  })
+  assert.deepEqual(reconcileRestoredDraft(restoredDraft(10), true, [server]), {
+    draft: restoredDraft(10),
+    dirty: true,
+    source: 'local',
+  })
 })
 
 test('snapshots selected files before the browser input is cleared', () => {

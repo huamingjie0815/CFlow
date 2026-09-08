@@ -1062,6 +1062,24 @@ pre {
 .react-flow__edge-textbg {
   fill: var(--surface);
 }
+.flow-canvas-shell .react-flow__edgeupdater {
+  cursor: grab;
+}
+.flow-canvas-shell .react-flow__edge:hover .react-flow__edgeupdater,
+.flow-canvas-shell .react-flow__edge.selected .react-flow__edgeupdater,
+.flow-canvas-shell .react-flow__edge:focus .react-flow__edgeupdater {
+  fill: var(--accent-soft);
+  fill-opacity: 0.85;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.flow-canvas-shell .react-flow__edgeupdater:hover {
+  stroke-dasharray: none !important;
+}
+.flow-canvas-shell .react-flow__edgeupdater:active {
+  cursor: grabbing;
+}
 .react-flow__controls {
   overflow: hidden;
   border: 1px solid var(--border-strong);
@@ -2312,6 +2330,12 @@ pre {
 .settings-section-heading .button {
   flex: 0 0 auto;
 }
+.settings-section-actions,
+.runtime-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
 .runtime-discovery-warning {
   display: flex;
   align-items: flex-start;
@@ -2354,7 +2378,7 @@ pre {
 }
 .runtime-table article {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 88px 104px;
+  grid-template-columns: 10px minmax(0, 1fr) 88px auto;
   align-items: start;
   gap: 10px;
   padding: 12px 10px;
@@ -2423,6 +2447,142 @@ pre {
 .runtime-health {
   color: var(--muted);
   font-size: 10px;
+}
+.runtime-actions {
+  justify-content: flex-end;
+}
+.runtime-actions .button {
+  min-width: 104px;
+}
+.icon-button.danger {
+  color: var(--red);
+}
+
+.project-agent-layer {
+  position: absolute;
+  z-index: 10;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(29, 33, 38, 0.24);
+}
+.project-agent-dialog {
+  display: flex;
+  width: min(680px, calc(100% - 48px));
+  max-height: calc(100% - 48px);
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: 9px;
+  box-shadow: var(--shadow-pop);
+}
+.project-agent-dialog > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border);
+}
+.project-agent-dialog h3,
+.project-agent-dialog header p {
+  margin: 0;
+}
+.project-agent-dialog h3 {
+  font-size: 14px;
+}
+.project-agent-dialog header p {
+  max-width: 68ch;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.project-agent-dialog form {
+  display: grid;
+  min-height: 0;
+  gap: 16px;
+  padding: 18px 20px 20px;
+  overflow-y: auto;
+}
+.project-agent-example {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.project-agent-example > div {
+  display: grid;
+  gap: 2px;
+}
+.project-agent-example strong {
+  font-size: 11px;
+}
+.project-agent-example span,
+.project-agent-example-note {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+.project-agent-example .button {
+  flex: 0 0 auto;
+}
+.project-agent-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 13px 14px;
+}
+.project-agent-wide-field {
+  grid-column: 1 / -1;
+}
+.project-agent-example-note {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  padding: 9px 10px;
+  background: var(--inset);
+  border-radius: 7px;
+}
+.project-agent-advanced {
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.project-agent-advanced > summary {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+  list-style: none;
+}
+.project-agent-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+.project-agent-advanced[open] > summary svg {
+  transform: rotate(180deg);
+}
+.project-agent-advanced .project-agent-fields {
+  margin-top: 13px;
+}
+.project-agent-error {
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--red);
+  background: var(--red-soft);
+  border-radius: 7px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.project-agent-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
 }
 
 .status-lamp {

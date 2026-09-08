@@ -118,7 +118,7 @@ export function compileCF(draft: CFDraft): CFVersion {
 export function compileFlow(
   draft: FlowDraft,
   versions: Map<string, CFVersion>,
-  options: { allowUnconfiguredTools?: boolean } = {},
+  options: { allowUnconfiguredTools?: boolean; flowVersion?: string } = {},
 ): FlowPlan {
   assert(draft.workspaceRoot?.trim().length > 0, 'FLOW_WORKSPACE_REQUIRED')
   assert(draft.nodes.length > 0, 'FLOW_EMPTY')
@@ -246,7 +246,7 @@ export function compileFlow(
   const base = {
     version: '0.6' as const,
     flowId: draft.flowId,
-    flowVersion: `${draft.revision}.0.0`,
+    flowVersion: options.flowVersion ?? '1.0.0',
     objective: draft.objective,
     workspaceRoot: draft.workspaceRoot,
     entries,

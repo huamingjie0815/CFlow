@@ -50,6 +50,9 @@ importers:
       officeparser:
         specifier: 7.8.0
         version: 7.8.0
+      open:
+        specifier: ^11.0.1
+        version: 11.0.1
       react:
         specifier: ^19.2.8
         version: 19.2.8

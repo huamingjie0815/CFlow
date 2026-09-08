@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   BackgroundVariant,
@@ -25,7 +25,12 @@ import { nodeKindLabel } from '../copy'
 import { describeNode, edgeLabel, nodeConfigNote } from '../flow-labels'
 import { nodeRunStateLabel, nodeRunStateTone, type NodeRunState } from '../run'
 import type { CanvasPosition, CFDraft, CFVersion, FlowDraft, FlowNode } from '../types'
-import { arrangeCanvasPositions, reconcileCanvasNodes } from '../workbench-ui'
+import {
+  arrangeCanvasPositions,
+  isValidCanvasConnection,
+  reconnectCanvasEdge,
+  reconcileCanvasNodes,
+} from '../workbench-ui'
 
 type FlowCanvasProps = {
   draft: FlowDraft
@@ -107,6 +112,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     onSelectEdge,
   } = props
   const [viewportZoom, setViewportZoom] = useState(1)
+  const reconnectingId = useRef<string | undefined>(undefined)
   const mappedNodes = useMemo<Node<CardData>[]>(() => {
     const arrangedPositions = arrangeCanvasPositions(
       draft.nodes.map((node) => node.id),
@@ -159,7 +165,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         target: edge.to,
         label: edgeLabel(edge, draft.nodes),
         selected: selectedEdgeId === edge.id,
-        reconnectable: edge.from !== '$entry',
+        reconnectable: edge.from === '$entry' ? 'target' : true,
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
         className: 'route-edge',
       })),
@@ -183,12 +189,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
 
   const connect = useCallback(
     (connection: Connection) => {
-      if (!connection.source || !connection.target || connection.source === connection.target)
-        return
-      if (
-        draft.edges.some((edge) => edge.from === connection.source && edge.to === connection.target)
-      )
-        return
+      if (!isValidCanvasConnection(draft, connection)) return
       const nextEdge = {
         id: `edge-${Date.now().toString(36)}`,
         from: connection.source,
@@ -203,21 +204,14 @@ function FlowCanvasInner(props: FlowCanvasProps) {
 
   const reconnect: OnReconnect = useCallback(
     (oldEdge, connection) => {
-      if (!connection.source || !connection.target || connection.source === connection.target)
-        return
-      setEdges((current) => reconnectEdge(oldEdge, connection, current))
-      onDraftChange({
-        ...draft,
-        revision: draft.revision + 1,
-        edges: draft.edges.map((edge) =>
-          edge.id === oldEdge.id
-            ? { ...edge, from: connection.source, to: connection.target }
-            : edge,
-        ),
-      })
+      const next = reconnectCanvasEdge(draft, oldEdge.id, connection)
+      if (next === draft) return
+      setEdges((current) => reconnectEdge(oldEdge, connection, current, { shouldReplaceId: false }))
+      onDraftChange(next)
+      onSelectNode(null)
       onSelectEdge(oldEdge.id)
     },
-    [draft, onDraftChange, onSelectEdge, setEdges],
+    [draft, onDraftChange, onSelectEdge, onSelectNode, setEdges],
   )
 
   return (
@@ -230,6 +224,16 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         onEdgesChange={onEdgesChange}
         onConnect={connect}
         onReconnect={reconnect}
+        onReconnectStart={(_, edge) => {
+          reconnectingId.current = edge.id
+        }}
+        onReconnectEnd={() => {
+          reconnectingId.current = undefined
+        }}
+        isValidConnection={(connection) =>
+          isValidCanvasConnection(draft, connection, reconnectingId.current)
+        }
+        reconnectRadius={14}
         onNodeClick={(_, node) => {
           if (node.id === '$entry') return
           onSelectEdge(null)

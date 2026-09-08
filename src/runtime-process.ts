@@ -27,6 +27,7 @@ export type ResolvedCommand = {
 export type CommandResolutionOptions = {
   bundledRoot?: string
   env?: NodeJS.ProcessEnv
+  excludedSources?: CommandSource[]
   platform?: NodeJS.Platform
   projectRoot?: string
 }
@@ -144,7 +145,18 @@ export const commandSearchDirectories = (options: CommandResolutionOptions = {})
       { directory: '/usr/bin', source: 'common-path' },
     )
   }
-  return uniqueDirectories(values)
+  const excludedSources = new Set(options.excludedSources ?? [])
+  const excludedDirectories = new Set<string>()
+  if (excludedSources.has('bundled-bin'))
+    excludedDirectories.add(resolve(packageRoot, 'node_modules', '.bin'))
+  if (excludedSources.has('project-bin'))
+    excludedDirectories.add(resolve(projectRoot, 'node_modules', '.bin'))
+  return uniqueDirectories(
+    values.filter(
+      ({ directory, source }) =>
+        !excludedSources.has(source) && !excludedDirectories.has(resolve(directory)),
+    ),
+  )
 }
 
 export const resolveCommand = (

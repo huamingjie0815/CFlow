@@ -36,7 +36,10 @@ export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
     )
     const refresh = () => void query.refetch()
     source.onmessage = refresh
-    source.addEventListener('complete', refresh)
+    source.addEventListener('complete', () => {
+      source.close()
+      refresh()
+    })
     return () => source.close()
   }, [invocationId, open, query.refetch])
   const detail = query.data

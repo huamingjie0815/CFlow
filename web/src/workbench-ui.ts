@@ -1,4 +1,39 @@
-import type { FlowEdge } from './types'
+import type { FlowDraft, FlowEdge } from './types'
+
+type CanvasConnection = { source: string | null; target: string | null }
+
+export function isValidCanvasConnection(
+  draft: FlowDraft,
+  connection: CanvasConnection,
+  replacingId?: string,
+) {
+  const { source, target } = connection
+  const original = replacingId ? draft.edges.find((edge) => edge.id === replacingId) : undefined
+  return Boolean(
+    source &&
+    target &&
+    source !== target &&
+    (source === '$entry' || draft.nodes.some((node) => node.id === source)) &&
+    draft.nodes.some((node) => node.id === target) &&
+    (!replacingId || (original && (original.from !== '$entry' || source === '$entry'))) &&
+    !draft.edges.some(
+      (edge) => edge.id !== replacingId && edge.from === source && edge.to === target,
+    ),
+  )
+}
+
+export function reconnectCanvasEdge(draft: FlowDraft, id: string, connection: CanvasConnection) {
+  if (!isValidCanvasConnection(draft, connection, id)) return draft
+  const original = draft.edges.find((edge) => edge.id === id)!
+  if (original.from === connection.source && original.to === connection.target) return draft
+  return {
+    ...draft,
+    revision: draft.revision + 1,
+    edges: draft.edges.map((edge) =>
+      edge.id === id ? { ...edge, from: connection.source!, to: connection.target! } : edge,
+    ),
+  }
+}
 
 export type RunMode = 'test' | 'live' | null
 export type TestState = 'idle' | 'running' | 'passed' | 'failed' | 'cancelled' | 'published'
@@ -218,6 +253,22 @@ export function draftSaveStatus(input: { isPending: boolean; isError: boolean; d
   if (input.isPending) return '保存中'
   if (input.isError) return '保存失败'
   return '待保存'
+}
+
+export function persistedDraftRevision(flowId: string, drafts: readonly FlowDraft[]) {
+  return drafts.find((draft) => draft.flowId === flowId)?.revision ?? 0
+}
+
+export function reconcileRestoredDraft(
+  localDraft: FlowDraft | null,
+  localDirty: boolean,
+  persistedDrafts: readonly FlowDraft[],
+) {
+  if (!localDraft) return { draft: null, dirty: false, source: 'none' as const }
+  const persisted = persistedDrafts.find((draft) => draft.flowId === localDraft.flowId)
+  if (persisted && persisted.revision > localDraft.revision)
+    return { draft: persisted, dirty: false, source: 'server' as const }
+  return { draft: localDraft, dirty: localDirty, source: 'local' as const }
 }
 
 export function canApplyAgentRevision(

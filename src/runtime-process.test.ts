@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { discoverAcpCommands, resolveCommand } from './runtime-process.js'
 
 const temporaryRoot = () => join('/tmp', `cflow-runtime-process-${randomUUID()}`)
@@ -62,6 +62,28 @@ test('command resolution covers bundled, project, PATH and Windows npm locations
     assert.equal(resolveCommand('agent', options)?.source, 'path')
     rmSync(paths[2])
     assert.equal(resolveCommand('agent', options)?.source, 'windows-appdata')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('command resolution can exclude CFlow bundled binaries from agent CLI detection', () => {
+  const root = temporaryRoot()
+  const bundledBin = join(root, 'node_modules', '.bin')
+  const externalBin = join(root, 'external-bin')
+  executableFile(join(bundledBin, 'agent'))
+  try {
+    const options = {
+      bundledRoot: root,
+      projectRoot: join(root, 'project'),
+      env: { PATH: bundledBin, HOME: root },
+      excludedSources: ['bundled-bin' as const],
+    }
+    assert.equal(resolveCommand('agent', options), undefined)
+
+    executableFile(join(externalBin, 'agent'))
+    options.env.PATH = [bundledBin, externalBin].join(delimiter)
+    assert.equal(resolveCommand('agent', options)?.executable, join(externalBin, 'agent'))
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -1,188 +1,18 @@
 # CFlow
 
-CFlow 是一个以 Flow 为核心的本机多 Agent 编排工作台。用户用自然语言描述目标，系统生成可审阅的流程草案；用户可以在桌面 DAG 画布中调整、检查、测试、发布、运行流程，并通过运行日志或助手继续处理问题。
+CFlow 是一个以 Flow 为核心的本机多 Agent 编排工作台。用户用自然语言描述目标，由助手生成流程草案，在桌面画布中调整、检查、测试、发布和运行，并通过运行记录追踪结果。
 
-## 产品模型
-
-CFlow 面向 HR、财务、运营等不需要学习 DSL 的工作人员。产品表面使用业务语言，内部标识、版本号、hash 和运行时协议只在“技术细节”中展示。
-
-工作区由启动 CFlow 时所在的目录决定。一个工作区可以拥有多个 Flow，但 Flow 不会跨工作区读取或写入数据。完整使用路径如下：
-
-```text
-在目标目录启动 CFlow
-  -> 用自然语言描述目标
-  -> 生成或编辑 Flow 草案
-  -> 检查图和契约
-  -> 使用临时快照测试
-  -> 发布不可变 Flow 版本
-  -> 运行并查看 Run Ledger
-  -> 必要时通过助手分析或修改草案
-```
-
-产品刻意保持为桌面工作台：支持最小宽度 1280px 的桌面浏览器，左右面板可以收起为窄轨；不实现移动端、触控端或移动抽屉布局。
-
-## 核心设计
-
-### 两级自然语言编程
-
-CFlow 将“单个 Agent 能力”和“能力之间的编排”分成两个层次：
-
-```text
-CFDraft（单个能力的自然语言描述）
-  -> compileCF
-  -> CFProgram / CFVersion
-
-FlowDraft（已发布能力的组合）
-  -> compileFlow
-  -> FlowPlan
-  -> Flow Engine
-  -> Runtime 执行每个 CF
-```
-
-- **CF** 是一个有明确输入、输出和 effects 的能力，执行方式可以是 Agent 或系统内置工具。CF 内部没有可供 Engine 解释的控制流。
-- **Flow** 是由 `cf-call`、`branch`、`join`、`output` 节点组成的 DAG。条件、并发、汇合、重试和取消都属于 Flow 层。
-- 数据沿边传递完整的 Flow 输入以及已完成上游节点的输出；内置工具通过节点参数明确指定所需字段。
-- 助手只能根据本轮传入的工作台快照回答问题，或返回线性的 CF 步骤草案。助手不能直接写入边、hash、已发布版本或运行事实；服务端会重新编译并校验结果。
-
-### 草案、检查、测试与发布分离
-
-草案是可编辑状态，发布版本是不可变事实。检查和测试使用编译快照，不会把临时结果误当成正式版本；正式运行只能引用已保存的 Flow 版本。发布时会固定：
-
-- FlowPlan 及其 `planHash`；
-- 每个 CF 的精确 `cfId@version` 和 `programHash`；
-- Agent 节点使用的 Runtime Profile 版本，或内置节点的工具版本；
-- 当前工作区根目录和资源绑定。
-
-因此，之后修改草案、Runtime 设置或 Agent manifest，不会改变已经发布版本的执行含义。
-
-### 内置能力：文件内容提取
-
-能力库中的「文件内容提取」直接调用本机 `officeparser@7.8.0`，不调用 Agent，不执行宏、不修改源文件，也不做 OCR、总结或语义分析。无需 Java、Python 或 Office。依赖中包含 OCR 组件，但本工具不会启动它或下载模型。
-
-没有配置 Agent 时，可在首页点「空白流程」，再从能力库添加「文件内容提取」。第一个能力步骤自动连接开始和流程结果。
-
-支持 DOCX、XLSX、PPTX、文本型 PDF、CSV、Markdown、HTML、TXT、JSON、XML（以及 `.markdown`、`.htm`、`.text` 扩展名）。旧版 DOC/XLS/PPT、图片、压缩包和音视频需先转换。PDF 只保留文本层和页码，不承诺恢复视觉表格；DOCX 不推测分页；XLSX 读取缓存的公式值，不重新计算。JSON/XML 按原始文本读取，HTML 不执行脚本或加载远程资源。
-
-在 Flow 中加入能力后，节点的「文件来源」有三种配置：选择工作目录文件、读取流程输入字段、读取指定直接上游结果字段。后两者使用 JSON Pointer，例如 `/files` 或 `/documents/0/path`，空路径表示整个输入值；值必须是一个路径字符串或非空路径数组。流程输入可在「检查 → 运行输入」中填写，例如 `{"files":["资料/报告.pdf"]}`，用于本次会话的测试和正式运行。配置随 Flow 保存，运行输入随 Run 保存，不写回 Flow。
-
-结果为 `{kind:"file-extraction",documents,succeeded,failed}`。每份文档包含 `path`、`format`、`status`、`text`、`blocks`、`warnings`、`truncated`、`originalChars` 及失败时的 `error`。块和单元格的 `start/end` 是正文内的 UTF-16 偏移（左闭右开），页码和幻灯片编号从 1 开始，表格行列从 0 开始；结构不重复保存正文。日志中可查看、复制和下载文本及来源表格。
-
-默认返回全文，可设置每文件字符上限，截断会同步裁剪结构并明确标记。部分文件失败时保留成功结果继续流程，全部失败则停止并保留逐文件错误。扫描 PDF 无文本层会失败，混合 PDF 会标记无文本页面。文本默认 UTF-8，识别 UTF-8/UTF-16 BOM，可切换 GB18030。
-
-首版限制为每节点最多 100 文件、单文件 50 MiB、每文件解析 60 秒、ZIP 解压内容 256 MiB、节点序列化输出 16 MiB。超过限制会明确报错，取消会终止解析 worker。内置能力不可被用户覆盖，历史 Agent CF 的 `0.2` 程序和哈希保持兼容。解析阶段无模型 token 消耗；后续 Agent 阅读提取结果仍会消耗 token。
-
-## 架构
-
-```text
-┌──────────────────────────────────────────────────────────┐
-│ React 工作台                                             │
-│ FlowSwitcher / GoalComposer / FlowCanvas / Check / Log   │
-│ FlowAgentChat / Settings                                 │
-└───────────────────────┬──────────────────────────────────┘
-                        │ HTTP JSON + SSE
-┌───────────────────────▼──────────────────────────────────┐
-│ Fastify Server                                             │
-│ 工作区边界、API、草稿保存、编译发布、运行控制、错误处理 │
-└───────┬──────────────────┬───────────────────┬────────────┘
-        │                  │                   │
-┌───────▼──────┐  ┌────────▼────────┐  ┌───────▼──────────┐
-│ Compiler     │  │ Engine          │  │ RuntimeManager   │
-│ CF / Flow    │  │ DAG 调度与恢复  │  │ ACP / CLI 适配   │
-│ 契约 / hash  │  │ lease / ledger  │  │ 发现 / 健康检查  │
-└───────┬──────┘  └────────┬────────┘  └───────┬──────────┘
-        └──────────────────▼───────────────────┘
-                    SQLite (.cflow)
-                         │
-                  本机 Agent 子进程
-```
-
-### 模块职责
-
-| 模块           | 位置                      | 职责                                                         |
-| -------------- | ------------------------- | ------------------------------------------------------------ |
-| 类型与领域模型 | `src/types.ts`            | 定义 CF、Flow、Plan、Runtime、Run 和资源的边界               |
-| CF/Flow 编译器 | `src/compiler.ts`         | 校验契约和图结构，生成确定性的版本与 hash                    |
-| 持久化         | `src/db.ts`               | 保存草稿、版本、编译快照、运行、事件、job 和设置             |
-| 执行引擎       | `src/engine.ts`           | 管理节点状态、并发、分支、join、重试、取消和恢复             |
-| Runtime 管理   | `src/runtime.ts`          | 管理 Profile，执行 ACP 握手、CLI 探测、权限分析和输出校验    |
-| 进程边界       | `src/runtime-process.ts`  | 解析可执行文件、使用 argv 启动进程、限制环境和 cwd、处理终止 |
-| Agent manifest | `src/runtime-manifest.ts` | 合并内置、PATH ACP、npm、用户级和项目级 Runtime 配置         |
-| HTTP 服务      | `src/server.ts`           | 组装依赖、提供 API、固定版本、启动恢复循环和 SSE             |
-| React 工作台   | `web/src/`                | 提供流程切换、目标输入、画布、检查、日志、设置和助手界面     |
-
-### 运行时序
-
-1. `/api/flow-tests` 或发布接口接收 FlowDraft，并把必要的临时 CFDraft 编译成 CFVersion。
-2. `compileFlow` 检查入口、可达性、环、终点和分支边，计算 `programHash` 与 `planHash`。
-3. 服务端解析资源绑定并 pin 当前 Runtime Profile 版本，保存编译快照或 FlowVersion。
-4. 创建 Run 和 Job。恢复循环通过 lease 领取 Job，避免进程重启后丢失排队任务。
-5. Engine 校验 `planHash`，从 Run Ledger 恢复状态；发现副作用可能已发生但事实不完整的节点时，Run 进入 `needs-reconciliation`，不会盲目重放。
-6. 就绪节点按 `maxConcurrency` 调度。节点完成、失败、阻塞、分支选择和 Run 状态变化都写入有序 Ledger Event。
-7. Engine 调用 Executor；Runtime 将 task、输入、资源和 effects 交给 Agent，要求返回符合 output contract 的 JSON，无法满足契约时 fail closed。
-8. 前端通过 `/api/runs/:id/events` 的 SSE 读取事件，运行结束或连接关闭后停止推送。
-
-## 数据与持久化
-
-启动目录下的 `.cflow/` 是唯一数据作用域：
-
-```text
-<workspace>/.cflow/
-├── cflow.sqlite       # 业务数据、版本、运行记录和事件
-├── flows/             # 流程附件
-├── agents.d/          # 项目级 Agent manifest，可提交到 Git
-└── .gitignore         # 自动忽略数据库、WAL 文件和 flows/
-```
-
-SQLite 使用 WAL 和 busy timeout。主要数据表及用途：
-
-| 表                                         | 内容                           |
-| ------------------------------------------ | ------------------------------ |
-| `cf_drafts` / `cf_versions`                | CF 草稿与不可变 CF 版本        |
-| `flow_drafts` / `flow_versions`            | Flow 草稿与不可变 FlowPlan     |
-| `flow_compilations`                        | preview/test 编译快照          |
-| `runs` / `ledger_events`                   | Run 当前状态与追加式执行事实   |
-| `jobs`                                     | 带 lease 的待执行任务          |
-| `runtime_profiles` / `runtime_current`     | Runtime Profile 历史与当前指针 |
-| `resource_profiles` / `workspace_settings` | 资源绑定和工作区设置           |
-
-`CF_DB` 已不再支持。设置该变量会在监听端口前退出，以保证启动目录始终是唯一数据作用域；旧版 `data/cf.sqlite` 不会自动读取、迁移或删除。
-
-## Runtime 与安全边界
-
-CFlow 内置 Codex 和 Claude Code，也支持通过 manifest 接入其他 ACP 或普通 CLI Agent。Runtime Profile 是不可变配置快照；更新设置会创建新版本，发布的 Flow 只引用发布时 pin 的版本。
-
-Runtime 发现包括：内置 adapter、PATH 中的 ACP、npm 包 `cflowAgent` 字段、用户 manifest 和项目 manifest。后出现的同 ID 配置覆盖先前配置，项目级配置可以覆盖用户级配置；无效 manifest 会跳过并在设置页显示警告。
-
-项目级 manifest 路径为 `<workspace>/.cflow/agents.d/*.json`，用户级路径为 `~/.config/cflow/agents.d/*.json`。最小配置：
-
-```json
-{
-  "schemaVersion": 1,
-  "id": "example-agent",
-  "name": "Example Agent",
-  "backend": "cli",
-  "command": "example-agent",
-  "versionArgs": ["--version"],
-  "promptTransport": "stdin",
-  "outputMode": "json"
-}
-```
-
-`backend` 支持 `acp` 和 `cli`。所有进程都使用 argv 数组启动，不经过 shell 拼接。Process Runtime 提供独立子进程、工作区内限定 cwd、环境变量白名单、参数化启动、超时、取消和输出大小限制；除非具体 adapter 声明，否则不承诺网络隔离或主机级文件系统沙箱。
-
-权限以 CF 的 effects 为依据：已声明且位于工作区内的读写和命令操作可以自动授权；未声明能力或工作区外路径会被拒绝。密钥值不写入 CFlow 数据库，只按允许的变量名从服务端环境继承。
+面向 HR、财务、运营等业务人员，CFlow 使用业务语言呈现步骤、条件和执行状态。支持 1280px 及以上的桌面浏览器，左右侧栏可调整宽度或收起。
 
 ## 安装与运行
 
-需要 Node.js 22.13.0 或更高版本（PDF 解析依赖的最低要求）。
-
-从 npm 启动：
+需要 Node.js 22.13.0 或更高版本。在目标工作目录运行：
 
 ```bash
 npx @hmj-ai/cflow
 ```
 
-或全局安装后在目标工作区启动：
+也可以全局安装：
 
 ```bash
 npm install -g @hmj-ai/cflow
@@ -190,7 +20,83 @@ cd /path/to/your/workspace
 cflow
 ```
 
-从源码运行：
+正式 `cflow` 命令会在服务监听成功后自动打开浏览器，默认地址为 `http://127.0.0.1:3000`。设置 `CFLOW_NO_OPEN=1` 可以只启动服务而不打开页面。服务启动目录就是工作区，流程数据保存在该目录的 `.cflow/` 中。`PORT` 可设置端口；服务默认只监听回环地址，通过 `HOST` 对外提供访问前应配置认证和网络访问控制。
+
+打开工作台后可以添加 Hello World 示例，使用内置演示执行器完成检查和测试，无需先配置 Agent。
+
+## 核心模型
+
+- **CF**：单个可复用能力，定义输入、输出和允许的操作，由 Agent 或内置工具执行。
+- **Flow**：由能力调用、分支、汇合和输出节点组成的有向无环图，负责条件路由、并发和重试。
+- **草稿**：可编辑的流程和能力配置。编辑修订号用于保存与并发校验。
+- **发布版本**：固定流程计划、能力版本、运行时配置及哈希。每个流程首次发布为 `1.0.0`，后续基于已有发布版本递增，编辑、检查和测试不占用发布号。
+- **Run**：一次测试或正式运行，记录输入、步骤状态、输出及执行事件。
+
+典型工作流：描述目标 → 调整流程 → 检查 → 测试 → 发布 → 运行 → 查看结果。
+
+内置文件内容提取能力可在本机读取 DOCX、XLSX、PPTX、文本型 PDF、CSV、Markdown、HTML、TXT、JSON 和 XML，供后续节点使用。它不调用 Agent，不执行宏，不进行 OCR 或修改源文件。
+
+## 架构
+
+```mermaid
+flowchart TD
+    UI[React 桌面工作台] -->|HTTP JSON / SSE| Server[Fastify 服务]
+    Server --> Compiler[Compiler：契约与流程图校验]
+    Server --> Engine[Engine：调度、重试与恢复]
+    Server --> Runtime[RuntimeManager：Agent 发现与配置]
+    Server --> DB[(SQLite)]
+    Engine --> DB
+    Engine --> Runtime
+    Engine --> Tools[本机内置工具]
+    Runtime --> Agents[ACP / CLI Agent 子进程]
+```
+
+### 模块职责
+
+| 模块         | 位置                     | 职责                                               |
+| ------------ | ------------------------ | -------------------------------------------------- |
+| 桌面工作台   | `web/src/`               | 流程画布、能力配置、助手、检查与运行记录           |
+| HTTP 服务    | `src/server.ts`          | API、工作区边界、草稿保存、编译与发布              |
+| 编译器       | `src/compiler.ts`        | 输入输出契约、图结构与分支校验，生成执行计划和哈希 |
+| 执行引擎     | `src/engine.ts`          | 节点调度、并发、重试、取消与恢复                   |
+| Runtime 管理 | `src/runtime.ts`         | Agent 发现、健康检查、协议适配与输出校验           |
+| 进程管理     | `src/runtime-process.ts` | 命令解析、工作目录、环境变量、超时与进程终止       |
+| 数据存储     | `src/db.ts`              | 草稿、发布版本、运行状态、事件与任务队列           |
+| 领域模型     | `src/types.ts`           | CF、Flow、Run、Runtime 和资源类型                  |
+
+### 执行流程
+
+1. 编译器校验能力契约、入口、可达性、环路、分支与终点，生成执行计划。
+2. 服务绑定具体能力和 Runtime Profile 版本；检查和测试保存临时快照，发布保存独立版本。
+3. 引擎创建运行任务，根据依赖和分支条件调度节点，将状态与结果写入有序事件记录。
+4. Runtime 启动受控 Agent 子进程，内置工具直接在本机执行；结果按输出契约校验。
+5. 工作台读取运行状态和事件，呈现结果及失败原因。恢复过程通过任务租约和事件记录避免盲目重放已发生的操作。
+
+## 数据与工作区
+
+```text
+<workspace>/.cflow/
+├── cflow.sqlite       # 工作区数据库
+├── flows/             # 流程附件
+├── agents.d/          # 项目级 Agent manifest
+└── .gitignore         # 本机数据忽略规则
+```
+
+SQLite 使用 WAL 模式。主要数据包括能力和流程草稿、不可变发布版本、编译快照、运行记录、事件日志、任务队列、Runtime Profile 和资源配置。
+
+一个工作区可管理多个流程。发布计划固定工作区、能力与运行时版本，后续编辑不会改变已有发布计划和运行历史。
+
+## Agent 与执行边界
+
+CFlow 随包提供 Codex 和 Claude Code 的 ACP 连接组件，但对应的 `codex` 或 `claude` CLI 仍须在本机安装；未找到 CLI 时，助手会显示为不可用。其他 ACP 或 CLI Agent 可通过 manifest 接入，配置可以来自 PATH、npm 包、用户目录或项目目录，项目配置优先。
+
+在「工作台设置 → 本机助手」中选择「接入项目助手」，可以为当前项目创建或编辑外部 ACP 助手。填写助手名称、配置标识、启动命令和参数后，CFlow 会把配置写入 `.cflow/agents.d/`，立即重新识别并测试连接。新建时可套用 Pi Agent 示例；Pi 本身不直接支持 ACP，该示例通过社区 `pi-acp` 适配器连接，因此需先安装并登录 Pi。项目助手可以在同一处编辑或删除；当前默认助手需要先切换默认项才能删除。删除只影响新流程，已发布流程和历史运行仍保留固定的 Runtime Profile 版本。
+
+用户级 manifest 位于 `~/.config/cflow/agents.d/`，项目级 manifest 位于 `.cflow/agents.d/`。Runtime Profile 按版本保存，发布流程引用具体版本。项目助手配置只保存允许传入的环境变量名称，不接收也不落盘密钥值；密钥必须由启动 CFlow 的环境提供。
+
+子进程通过参数数组启动，使用限定的工作目录和环境变量，并受超时、输出大小与取消机制约束。操作权限依据能力声明和工作区范围决定；文件系统与网络隔离能力取决于具体适配器。
+
+## 开发
 
 ```bash
 pnpm install
@@ -198,29 +104,16 @@ pnpm run build
 pnpm start
 ```
 
-默认访问 `http://127.0.0.1:3000`。打开工作台后，可添加一条 Hello World 示例流程；示例用内置演示执行器试跑，不需要先配置本机助手。服务默认只监听回环地址，因为 Runtime 可以启动本机受控进程。只有配置好外部认证和网络访问控制后，才应通过 `HOST` 改为其他监听地址。
+`pnpm start` 和 `pnpm run dev` 只启动服务，不会自动打开浏览器；自动开页仅用于安装包提供的 `cflow` 命令。
 
-开发模式：
+开发时分别启动后端和前端：
 
 ```bash
-pnpm run dev       # Fastify + tsx
-pnpm run dev:web   # Vite，默认 127.0.0.1:5173，/api 代理到 3000
+pnpm run dev       # 后端，默认 127.0.0.1:3000
+pnpm run dev:web   # 前端，默认 127.0.0.1:5173，/api 代理到后端
 ```
 
-## API 能力概览
-
-后端 API 按领域分组：
-
-- `/api/workspace`：当前工作区；
-- `/api/settings`、`/api/runtimes/*`：设置、Runtime 发现、健康检查和 Profile；
-- `/api/cfs`、`/api/cf-drafts/*`：CF 草稿与版本；
-- `/api/flows`、`/api/flow-drafts/*`、`/api/flow-compilations`：Flow 草稿、版本和编译快照；
-- `/api/flow-tests`：使用临时版本执行测试；
-- `/api/runs`：启动、取消、查看运行详情和 SSE 事件；
-- `/api/flow-agent/chat`：基于工作台快照进行回答或草案修订；
-- `/api/resource-profiles/*`：资源 Profile 的管理和绑定。
-
-## 开发与验证
+验证命令：
 
 ```bash
 pnpm test
@@ -229,6 +122,6 @@ pnpm run format:check
 pnpm run build
 ```
 
-技术栈：TypeScript、Fastify、React、XYFlow、better-sqlite3、Vite 和 Agent Client Protocol。生产构建输出到 `dist/`；npm 包包含 `dist`、`README.md` 和 `DESIGN.md`。
+技术栈：TypeScript、React、XYFlow、Fastify、SQLite、Vite 和 Agent Client Protocol。生产构建输出到 `dist/`。
 
-视觉令牌、组件规则和交互原则见 [`DESIGN.md`](./DESIGN.md)。产品目标和用户边界见 [`PRODUCT.md`](./PRODUCT.md)。
+产品定位见 [PRODUCT.md](./PRODUCT.md)，视觉规范见 [DESIGN.md](./DESIGN.md)。

@@ -1,5 +1,4 @@
-import { createRequire } from 'node:module'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { isAbsolute, resolve } from 'node:path'
 import { Readable, Writable } from 'node:stream'
 import {
   client as acpClient,
@@ -34,7 +33,6 @@ import {
   describeResolvedCommand,
   discoverAcpCommands,
   existingAbsoluteDirectory,
-  existingExecutable,
   launchProcess,
   parseJsonOutput,
   resolveCommandAliases,
@@ -47,7 +45,6 @@ import {
 } from './runtime-process.js'
 
 const ADAPTER_BUILD = 'cf-runtime-adapter/4'
-const moduleRequire = createRequire(import.meta.url)
 export class RuntimeExecutionException extends Error {
   readonly details: import('./types.js').RuntimeExecutionError
   constructor(details: import('./types.js').RuntimeExecutionError) {
@@ -252,6 +249,7 @@ export const defaultWorkspaceSettings = (defaultRuntimeId = 'codex'): WorkspaceS
 export class RuntimeManager {
   private activeRuntimeIds = new Set<string>()
   private lastDiscoveryWarnings: string[] = []
+  private healthChecks = new Map<string, Promise<RuntimeHealth>>()
   constructor(
     private store: Store,
     private discoveryOptions: RuntimeDiscoveryOptions = {},
@@ -556,6 +554,20 @@ export class RuntimeManager {
       this.register(registry, profile, current.get(profile.id) !== profile.profileVersion)
   }
   async health(id: string): Promise<RuntimeHealth> {
+    const existing = this.healthChecks.get(id)
+    if (existing) return existing
+    const check = this.checkHealth(id)
+    this.healthChecks.set(id, check)
+    void check.then(
+      () => this.clearHealthCheck(id, check),
+      () => this.clearHealthCheck(id, check),
+    )
+    return check
+  }
+  private clearHealthCheck(id: string, check: Promise<RuntimeHealth>) {
+    if (this.healthChecks.get(id) === check) this.healthChecks.delete(id)
+  }
+  private async checkHealth(id: string): Promise<RuntimeHealth> {
     const profile = this.profile(id)
     if (!profile) throw new Error('RUNTIME_NOT_FOUND')
     if (!profile.enabled)
@@ -578,7 +590,7 @@ export class RuntimeManager {
     if (profile.backend === 'acp') {
       const started = Date.now()
       try {
-        const version = await this.probeAcp(profile)
+        const version = await this.probeHealthWithRetry(profile, () => this.probeAcp(profile))
         return {
           runtimeId: id,
           profileVersion: profile.profileVersion,
@@ -605,7 +617,7 @@ export class RuntimeManager {
     if (profile.backend === 'cli') {
       const started = Date.now()
       try {
-        const version = await this.probeCli(profile)
+        const version = await this.probeHealthWithRetry(profile, () => this.probeCli(profile))
         return {
           runtimeId: id,
           profileVersion: profile.profileVersion,
@@ -630,6 +642,23 @@ export class RuntimeManager {
       }
     }
     throw new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`)
+  }
+  private async probeHealthWithRetry(profile: RuntimeProfile, probe: () => Promise<string>) {
+    const bundled = Boolean(adapterDescriptorForId(profile.id)?.bundled)
+    const attempts = bundled ? 2 : 1
+    let lastError: unknown
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        return await probe()
+      } catch (error) {
+        lastError = error
+        const message = error instanceof Error ? error.message : String(error)
+        if (attempt === attempts || /NOT_FOUND|CLI_NOT_FOUND|BUNDLED_.*NOT_FOUND/.test(message))
+          break
+        await new Promise((resolve) => setTimeout(resolve, 150))
+      }
+    }
+    throw lastError
   }
   async execute(
     id: string,
@@ -816,7 +845,7 @@ export class RuntimeManager {
         timeout = setTimeout(() => {
           terminate()
           reject(new Error('ACP_HANDSHAKE_TIMEOUT'))
-        }, this.discoveryOptions.healthTimeoutMs ?? 5_000)
+        }, this.healthTimeoutMs())
       })
       const response = await Promise.race([initialize, childError, childExit, timedOut])
       const agent = response.agentInfo
@@ -864,7 +893,7 @@ export class RuntimeManager {
           timeout = setTimeout(() => {
             terminate()
             reject(new Error('CLI_HEALTHCHECK_TIMEOUT'))
-          }, this.discoveryOptions.healthTimeoutMs ?? 5_000)
+          }, this.healthTimeoutMs())
         },
       )
       const detail = Buffer.concat(errors).toString('utf8').trim().slice(-800)
@@ -909,34 +938,11 @@ export class RuntimeManager {
     }
     return env
   }
-  private bundledCodexPath() {
-    const targets: Record<string, [string, string]> = {
-      'darwin-x64': ['@openai/codex-darwin-x64', 'x86_64-apple-darwin'],
-      'darwin-arm64': ['@openai/codex-darwin-arm64', 'aarch64-apple-darwin'],
-      'linux-x64': ['@openai/codex-linux-x64', 'x86_64-unknown-linux-musl'],
-      'linux-arm64': ['@openai/codex-linux-arm64', 'aarch64-unknown-linux-musl'],
-      'win32-x64': ['@openai/codex-win32-x64', 'x86_64-pc-windows-msvc'],
-      'win32-arm64': ['@openai/codex-win32-arm64', 'aarch64-pc-windows-msvc'],
-    }
-    const target = targets[`${process.platform}-${process.arch}`]
-    if (!target)
-      throw new Error(`CODEX_BUNDLED_PLATFORM_UNSUPPORTED:${process.platform}-${process.arch}`)
-    let packageJson: string
-    try {
-      packageJson = moduleRequire.resolve(`${target[0]}/package.json`)
-    } catch {
-      throw new Error(`CODEX_BUNDLED_CLI_NOT_FOUND:${target[0]}`)
-    }
-    const executable = join(
-      dirname(packageJson),
-      'vendor',
-      target[1],
-      'bin',
-      process.platform === 'win32' ? 'codex.exe' : 'codex',
+  private healthTimeoutMs() {
+    return (
+      this.discoveryOptions.healthTimeoutMs ??
+      ((this.discoveryOptions.platform ?? process.platform) === 'win32' ? 15_000 : 5_000)
     )
-    const resolved = existingExecutable(executable)
-    if (!resolved) throw new Error(`CODEX_BUNDLED_CLI_NOT_FOUND:${executable}`)
-    return resolved
   }
   private runtimeEnvironment(profile: RuntimeProfile, effects: CapabilityEffect[] = []) {
     const env = this.platformEnvironment()
@@ -954,20 +960,18 @@ export class RuntimeManager {
           ? descriptor.permissionMode.workspaceWrite
           : descriptor.permissionMode.readOnly
       if (descriptor.nativeCommand) {
-        const override = process.env[descriptor.nativeCommand.overrideEnvironment]
-        if (override) {
-          const resolved = resolveCommandAliases(
-            [override],
-            this.commandResolutionOptions(process.env),
+        const hostEnvironment = this.discoveryOptions.env ?? process.env
+        const override = hostEnvironment[descriptor.nativeCommand.overrideEnvironment]
+        const command = override ?? descriptor.nativeCommand.command
+        const resolved = resolveCommandAliases([command], {
+          ...this.commandResolutionOptions(hostEnvironment),
+          excludedSources: ['bundled-bin'],
+        })
+        if (!resolved)
+          throw new Error(
+            `${profile.id === 'codex' ? 'CODEX_CLI_NOT_FOUND' : 'CLAUDE_CODE_CLI_NOT_FOUND'}:${command}`,
           )
-          if (!resolved)
-            throw new Error(
-              `${profile.id === 'codex' ? 'CODEX_CLI_NOT_FOUND' : 'CLAUDE_CODE_CLI_NOT_FOUND'}:${override}`,
-            )
-          env[descriptor.nativeCommand.adapterEnvironment] = resolved.executable
-        } else if (descriptor.nativeCommand.bundled === 'codex') {
-          env[descriptor.nativeCommand.adapterEnvironment] = this.bundledCodexPath()
-        }
+        env[descriptor.nativeCommand.adapterEnvironment] = resolved.executable
       }
     }
     return env

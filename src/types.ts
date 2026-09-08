@@ -236,6 +236,17 @@ export type RuntimeBackendKind = 'builtin' | 'acp' | 'cli'
 export type RuntimePromptTransport = 'stdin' | 'argument'
 export type RuntimeOutputMode = 'json' | 'text'
 export type RuntimePermissionMode = 'none' | 'read' | 'write' | 'full'
+export interface ProjectAgentConfig {
+  id: string
+  name: string
+  description?: string
+  command: string
+  args: string[]
+  outputMode: RuntimeOutputMode
+  envAllowlist: string[]
+  timeoutMs: number
+  maxOutputBytes: number
+}
 export type RuntimeDiscoverySource =
   'builtin' | 'path-acp' | 'package-manifest' | 'user-manifest' | 'project-manifest' | 'manual'
 export interface ExecutorRuntimeTraits {

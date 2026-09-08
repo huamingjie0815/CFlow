@@ -14,6 +14,8 @@ import type {
   WorkspaceSettings,
   WorkspaceFileSearchResult,
   DraftBundle,
+  ProjectAgentConfig,
+  ProjectAgentMutationResult,
 } from './types'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -41,6 +43,7 @@ export const api = {
       runs,
       resources,
       runtimeDiscovery,
+      projectAgents,
       settings,
       flowDrafts,
       cfDrafts,
@@ -54,6 +57,7 @@ export const api = {
         method: 'POST',
         body: '{}',
       }),
+      request<ProjectAgentConfig[]>('/api/project-agents'),
       request<BootstrapData['settings']>('/api/settings'),
       request<BootstrapData['flowDrafts']>('/api/flow-drafts'),
       request<BootstrapData['cfDrafts']>('/api/cf-drafts'),
@@ -69,6 +73,7 @@ export const api = {
       flowCompilations,
       resources,
       runtimes: runtimeDiscovery.runtimes,
+      projectAgents,
       runtimeDiscoveryWarnings: runtimeDiscovery.warnings,
       settings,
       flowDrafts,
@@ -226,6 +231,26 @@ export const api = {
       body: '{}',
     })
   },
+  createProjectAgent(config: ProjectAgentConfig) {
+    return request<ProjectAgentMutationResult>('/api/project-agents', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    })
+  },
+  updateProjectAgent(config: ProjectAgentConfig) {
+    return request<ProjectAgentMutationResult>(
+      `/api/project-agents/${encodeURIComponent(config.id)}`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(config),
+      },
+    )
+  },
+  deleteProjectAgent(id: string) {
+    return request<ProjectAgentMutationResult>(`/api/project-agents/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    })
+  },
 }
 
 export function readableError(error: unknown) {
@@ -266,6 +291,19 @@ export function readableError(error: unknown) {
     FLOW_STALLED: '流程走不下去了，请检查分支和连线。',
     NO_TERMINAL_OUTPUT: '流程没有走到「输出」就结束了，请检查连线。',
     STEP_LIMIT_EXCEEDED: '步骤执行次数超出上限，可能存在来回绕圈的连线。',
+    PROJECT_AGENT_ID_CONFLICT: '这个配置标识已被其他助手使用，请换一个。',
+    PROJECT_AGENT_ID_IMMUTABLE: '配置标识创建后不能修改。',
+    PROJECT_AGENT_IS_DEFAULT: '这个助手是当前默认项，请先切换默认助手再删除。',
+    PROJECT_AGENT_NOT_FOUND: '这个项目助手已经不存在，请重新识别后再试。',
+    PROJECT_AGENT_FILE_UNSAFE: '这个配置文件不是安全的普通项目文件，CFlow 已拒绝修改。',
+    PROJECT_AGENT_INVALID: '项目助手配置不完整，请检查必填项。',
+    ENV_ALLOWLIST_INVALID: '环境变量名称格式不正确，请每行填写一个变量名。',
+    ID_INVALID: '英文配置标识需为 2–64 位小写字母、数字、点、横线或下划线。',
+    NAME_REQUIRED: '请填写助手名称。',
+    COMMAND_REQUIRED: '请填写启动命令。',
+    OUTPUT_MODE_INVALID: '返回格式无效，请重新选择。',
+    TIMEOUT_INVALID: '超时时间需在 1 到 3600 秒之间。',
+    OUTPUT_LIMIT_INVALID: '最大输出大小需在 1 KB 到 16 MB 之间。',
   }
   const key = Object.keys(known).find((candidate) => raw.includes(candidate))
   return key ? known[key] : raw

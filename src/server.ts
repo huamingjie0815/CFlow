@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import Fastify from 'fastify'
+import Fastify, { type FastifyReply } from 'fastify'
 import fastifyStatic from '@fastify/static'
 import fastifyMultipart from '@fastify/multipart'
 import { fileURLToPath } from 'node:url'
@@ -8,9 +8,16 @@ import { randomUUID } from 'node:crypto'
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { dirname, join, sep } from 'node:path'
 import { Store } from './db.js'
+import { startEventStream } from './sse.js'
 import { assertFileReferences, compileCF, compileFlow } from './compiler.js'
 import { Engine, builtins, newRunId } from './engine.js'
 import { RuntimeManager } from './runtime.js'
+import {
+  deleteProjectAgentConfig,
+  listProjectAgentConfigs,
+  normalizeProjectAgentConfig,
+  saveProjectAgentConfig,
+} from './runtime-manifest.js'
 import { sha256 } from './hash.js'
 import { initializeWorkspace, validateWorkspaceRoot } from './workspace.js'
 import { createHelloWorldDemoFlow, helloWorldDemoCapabilityIds } from './demo-flow.js'
@@ -44,6 +51,7 @@ import type {
   FlowCompilationSnapshot,
   FlowDraft,
   Json,
+  ProjectAgentConfig,
   FlowPlan,
   ResolvedResource,
   ResourceProfile,
@@ -54,6 +62,14 @@ import type {
 export function createApp(store = new Store(), requestedWorkspaceRoot = process.cwd()) {
   const workspaceRoot = validateWorkspaceRoot(requestedWorkspaceRoot, 'WORKSPACE_UNAVAILABLE')
   const versions = () => capabilityCatalog(store.list<CFVersion>('cf_versions'))
+  const nextFlowVersion = (flowId: string) => {
+    const published = store.list<FlowPlan>('flow_versions').filter((plan) => plan.flowId === flowId)
+    const latest = published.reduce(
+      (maximum, plan) => Math.max(maximum, Number.parseInt(plan.flowVersion, 10)),
+      0,
+    )
+    return `${latest + 1}.0.0`
+  }
   const flowCompilations = () => store.flowCompilations()
   const runtimes = new RuntimeManager(store, { projectRoot: workspaceRoot })
   const testPlans = new Map<string, FlowPlan>()
@@ -87,7 +103,20 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   }
   const traceFor = (id: string) => (event: Parameters<typeof store.appendAgentTrace>[1]) =>
     store.appendAgentTrace(id, event)
-  const app = Fastify({ logger: true })
+  const app = Fastify({ logger: { level: 'error' } })
+  const eventStreams = new Set<() => void>()
+  const streamEvents = (reply: Parameters<typeof startEventStream>[0], flush: () => boolean) => {
+    let finished = false
+    let close: (() => void) | undefined
+    close = startEventStream(reply, flush, () => {
+      finished = true
+      if (close) eventStreams.delete(close)
+    })
+    if (!finished) eventStreams.add(close)
+  }
+  app.addHook('preClose', async () => {
+    for (const close of eventStreams) close()
+  })
   app.register(fastifyMultipart, {
     // Do not silently truncate large skill bundles; files are streamed to disk.
     // Keep only structural parser guards here, while runtime timeout/output limits
@@ -281,6 +310,57 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       return reply.code(404).send({ error: 'RUNTIME_NOT_FOUND' })
     return runtimes.health(req.params.id)
   })
+  const projectAgentFailure = (reply: FastifyReply, error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error)
+    const status = /PROJECT_AGENT_(?:ID_CONFLICT|IS_DEFAULT)/.test(message)
+      ? 409
+      : /PROJECT_AGENT_NOT_FOUND/.test(message)
+        ? 404
+        : 400
+    return reply.code(status).send({ error: message })
+  }
+  const refreshProjectAgents = async (removedId?: string) => {
+    if (removedId) executorRegistry.unregister(removedId)
+    for (const profile of runtimes.discover()) runtimes.register(executorRegistry, profile)
+    return {
+      projectAgents: listProjectAgentConfigs(workspaceRoot),
+      runtimes: await runtimeCatalog(),
+      warnings: runtimes.discoveryWarnings(),
+    }
+  }
+  app.get('/api/project-agents', async () => listProjectAgentConfigs(workspaceRoot))
+  app.post<{ Body: ProjectAgentConfig }>('/api/project-agents', async (req, reply) => {
+    try {
+      const config = normalizeProjectAgentConfig(req.body)
+      if (runtimes.profiles().some((profile) => profile.id === config.id))
+        return reply.code(409).send({ error: 'PROJECT_AGENT_ID_CONFLICT' })
+      saveProjectAgentConfig(workspaceRoot, config)
+      return await refreshProjectAgents()
+    } catch (error) {
+      return projectAgentFailure(reply, error)
+    }
+  })
+  app.put<{ Params: { id: string }; Body: ProjectAgentConfig }>(
+    '/api/project-agents/:id',
+    async (req, reply) => {
+      try {
+        saveProjectAgentConfig(workspaceRoot, req.body, req.params.id)
+        return await refreshProjectAgents()
+      } catch (error) {
+        return projectAgentFailure(reply, error)
+      }
+    },
+  )
+  app.delete<{ Params: { id: string } }>('/api/project-agents/:id', async (req, reply) => {
+    try {
+      if (runtimes.settings().defaultRuntimeId === req.params.id)
+        return reply.code(409).send({ error: 'PROJECT_AGENT_IS_DEFAULT' })
+      deleteProjectAgentConfig(workspaceRoot, req.params.id)
+      return await refreshProjectAgents(req.params.id)
+    } catch (error) {
+      return projectAgentFailure(reply, error)
+    }
+  })
   app.get('/api/cfs', async () => versions())
   app.get('/api/cf-drafts', async () => store.list<CFDraft>('cf_drafts'))
   app.get('/api/flow-compilations', async () => flowCompilations())
@@ -386,7 +466,9 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       ]),
     )
     const selectedDraft = applyCompileRuntime(scopedDraft, req.body.runtimeId)
-    const compiled = compileFlow(selectedDraft, catalog)
+    const compiled = compileFlow(selectedDraft, catalog, {
+      flowVersion: nextFlowVersion(selectedDraft.flowId),
+    })
     const plan = req.body.runtimeId
       ? await pinRuntimeProfiles(compiled, [...versions(), ...candidates])
       : compiled
@@ -755,9 +837,17 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       compileFlow(draft, new Map(catalog.map((v) => [`${v.cfId}@${v.version}`, v]))),
       catalog,
     )
-    store.save('flow_drafts', draft.flowId, draft)
-    store.save('flow_versions', `${plan.flowId}@${plan.flowVersion}`, plan)
-    return plan
+    // Allocate after async runtime checks, atomically with the immutable version insert.
+    return store.db.transaction(() => {
+      const { planHash: _hash, ...body } = plan
+      const versioned = { ...body, flowVersion: nextFlowVersion(draft.flowId) }
+      const published = { ...versioned, planHash: sha256(versioned) }
+      store.save('flow_drafts', draft.flowId, draft)
+      store.db
+        .prepare('INSERT INTO flow_versions(id,value) VALUES(?,?)')
+        .run(`${published.flowId}@${published.flowVersion}`, JSON.stringify(published))
+      return published
+    })()
   })
   app.post<{
     Body: {
@@ -781,7 +871,9 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       store.save('flow_drafts', scopedDraft.flowId, scopedDraft)
       for (const cfDraft of req.body.cfDrafts ?? []) store.save('cf_drafts', cfDraft.cfId, cfDraft)
     })()
-    const compiled = compileFlow(selectedDraft, catalog)
+    const compiled = compileFlow(selectedDraft, catalog, {
+      flowVersion: nextFlowVersion(selectedDraft.flowId),
+    })
     const plan = await pinRuntimeProfiles(compiled, [...versions(), ...candidateVersions])
     const programs = [...versions(), ...candidateVersions].filter((version) =>
       selectedDraft.nodes.some(
@@ -851,13 +943,8 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   app.get<{ Params: { id: string } }>('/api/agent-invocations/:id/events', async (req, reply) => {
     if (!store.agentInvocation(req.params.id))
       return reply.code(404).send({ error: 'AGENT_INVOCATION_NOT_FOUND' })
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-    })
     let sent = Number(req.headers['last-event-id'] ?? 0)
-    const flush = () => {
+    streamEvents(reply, () => {
       for (const event of store.agentTraceEvents(req.params.id).filter((item) => item.seq > sent)) {
         reply.raw.write(`id: ${event.seq}\ndata: ${JSON.stringify(event)}\n\n`)
         sent = event.seq
@@ -868,40 +955,29 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         return true
       }
       return false
-    }
-    if (flush()) return reply.raw.end()
-    const timer = setInterval(() => {
-      if (flush()) {
-        clearInterval(timer)
-        reply.raw.end()
-      }
-    }, 100)
-    req.raw.on('close', () => clearInterval(timer))
+    })
   })
   app.get<{ Params: { id: string } }>('/api/runs/:id/events', async (req, reply) => {
-    reply.raw.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      connection: 'keep-alive',
-    })
+    if (!store.getRun(req.params.id)) return reply.code(404).send({ error: 'RUN_NOT_FOUND' })
     let sent = Number(req.headers['last-event-id'] ?? 0)
-    const timer = setInterval(() => {
+    streamEvents(reply, () => {
       const events = store.events(req.params.id)
       for (const e of events.filter((event) => event.seq > sent)) {
         reply.raw.write(`id: ${e.seq}\ndata: ${JSON.stringify(e)}\n\n`)
         sent = e.seq
       }
       const run = store.getRun(req.params.id)
-      if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) {
-        clearInterval(timer)
-        reply.raw.end()
-      }
-    }, 100)
-    req.raw.on('close', () => clearInterval(timer))
+      return Boolean(run && ['completed', 'failed', 'cancelled'].includes(run.status))
+    })
   })
-  app.setErrorHandler((e, _r, reply) =>
-    reply.code(400).send({ error: e instanceof Error ? e.message : String(e) }),
-  )
+  app.setErrorHandler((e, req, reply) => {
+    req.log.error({ err: e }, 'Request failed')
+    if (reply.sent || reply.raw.headersSent || reply.raw.destroyed) {
+      if (!reply.raw.destroyed && !reply.raw.writableEnded) reply.raw.destroy()
+      return
+    }
+    reply.code(400).send({ error: e instanceof Error ? e.message : String(e) })
+  })
   const recover = setInterval(() => {
     const job = store.claimJob()
     if (!job) return
@@ -925,18 +1001,33 @@ export const isDirectExecution = (entryPath = process.argv[1]) => {
   }
 }
 
-if (isDirectExecution()) {
-  let app: ReturnType<typeof createApp> | undefined
+export type StartCFlowOptions = {
+  workspaceRoot?: string
+  environment?: NodeJS.ProcessEnv
+}
+
+export async function startCFlow(options: StartCFlowOptions = {}) {
+  const environment = options.environment ?? process.env
+  const workspace = initializeWorkspace(options.workspaceRoot ?? process.cwd(), environment)
+  const app = createApp(new Store(workspace.databasePath), workspace.root)
+  app.log.info({ workspace: workspace.root, database: workspace.databasePath }, 'workspace ready')
   try {
-    const workspace = initializeWorkspace()
-    app = createApp(new Store(workspace.databasePath), workspace.root)
-    app.log.info({ workspace: workspace.root, database: workspace.databasePath }, 'workspace ready')
-    await app.listen({
-      host: process.env.HOST ?? '127.0.0.1',
-      port: Number(process.env.PORT ?? 3000),
+    const address = await app.listen({
+      host: environment.HOST ?? '127.0.0.1',
+      port: Number(environment.PORT ?? 3000),
     })
+    return { app, address, workspace }
   } catch (error) {
-    if (app) await app.close()
+    await app.close()
+    throw error
+  }
+}
+
+if (isDirectExecution()) {
+  try {
+    const { address } = await startCFlow()
+    console.log(`CFlow 已启动：${address}`)
+  } catch (error) {
     console.error(`CFlow 启动失败：${error instanceof Error ? error.message : String(error)}`)
     process.exitCode = 1
   }

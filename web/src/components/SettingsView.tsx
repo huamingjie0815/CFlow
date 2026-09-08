@@ -1,4 +1,13 @@
-import { AlertTriangle, CheckCircle2, ChevronLeft, RefreshCw, Settings2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronLeft,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
   runtimeBlurb,
@@ -7,7 +16,8 @@ import {
   runtimeHealthLabel,
   runtimeLaunchDetail,
 } from '../copy'
-import type { RuntimeWithHealth, WorkspaceSettings } from '../types'
+import type { ProjectAgentConfig, RuntimeWithHealth, WorkspaceSettings } from '../types'
+import { ProjectAgentDialog } from './ProjectAgentDialog'
 
 type SettingsViewProps = {
   workspaceRoot: string
@@ -17,16 +27,25 @@ type SettingsViewProps = {
   isDiscovering: boolean
   discoveryWarnings: string[]
   testingRuntimeId: string | null
+  projectAgents: ProjectAgentConfig[]
+  isSavingProjectAgent: boolean
+  deletingProjectAgentId: string | null
   onSave: (settings: Partial<WorkspaceSettings>) => void
   onTestRuntime: (id: string) => void
   onDiscoverRuntimes: () => void
+  onSaveProjectAgent: (config: ProjectAgentConfig, editing: boolean) => Promise<void>
+  onDeleteProjectAgent: (id: string) => Promise<void>
   onClose: () => void
 }
 
 export function SettingsView(props: SettingsViewProps) {
   const [draft, setDraft] = useState(props.settings)
+  const [projectAgentDialog, setProjectAgentDialog] = useState<ProjectAgentConfig | 'new' | null>(
+    null,
+  )
   useEffect(() => setDraft(props.settings), [props.settings])
   const available = props.runtimes.filter((runtime) => runtime.enabled)
+  const projectAgentById = new Map(props.projectAgents.map((agent) => [agent.id, agent]))
   const timeoutSeconds = Math.max(1, Math.round(draft.testTimeoutMs / 1000) || 1)
   return (
     <section
@@ -121,17 +140,26 @@ export function SettingsView(props: SettingsViewProps) {
           <div className="settings-section-heading">
             <div className="settings-section-title">
               <h3>本机助手</h3>
-              <p>这些是本机上已经装好、可以用来执行步骤的助手。新装了助手就点「重新识别」。</p>
+              <p>
+                CFlow 随包提供 Codex 和 Claude Code
+                的连接组件，对应助手仍需在本机安装。新装了助手就点「重新识别」。
+              </p>
             </div>
-            <button
-              className="button"
-              type="button"
-              onClick={props.onDiscoverRuntimes}
-              disabled={props.isDiscovering}
-            >
-              <RefreshCw className={props.isDiscovering ? 'spin' : undefined} size={14} />
-              {props.isDiscovering ? '正在识别' : '重新识别'}
-            </button>
+            <div className="settings-section-actions">
+              <button className="button" type="button" onClick={() => setProjectAgentDialog('new')}>
+                <Plus size={14} />
+                接入项目助手
+              </button>
+              <button
+                className="button"
+                type="button"
+                onClick={props.onDiscoverRuntimes}
+                disabled={props.isDiscovering}
+              >
+                <RefreshCw className={props.isDiscovering ? 'spin' : undefined} size={14} />
+                {props.isDiscovering ? '正在识别' : '重新识别'}
+              </button>
+            </div>
           </div>
           {props.discoveryWarnings.length > 0 && (
             <div className="runtime-discovery-warning" role="status">
@@ -143,57 +171,102 @@ export function SettingsView(props: SettingsViewProps) {
             </div>
           )}
           <div className="runtime-table">
-            {props.runtimes.map((runtime) => (
-              <article key={runtime.id}>
-                <span className={`status-lamp is-${runtime.health?.status ?? 'checking'}`} />
-                <div className="runtime-info">
-                  <strong>{runtime.name}</strong>
-                  <p>{runtimeBlurb(runtime)}</p>
-                  <small
-                    title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
-                  >
-                    {runtime.health?.authentication === 'unknown'
-                      ? '登录状态会在真正使用时确认'
-                      : '已确认可用'}
-                  </small>
-                  {runtime.health?.status === 'unavailable' && (
-                    <>
-                      <p className="runtime-error-summary" role="alert">
-                        {runtimeHealthErrorSummary(runtime.health.error)}
-                      </p>
-                      <details className="runtime-technical-details">
-                        <summary>技术详情</summary>
-                        <dl>
-                          <div>
-                            <dt>启动方式</dt>
-                            <dd>{runtimeLaunchDetail(runtime)}</dd>
-                          </div>
-                          <div>
-                            <dt>原始错误</dt>
-                            <dd>{runtime.health.error ?? '未返回错误信息'}</dd>
-                          </div>
-                        </dl>
-                      </details>
-                    </>
-                  )}
-                </div>
-                <span className="runtime-health">{runtimeHealthLabel(runtime)}</span>
-                <button
-                  className="button"
-                  type="button"
-                  onClick={() => props.onTestRuntime(runtime.id)}
-                  disabled={props.testingRuntimeId === runtime.id}
-                >
-                  {props.testingRuntimeId === runtime.id && (
-                    <RefreshCw className="spin" size={14} />
-                  )}
-                  测试连接
-                </button>
-              </article>
-            ))}
+            {props.runtimes.map((runtime) => {
+              const projectAgent = projectAgentById.get(runtime.id)
+              const isDefault = props.settings.defaultRuntimeId === runtime.id
+              return (
+                <article key={runtime.id}>
+                  <span className={`status-lamp is-${runtime.health?.status ?? 'checking'}`} />
+                  <div className="runtime-info">
+                    <strong>{runtime.name}</strong>
+                    <p>{runtimeBlurb(runtime)}</p>
+                    <small
+                      title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
+                    >
+                      {runtime.health?.authentication === 'unknown'
+                        ? '登录状态会在真正使用时确认'
+                        : '已确认可用'}
+                    </small>
+                    {runtime.health?.status === 'unavailable' && (
+                      <>
+                        <p className="runtime-error-summary" role="alert">
+                          {runtimeHealthErrorSummary(runtime.health.error)}
+                        </p>
+                        <details className="runtime-technical-details">
+                          <summary>技术详情</summary>
+                          <dl>
+                            <div>
+                              <dt>启动方式</dt>
+                              <dd>{runtimeLaunchDetail(runtime)}</dd>
+                            </div>
+                            <div>
+                              <dt>原始错误</dt>
+                              <dd>{runtime.health.error ?? '未返回错误信息'}</dd>
+                            </div>
+                          </dl>
+                        </details>
+                      </>
+                    )}
+                  </div>
+                  <span className="runtime-health">{runtimeHealthLabel(runtime)}</span>
+                  <div className="runtime-actions">
+                    {projectAgent && (
+                      <>
+                        <button
+                          className="icon-button"
+                          type="button"
+                          onClick={() => setProjectAgentDialog(projectAgent)}
+                          aria-label={`编辑 ${runtime.name}`}
+                          title="编辑项目助手"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          className="icon-button danger"
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm(`确定删除项目助手「${runtime.name}」吗？`)) return
+                            await props.onDeleteProjectAgent(runtime.id).catch(() => undefined)
+                          }}
+                          disabled={isDefault || props.deletingProjectAgentId === runtime.id}
+                          aria-label={`删除 ${runtime.name}`}
+                          title={isDefault ? '请先切换默认助手' : '删除项目助手'}
+                        >
+                          {props.deletingProjectAgentId === runtime.id ? (
+                            <RefreshCw className="spin" size={14} />
+                          ) : (
+                            <Trash2 size={14} />
+                          )}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      className="button"
+                      type="button"
+                      onClick={() => props.onTestRuntime(runtime.id)}
+                      disabled={props.testingRuntimeId === runtime.id}
+                    >
+                      {props.testingRuntimeId === runtime.id && (
+                        <RefreshCw className="spin" size={14} />
+                      )}
+                      测试连接
+                    </button>
+                  </div>
+                </article>
+              )
+            })}
           </div>
         </section>
       </div>
+      {projectAgentDialog && (
+        <ProjectAgentDialog
+          key={projectAgentDialog === 'new' ? 'new' : projectAgentDialog.id}
+          initial={projectAgentDialog === 'new' ? undefined : projectAgentDialog}
+          isSaving={props.isSavingProjectAgent}
+          onSave={(config) => props.onSaveProjectAgent(config, projectAgentDialog !== 'new')}
+          onClose={() => setProjectAgentDialog(null)}
+        />
+      )}
     </section>
   )
 }
