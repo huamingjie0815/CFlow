@@ -71,7 +71,6 @@ test('reports and enforces the launch workspace', async (t) => {
     rmSync(root, { recursive: true, force: true })
   })
   await app.ready()
-
   const workspace = await app.inject({ method: 'GET', url: '/api/workspace' })
   assert.equal(workspace.statusCode, 200)
   assert.deepEqual(workspace.json(), { root: realpathSync(root) })
@@ -662,6 +661,32 @@ process.stdin.on('data', (chunk) => {
     rmSync(root, { recursive: true, force: true })
   })
   await app.ready()
+  const defaults = await app.inject({ method: 'GET', url: '/api/project-agents' })
+  const defaultCodex = defaults.json().find((agent: any) => agent.id === 'codex')
+  assert.equal(defaultCodex.preset, true)
+  assert.equal(defaultCodex.overridden, false)
+  assert.equal(defaultCodex.assistantCommand, 'codex')
+  assert.equal(defaultCodex.assistantPathEnvironment, 'CODEX_PATH')
+
+  const overriddenDefault = await app.inject({
+    method: 'PUT',
+    url: '/api/project-agents/codex',
+    payload: { ...defaultCodex, assistantCommand: join(root, 'custom-codex') },
+  })
+  assert.equal(overriddenDefault.statusCode, 200)
+  assert.equal(
+    overriddenDefault.json().projectAgents.find((agent: any) => agent.id === 'codex').overridden,
+    true,
+  )
+  const resetDefault = await app.inject({ method: 'DELETE', url: '/api/project-agents/codex' })
+  assert.equal(resetDefault.statusCode, 200)
+  assert.equal(
+    resetDefault.json().projectAgents.find((agent: any) => agent.id === 'codex').overridden,
+    false,
+  )
+  assert.equal(store.runtimeProfile('codex')?.discovery?.source, 'builtin')
+  assert.equal(store.runtimeProfileHistory('codex').length, 3)
+
   const config = {
     id: 'project-helper',
     name: '项目助手',
@@ -704,7 +729,10 @@ process.stdin.on('data', (chunk) => {
     payload: config,
   })
   assert.equal(created.statusCode, 200)
-  assert.equal(created.json().projectAgents[0].id, config.id)
+  assert.equal(
+    created.json().projectAgents.some((agent: any) => agent.id === config.id),
+    true,
+  )
   assert.equal(
     created.json().runtimes.find((runtime: any) => runtime.id === config.id).health.status,
     'available',
@@ -730,7 +758,10 @@ process.stdin.on('data', (chunk) => {
     payload: { ...config, name: '项目助手（已更新）' },
   })
   assert.equal(updated.statusCode, 200)
-  assert.equal(updated.json().projectAgents[0].name, '项目助手（已更新）')
+  assert.equal(
+    updated.json().projectAgents.find((agent: any) => agent.id === config.id).name,
+    '项目助手（已更新）',
+  )
   assert.equal(store.runtimeProfileHistory(config.id).length, 2)
 
   const makeDefault = await app.inject({
@@ -756,7 +787,10 @@ process.stdin.on('data', (chunk) => {
     url: `/api/project-agents/${config.id}`,
   })
   assert.equal(removed.statusCode, 200)
-  assert.equal(removed.json().projectAgents.length, 0)
+  assert.equal(
+    removed.json().projectAgents.some((agent: any) => agent.id === config.id),
+    false,
+  )
   assert.equal(
     removed.json().runtimes.some((runtime: any) => runtime.id === config.id),
     false,

@@ -46,9 +46,17 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
       >
         <header>
           <div>
-            <h3 id="project-agent-title">{editing ? '编辑项目助手' : '接入项目助手'}</h3>
+            <h3 id="project-agent-title">
+              {props.initial?.preset
+                ? '编辑默认助手配置'
+                : editing
+                  ? '编辑项目助手'
+                  : '接入项目助手'}
+            </h3>
             <p id="project-agent-description">
-              配置只保存在当前项目。密钥请由启动 CFlow 的环境提供，这里只填写变量名。
+              {props.initial?.preset
+                ? '修改只作用于当前项目，随时可以恢复默认配置。'
+                : '配置只保存在当前项目。密钥请由启动 CFlow 的环境提供，这里只填写变量名。'}
             </p>
           </div>
           <button className="icon-button" type="button" onClick={props.onClose} aria-label="关闭">
@@ -122,14 +130,26 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
               />
             </label>
             <label className="field project-agent-wide-field">
-              <span>启动命令</span>
+              <span>连接命令</span>
               <input
                 required
                 value={form.command}
                 onChange={(event) => update('command', event.target.value)}
-                placeholder="例如：my-agent"
+                placeholder="例如：my-agent-acp"
               />
-              <small>命令需已安装，并可由启动 CFlow 的用户直接执行。</small>
+              <small>这个命令负责与助手通信，必须能由启动 CFlow 的用户直接运行。</small>
+            </label>
+            <label className="field project-agent-wide-field">
+              <span>助手 CLI 命令{props.initial?.preset ? '' : '（可选）'}</span>
+              <input
+                required={Boolean(props.initial?.preset)}
+                value={form.assistantCommand}
+                onChange={(event) => update('assistantCommand', event.target.value)}
+                placeholder="例如：claude、codex 或 pi"
+              />
+              <small>
+                填写后，只有在当前用户环境中找到该 CLI 才会启用助手。也可以填写绝对路径。
+              </small>
             </label>
             <label className="field project-agent-wide-field">
               <span>启动参数（每行一个）</span>
@@ -187,6 +207,16 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
                   value={form.maxOutputKilobytes}
                   onChange={(event) => update('maxOutputKilobytes', event.target.value)}
                 />
+              </label>
+              <label className="field">
+                <span>CLI 路径变量（可选）</span>
+                <input
+                  value={form.assistantPathEnvironment}
+                  onChange={(event) => update('assistantPathEnvironment', event.target.value)}
+                  placeholder="例如：MY_AGENT_PATH"
+                  pattern="[A-Za-z_][A-Za-z0-9_]*"
+                />
+                <small>连接命令通过这个环境变量接收已找到的 CLI 绝对路径。</small>
               </label>
               <label className="field">
                 <span>允许传入的环境变量名称</span>

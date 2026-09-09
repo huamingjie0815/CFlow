@@ -14,6 +14,8 @@ test('converts project agent fields, line lists and display units', () => {
     name: ' Team Coder ',
     description: ' Project assistant ',
     command: ' team-agent ',
+    assistantCommand: ' team-cli ',
+    assistantPathEnvironment: ' TEAM_CLI_PATH ',
     args: ' --mode\n\n acp ',
     outputMode: 'text' as const,
     envAllowlist: ' API_KEY\nHTTP_PROXY ',
@@ -26,6 +28,8 @@ test('converts project agent fields, line lists and display units', () => {
     name: 'Team Coder',
     description: 'Project assistant',
     command: 'team-agent',
+    assistantCommand: 'team-cli',
+    assistantPathEnvironment: 'TEAM_CLI_PATH',
     args: ['--mode', 'acp'],
     outputMode: 'text',
     envAllowlist: ['API_KEY', 'HTTP_PROXY'],
@@ -38,6 +42,7 @@ test('converts project agent fields, line lists and display units', () => {
 test('provides a usable Pi ACP adapter example without storing secret values', () => {
   const config = projectAgentFromForm(piProjectAgentExample())
   assert.equal(config.command, 'npx')
+  assert.equal(config.assistantCommand, 'pi')
   assert.deepEqual(config.args, ['-y', 'pi-acp'])
   assert.ok(config.envAllowlist.includes('ANTHROPIC_API_KEY'))
   assert.equal(JSON.stringify(config).includes('sk-'), false)

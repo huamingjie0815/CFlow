@@ -5,6 +5,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Settings2,
   Trash2,
 } from 'lucide-react'
@@ -141,8 +142,8 @@ export function SettingsView(props: SettingsViewProps) {
             <div className="settings-section-title">
               <h3>本机助手</h3>
               <p>
-                CFlow 随包提供 Codex 和 Claude Code
-                的连接组件，对应助手仍需在本机安装。新装了助手就点「重新识别」。
+                Codex 和 Claude Code 已预先配置，但只会调用当前用户环境中安装的
+                CLI；其他助手也使用同一套连接配置。新装或修改后请重新识别。
               </p>
             </div>
             <div className="settings-section-actions">
@@ -183,6 +184,13 @@ export function SettingsView(props: SettingsViewProps) {
                     <small
                       title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
                     >
+                      {projectAgent?.preset
+                        ? projectAgent.overridden
+                          ? '当前项目已修改默认配置 · '
+                          : '使用默认连接配置 · '
+                        : projectAgent
+                          ? '当前项目配置 · '
+                          : ''}
                       {runtime.health?.authentication === 'required'
                         ? '需要重新登录或检查认证配置'
                         : runtime.health?.authentication === 'unknown'
@@ -219,27 +227,45 @@ export function SettingsView(props: SettingsViewProps) {
                           type="button"
                           onClick={() => setProjectAgentDialog(projectAgent)}
                           aria-label={`编辑 ${runtime.name}`}
-                          title="编辑项目助手"
+                          title={projectAgent.preset ? '编辑默认连接配置' : '编辑项目助手'}
                         >
                           <Pencil size={14} />
                         </button>
-                        <button
-                          className="icon-button danger"
-                          type="button"
-                          onClick={async () => {
-                            if (!window.confirm(`确定删除项目助手「${runtime.name}」吗？`)) return
-                            await props.onDeleteProjectAgent(runtime.id).catch(() => undefined)
-                          }}
-                          disabled={isDefault || props.deletingProjectAgentId === runtime.id}
-                          aria-label={`删除 ${runtime.name}`}
-                          title={isDefault ? '请先切换默认助手' : '删除项目助手'}
-                        >
-                          {props.deletingProjectAgentId === runtime.id ? (
-                            <RefreshCw className="spin" size={14} />
-                          ) : (
-                            <Trash2 size={14} />
-                          )}
-                        </button>
+                        {(!projectAgent.preset || projectAgent.overridden) && (
+                          <button
+                            className={`icon-button${projectAgent.preset ? '' : ' danger'}`}
+                            type="button"
+                            onClick={async () => {
+                              const action = projectAgent.preset ? '恢复默认配置' : '删除项目助手'
+                              if (!window.confirm(`确定${action}「${runtime.name}」吗？`)) return
+                              await props.onDeleteProjectAgent(runtime.id).catch(() => undefined)
+                            }}
+                            disabled={
+                              (!projectAgent.preset && isDefault) ||
+                              props.deletingProjectAgentId === runtime.id
+                            }
+                            aria-label={
+                              projectAgent.preset
+                                ? `恢复 ${runtime.name} 的默认配置`
+                                : `删除 ${runtime.name}`
+                            }
+                            title={
+                              !projectAgent.preset && isDefault
+                                ? '请先切换默认助手'
+                                : projectAgent.preset
+                                  ? '恢复默认配置'
+                                  : '删除项目助手'
+                            }
+                          >
+                            {props.deletingProjectAgentId === runtime.id ? (
+                              <RefreshCw className="spin" size={14} />
+                            ) : projectAgent.preset ? (
+                              <RotateCcw size={14} />
+                            ) : (
+                              <Trash2 size={14} />
+                            )}
+                          </button>
+                        )}
                       </>
                     )}
                     <button

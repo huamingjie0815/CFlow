@@ -845,7 +845,7 @@ export function App() {
         connected
           ? {
               tone: 'success',
-              title: editing ? '项目助手已更新' : '项目助手已接入',
+              title: editing ? '助手配置已更新' : '项目助手已接入',
               detail: `${config.name} 已完成连接测试，可以使用。`,
             }
           : {
@@ -860,12 +860,15 @@ export function App() {
   })
   const deleteProjectAgentMutation = useMutation({
     mutationFn: api.deleteProjectAgent,
-    onSuccess: (result) => {
+    onSuccess: (result, id) => {
+      const restoredPreset = data?.projectAgents.find((agent) => agent.id === id)?.preset
       applyProjectAgentResult(result)
       setNotice({
         tone: 'success',
-        title: '项目助手已删除',
-        detail: '它不会再用于新流程，已发布流程保留原有的助手版本。',
+        title: restoredPreset ? '默认配置已恢复' : '项目助手已删除',
+        detail: restoredPreset
+          ? '当前项目将重新使用 CFlow 提供的默认连接配置。'
+          : '它不会再用于新流程，已发布流程保留原有的助手版本。',
       })
     },
     onError: (error) =>

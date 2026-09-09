@@ -48,7 +48,8 @@ flowchart TD
     Engine --> DB
     Engine --> Runtime
     Engine --> Tools[本机内置工具]
-    Runtime --> Agents[ACP / CLI Agent 子进程]
+    Runtime --> Adapters[ACP 连接进程]
+    Adapters --> Agents[用户环境中的助手 CLI]
 ```
 
 ### 模块职责
@@ -88,11 +89,20 @@ SQLite 使用 WAL 模式。主要数据包括能力和流程草稿、不可变�
 
 ## Agent 与执行边界
 
-CFlow 随包提供 Codex 和 Claude Code 的 ACP 连接组件，但对应的 `codex` 或 `claude` CLI 仍须在本机安装；未找到 CLI 时，助手会显示为不可用。其他 ACP 或 CLI Agent 可通过 manifest 接入，配置可以来自 PATH、npm 包、用户目录或项目目录，项目配置优先。
+CFlow 使用统一的 ACP 机制连接助手。安装包中的 Codex 和 Claude Code 组件只负责协议转换，不把组件依赖中的执行文件当作用户助手；真正执行任务的 `codex`、`claude` 等 CLI 必须存在于启动 CFlow 的用户环境中。未找到配置指定的 CLI 时，助手会显示为不可用。其他助手也通过 ACP 接入，配置可以来自 PATH、npm 包、用户目录或项目目录，项目配置优先。
 
-Claude Code 的连接检查会创建一个不发送提示词的临时 ACP 会话，以同时验证 CLI 登录状态和模型服务配置。使用自定义 Anthropic 兼容服务时，请在启动 CFlow 前设置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等所需系统环境变量，并在变量变更后完全重启 CFlow。CFlow 也会传递 Claude 官方使用的 OAuth、代理、Bedrock 和 Vertex 路由变量，但不会把变量值写入项目文件或浏览器存储。未认证时，Claude Code 会显示为不可用，并提示在启动 CFlow 的同一系统用户下完成登录。
+| 默认助手    | ACP 连接命令       | 用户 CLI 命令 | CLI 路径变量             |
+| ----------- | ------------------ | ------------- | ------------------------ |
+| Codex       | `codex-acp`        | `codex`       | `CODEX_PATH`             |
+| Claude Code | `claude-agent-acp` | `claude`      | `CLAUDE_CODE_EXECUTABLE` |
 
-在「工作台设置 → 本机助手」中选择「接入项目助手」，可以为当前项目创建或编辑外部 ACP 助手。填写助手名称、配置标识、启动命令和参数后，CFlow 会把配置写入 `.cflow/agents.d/`，立即重新识别并测试连接。新建时可套用 Pi Agent 示例；Pi 本身不直接支持 ACP，该示例通过社区 `pi-acp` 适配器连接，因此需先安装并登录 Pi。项目助手可以在同一处编辑或删除；当前默认助手需要先切换默认项才能删除。删除只影响新流程，已发布流程和历史运行仍保留固定的 Runtime Profile 版本。
+“连接命令”启动 ACP Server；“助手 CLI 命令”用于检测当前用户环境中的真实助手；“CLI 路径变量”把检测到的绝对路径交给 ACP Server。对于原生支持 ACP 的助手，可以只填写连接命令，不需要额外填写助手 CLI 命令和路径变量。
+
+Codex 和 Claude Code 的连接检查都会创建一个不发送提示词的临时 ACP 会话，以同时验证用户 CLI、登录状态和模型服务配置。使用自定义 Anthropic 兼容服务时，请在启动 CFlow 前设置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等所需系统环境变量，并在变量变更后完全重启 CFlow。CFlow 也会传递 Claude 官方使用的 OAuth、代理、Bedrock 和 Vertex 路由变量，以及 Codex 使用的 `CODEX_API_KEY` 或 `OPENAI_API_KEY`，但不会把变量值写入项目文件或浏览器存储。未认证时，助手会显示为不可用，并提示在启动 CFlow 的同一系统用户下完成登录。
+
+Windows 支持 npm 生成的 `.cmd` 命令代理。Codex 的连接组件会通过系统 shell 调用用户的 `codex.cmd`；CFlow 会从 Claude Code 的 npm shim 中解析用户安装目录下的 `cli.js` 或 `claude.exe` 并传给连接组件。无法解析的非标准 shim 会显示为不可用，用户可以更新 Claude Code，或在助手配置中填写实际入口的绝对路径。CFlow 不会在这种情况下改用连接组件随附的 Claude 执行文件。
+
+「工作台设置 → 本机助手」会显示预先配置的 Codex 和 Claude Code，二者都可以针对当前项目编辑连接命令、助手 CLI 命令、参数和环境变量白名单；项目覆盖可以随时恢复为默认配置。选择「接入项目助手」还可以创建其他 ACP 助手。保存后配置写入 `.cflow/agents.d/`，并立即重新识别、检查 CLI 和测试连接。新建时可套用 Pi Agent 示例；Pi 本身不直接支持 ACP，该示例通过社区 `pi-acp` 适配器连接，因此需先安装并登录 Pi。普通项目助手可以在同一处编辑或删除；当前默认助手需要先切换默认项才能删除。删除只影响新流程，已发布流程和历史运行仍保留固定的 Runtime Profile 版本。
 
 用户级 manifest 位于 `~/.config/cflow/agents.d/`，项目级 manifest 位于 `.cflow/agents.d/`。Runtime Profile 按版本保存，发布流程引用具体版本。项目助手配置只保存允许传入的环境变量名称，不接收也不落盘密钥值；密钥必须由启动 CFlow 的环境提供。
 

@@ -5,6 +5,8 @@ export type ProjectAgentFormValues = {
   name: string
   description: string
   command: string
+  assistantCommand: string
+  assistantPathEnvironment: string
   args: string
   outputMode: ProjectAgentConfig['outputMode']
   envAllowlist: string
@@ -17,6 +19,8 @@ export const emptyProjectAgentForm = (): ProjectAgentFormValues => ({
   name: '',
   description: '',
   command: '',
+  assistantCommand: '',
+  assistantPathEnvironment: '',
   args: '',
   outputMode: 'json',
   envAllowlist: '',
@@ -29,6 +33,8 @@ export const piProjectAgentExample = (): ProjectAgentFormValues => ({
   name: 'Pi Agent',
   description: '通过社区 pi-acp 适配器连接本机安装的 Pi coding agent。',
   command: 'npx',
+  assistantCommand: 'pi',
+  assistantPathEnvironment: '',
   args: '-y\npi-acp',
   outputMode: 'json',
   envAllowlist: 'HOME\nPATH\nPI_CODING_AGENT_DIR\nANTHROPIC_API_KEY\nOPENAI_API_KEY',
@@ -41,6 +47,8 @@ export const projectAgentToForm = (config: ProjectAgentConfig): ProjectAgentForm
   name: config.name,
   description: config.description ?? '',
   command: config.command,
+  assistantCommand: config.assistantCommand ?? '',
+  assistantPathEnvironment: config.assistantPathEnvironment ?? '',
   args: config.args.join('\n'),
   outputMode: config.outputMode,
   envAllowlist: config.envAllowlist.join('\n'),
@@ -59,6 +67,8 @@ export const projectAgentFromForm = (form: ProjectAgentFormValues): ProjectAgent
   name: form.name.trim(),
   description: form.description.trim() || undefined,
   command: form.command.trim(),
+  assistantCommand: form.assistantCommand.trim() || undefined,
+  assistantPathEnvironment: form.assistantPathEnvironment.trim() || undefined,
   args: lines(form.args),
   outputMode: form.outputMode,
   envAllowlist: lines(form.envAllowlist),

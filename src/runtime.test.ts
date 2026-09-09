@@ -404,15 +404,27 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
-test('Claude ACP health verifies a session with the configured provider environment', async () => {
+test('Claude ACP health resolves a Windows npm shim to the user-installed native executable', async () => {
   const root = join('/tmp', `cf-claude-acp-health-${randomUUID()}`)
-  const adapter = join(root, 'claude-agent-acp')
-  const claude = join(root, 'claude')
-  const previousClaude = process.env.CFLOW_CLAUDE_PATH
+  const adapter = join(root, 'claude-agent-acp.exe')
+  const claude = join(root, 'claude.cmd')
+  const nativeClaude = join(
+    root,
+    'node_modules',
+    '@anthropic-ai',
+    'claude-code',
+    'bin',
+    'claude.exe',
+  )
   const previousBaseUrl = process.env.ANTHROPIC_BASE_URL
   const previousModel = process.env.ANTHROPIC_MODEL
   mkdirSync(root, { recursive: true })
-  writeFileSync(claude, '#!/bin/sh\nexit 0\n')
+  mkdirSync(join(nativeClaude, '..'), { recursive: true })
+  writeFileSync(nativeClaude, 'binary')
+  writeFileSync(
+    claude,
+    '@echo off\r\n"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n',
+  )
   writeFileSync(
     adapter,
     `#!/usr/bin/env node
@@ -432,7 +444,8 @@ process.stdin.on('data', (chunk) => {
       } }) + '\\n')
     } else if (request.method === 'session/new') {
       const configured = process.env.ANTHROPIC_BASE_URL === 'https://provider.example' &&
-        process.env.ANTHROPIC_MODEL === 'saas-deepseek-v4-pro'
+        process.env.ANTHROPIC_MODEL === 'saas-deepseek-v4-pro' &&
+        process.env.CLAUDE_CODE_EXECUTABLE === ${JSON.stringify(nativeClaude)}
       process.stdout.write(JSON.stringify(configured
         ? { jsonrpc: '2.0', id: request.id, result: { sessionId: 'health-session' } }
         : { jsonrpc: '2.0', id: request.id, error: {
@@ -445,8 +458,6 @@ process.stdin.on('data', (chunk) => {
 `,
   )
   chmodSync(adapter, 0o755)
-  chmodSync(claude, 0o755)
-  process.env.CFLOW_CLAUDE_PATH = claude
   process.env.ANTHROPIC_BASE_URL = 'https://provider.example'
   process.env.ANTHROPIC_MODEL = 'saas-deepseek-v4-pro'
   const store = new Store(join(root, 'runtime.sqlite'))
@@ -456,6 +467,8 @@ process.stdin.on('data', (chunk) => {
       userManifestDirectory: false,
       projectManifestDirectory: false,
       packageRoot: false,
+      platform: 'win32',
+      env: { PATH: root, PATHEXT: '.CMD;.EXE;.BAT;.COM' },
     })
     const profile = manager.profile('claude-code')!
     store.saveRuntimeProfile({
@@ -469,8 +482,6 @@ process.stdin.on('data', (chunk) => {
     assert.equal(health.authentication, 'verified')
   } finally {
     store.close()
-    if (previousClaude === undefined) delete process.env.CFLOW_CLAUDE_PATH
-    else process.env.CFLOW_CLAUDE_PATH = previousClaude
     if (previousBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
     else process.env.ANTHROPIC_BASE_URL = previousBaseUrl
     if (previousModel === undefined) delete process.env.ANTHROPIC_MODEL
@@ -554,6 +565,120 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
+test('Codex ACP receives the user-installed Windows command shim', async () => {
+  const root = join('/tmp', `cf-codex-acp-health-${randomUUID()}`)
+  const adapter = join(root, 'codex-acp.exe')
+  const codex = join(root, 'codex.cmd')
+  mkdirSync(root, { recursive: true })
+  writeFileSync(codex, '@echo off\r\nexit /b 0\r\n')
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    const configured = process.env.CODEX_PATH === ${JSON.stringify(codex)}
+    const result = request.method === 'session/new'
+      ? { sessionId: 'health-session' }
+      : { protocolVersion: request.params.protocolVersion, agentCapabilities: {}, authMethods: [] }
+    process.stdout.write(JSON.stringify(configured
+      ? { jsonrpc: '2.0', id: request.id, result }
+      : { jsonrpc: '2.0', id: request.id, error: { code: -32000, message: 'wrong Codex path' } }) + '\\n')
+  }
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+      platform: 'win32',
+      env: { PATH: root, PATHEXT: '.CMD;.EXE;.BAT;.COM' },
+    })
+    const profile = manager.profile('codex')!
+    store.saveRuntimeProfile({
+      ...profile,
+      profileVersion: store.nextRuntimeProfileVersion('codex'),
+      command: adapter,
+    })
+    const health = await manager.health('codex')
+    assert.equal(health.status, 'available', health.error)
+    assert.equal(health.authentication, 'verified')
+  } finally {
+    store.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Codex ACP health reports authentication failures before the runtime is selected', async () => {
+  const root = join('/tmp', `cf-codex-acp-auth-${randomUUID()}`)
+  const adapter = join(root, 'codex-acp')
+  const codex = join(root, 'codex')
+  const previousCodex = process.env.CFLOW_CODEX_PATH
+  mkdirSync(root, { recursive: true })
+  writeFileSync(codex, '#!/bin/sh\nexit 0\n')
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        protocolVersion: request.params.protocolVersion, agentCapabilities: {}, authMethods: []
+      } }) + '\\n')
+    } else if (request.method === 'session/new') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: {
+        code: -32000, message: 'Authentication required'
+      } }) + '\\n')
+    }
+  }
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
+  chmodSync(codex, 0o755)
+  process.env.CFLOW_CODEX_PATH = codex
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    const profile = manager.profile('codex')!
+    store.saveRuntimeProfile({
+      ...profile,
+      profileVersion: store.nextRuntimeProfileVersion('codex'),
+      command: adapter,
+    })
+    const health = await manager.health('codex')
+    assert.equal(health.status, 'unavailable')
+    assert.equal(health.authentication, 'required')
+    assert.match(health.error ?? '', /^AGENT_AUTH_REQUIRED:/)
+  } finally {
+    store.close()
+    if (previousCodex === undefined) delete process.env.CFLOW_CODEX_PATH
+    else process.env.CFLOW_CODEX_PATH = previousCodex
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('retries a bundled ACP runtime after a transient cold-start failure', async () => {
   const root = join('/tmp', `cf-acp-cold-start-${randomUUID()}`)
   const executable = join(root, 'cold-start-acp')
@@ -570,13 +695,15 @@ let buffer = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
   buffer += chunk
-  const newline = buffer.indexOf('\\n')
-  if (newline < 0) return
-  const request = JSON.parse(buffer.slice(0, newline))
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
-    protocolVersion: request.params.protocolVersion,
-    agentCapabilities: {}, authMethods: []
-  } }) + '\\n')
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    const result = request.method === 'session/new'
+      ? { sessionId: 'health-session' }
+      : { protocolVersion: request.params.protocolVersion, agentCapabilities: {}, authMethods: [] }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n')
+  }
 })
 `,
   )
@@ -657,7 +784,7 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
-test('bundled adapters require installed Codex and Claude CLIs', async () => {
+test('default ACP configurations require user-installed Codex and Claude CLIs', async () => {
   const root = join('/tmp', `cf-missing-agent-clis-${randomUUID()}`)
   const bin = join(root, 'bin')
   const adapter = join(root, 'fake-acp')
@@ -718,8 +845,8 @@ process.stdin.on('data', (chunk) => {
     ])
     assert.equal(codex.status, 'unavailable')
     assert.equal(claude.status, 'unavailable')
-    assert.match(codex.error ?? '', /CODEX_CLI_NOT_FOUND:codex/)
-    assert.match(claude.error ?? '', /CLAUDE_CODE_CLI_NOT_FOUND:claude/)
+    assert.match(codex.error ?? '', /ASSISTANT_CLI_NOT_FOUND:codex/)
+    assert.match(claude.error ?? '', /ASSISTANT_CLI_NOT_FOUND:claude/)
 
     for (const command of ['codex', 'claude']) {
       writeFileSync(join(bin, command), '#!/bin/sh\nexit 0\n')

@@ -1,7 +1,7 @@
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
-import { accessSync, constants, readdirSync, statSync } from 'node:fs'
+import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, isAbsolute, join, resolve, sep } from 'node:path'
+import { delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import crossSpawn from 'cross-spawn'
 import type { CapabilityEffect, Json } from './types.js'
@@ -207,6 +207,40 @@ export const resolveCommandAliases = (
 
 export const describeResolvedCommand = (command: ResolvedCommand) =>
   `${command.launchType} ${command.executable} (${command.source})`
+
+export const resolveWindowsCommandShimTarget = (
+  command: ResolvedCommand,
+): ResolvedCommand | undefined => {
+  if (command.launchType !== 'windows-command') return command
+  let source: string
+  try {
+    source = readFileSync(command.executable, 'utf8').slice(0, 65_536)
+  } catch {
+    return undefined
+  }
+  const expectedName = stripExecutableExtension(command.executable, 'win32')
+    .split(/[\\/]/)
+    .pop()
+    ?.toLowerCase()
+  for (const match of source.matchAll(/%(?:~dp0|dp0%)[\\/]?([^"'\r\n|&<>]*?\.(?:exe|[cm]?js))/gi)) {
+    const relative = match[1]?.trim()
+    if (!relative || relative.includes('%')) continue
+    const target = resolve(dirname(command.executable), relative.replace(/[\\/]+/g, sep))
+    const basename = target.split(sep).pop()?.toLowerCase()
+    const expectedExecutable = basename === `${expectedName}.exe`
+    const expectedScript =
+      /\.[cm]?js$/i.test(target) && /[\\/]@anthropic-ai[\\/]claude-code[\\/]/i.test(target)
+    if (!expectedExecutable && !expectedScript) continue
+    const executable = existingExecutable(target, 'win32')
+    if (executable)
+      return {
+        ...command,
+        executable,
+        launchType: /\.[cm]?js$/i.test(executable) ? 'windows-command' : 'native',
+      }
+  }
+  return undefined
+}
 
 export const launchProcess = (spec: LaunchSpec): ChildProcess =>
   crossSpawn(spec.resolved.executable, spec.args, {

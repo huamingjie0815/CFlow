@@ -241,11 +241,15 @@ export interface ProjectAgentConfig {
   name: string
   description?: string
   command: string
+  assistantCommand?: string
+  assistantPathEnvironment?: string
   args: string[]
   outputMode: RuntimeOutputMode
   envAllowlist: string[]
   timeoutMs: number
   maxOutputBytes: number
+  preset?: boolean
+  overridden?: boolean
 }
 export type RuntimeDiscoverySource =
   'builtin' | 'path-acp' | 'package-manifest' | 'user-manifest' | 'project-manifest' | 'manual'
@@ -269,6 +273,8 @@ export interface RuntimeProfile {
   enabled: boolean
   backend: RuntimeBackendKind
   command?: string
+  assistantCommand?: string
+  assistantPathEnvironment?: string
   args: string[]
   versionArgs: string[]
   model?: string

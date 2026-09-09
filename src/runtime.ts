@@ -36,6 +36,7 @@ import {
   launchProcess,
   parseJsonOutput,
   resolveCommandAliases,
+  resolveWindowsCommandShimTarget,
   runtimeIdFromCommand,
   runtimeNameFromCommand,
   terminateProcess,
@@ -45,8 +46,8 @@ import {
 } from './runtime-process.js'
 
 const ADAPTER_BUILD = 'cf-runtime-adapter/4'
-const CLAUDE_AUTH_REQUIRED =
-  'CLAUDE_AUTH_REQUIRED:Claude Code 认证不可用。请在启动 CFlow 的同一系统用户下登录 Claude，或检查 Anthropic 服务地址和认证环境变量，然后重启 CFlow。'
+const authenticationRequiredMessage = (profile: RuntimeProfile) =>
+  `${profile.id === 'claude-code' ? 'CLAUDE_AUTH_REQUIRED' : 'AGENT_AUTH_REQUIRED'}:${profile.name} 认证不可用。请在启动 CFlow 的同一系统用户下完成登录或检查认证环境变量，然后重启 CFlow。`
 
 const isAuthenticationRequired = (error: unknown) =>
   /authentication required|not logged in|please run \/login|log in with an oauth provider/i.test(
@@ -164,6 +165,11 @@ const profileFromManifest = (record: AgentManifestRecord): RuntimeProfile => {
     enabled: true,
     backend: manifest.backend,
     command: manifest.command,
+    assistantCommand:
+      manifest.assistantCommand ?? adapterDescriptorForId(manifest.id)?.manifest.assistantCommand,
+    assistantPathEnvironment:
+      manifest.assistantPathEnvironment ??
+      adapterDescriptorForId(manifest.id)?.manifest.assistantPathEnvironment,
     args: manifest.args ?? [],
     versionArgs: manifest.versionArgs ?? (cli ? ['--version'] : []),
     promptTransport: manifest.promptTransport ?? (cli ? 'argument' : 'stdin'),
@@ -313,7 +319,9 @@ export class RuntimeManager {
         changed.push(profile)
       } else if (
         current.adapterBuild !== ADAPTER_BUILD ||
-        current.discovery?.manifestHash !== profile.discovery?.manifestHash
+        current.discovery?.manifestHash !== profile.discovery?.manifestHash ||
+        current.discovery?.source !== profile.discovery?.source ||
+        current.discovery?.manifestPath !== profile.discovery?.manifestPath
       ) {
         const updated = {
           ...current,
@@ -477,6 +485,10 @@ export class RuntimeManager {
     )
     if (envAllowlist.some((name) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)))
       throw new Error('RUNTIME_ENV_NAME_INVALID')
+    const assistantPathEnvironment =
+      input.assistantPathEnvironment?.trim() || previous?.assistantPathEnvironment
+    if (assistantPathEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(assistantPathEnvironment))
+      throw new Error('RUNTIME_ENV_NAME_INVALID')
     const permissionArgsInput = input.permissionArgs ?? previous?.permissionArgs
     const permissionArgs = permissionArgsInput
       ? Object.fromEntries(
@@ -494,6 +506,8 @@ export class RuntimeManager {
       backend,
       command:
         backend === 'acp' || backend === 'cli' ? (command ?? previous?.command ?? id) : command,
+      assistantCommand: input.assistantCommand?.trim() || previous?.assistantCommand,
+      assistantPathEnvironment,
       args: safeList(input.args ?? previous?.args ?? [], 40),
       versionArgs: safeList(input.versionArgs ?? previous?.versionArgs ?? ['--version'], 10),
       model: input.model?.trim().slice(0, 120),
@@ -626,7 +640,7 @@ export class RuntimeManager {
           latencyMs: Date.now() - started,
           stage: this.commandInstalled(profile) ? 'installed' : undefined,
           authentication:
-            error instanceof Error && error.message.startsWith('CLAUDE_AUTH_REQUIRED:')
+            error instanceof Error && /^(?:CLAUDE|AGENT)_AUTH_REQUIRED:/.test(error.message)
               ? 'required'
               : 'unknown',
           error: error instanceof Error ? error.message : String(error),
@@ -663,7 +677,9 @@ export class RuntimeManager {
     throw new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`)
   }
   private async probeHealthWithRetry<T>(profile: RuntimeProfile, probe: () => Promise<T>) {
-    const bundled = Boolean(adapterDescriptorForId(profile.id)?.bundled)
+    const bundled =
+      profile.discovery?.source === 'builtin' &&
+      Boolean(adapterDescriptorForId(profile.id)?.bundled)
     const attempts = bundled ? 2 : 1
     let lastError: unknown
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -792,11 +808,7 @@ export class RuntimeManager {
   }
   private resolvedCommand(profile: RuntimeProfile, env: Record<string, string>) {
     if (!profile.command) throw new Error('RUNTIME_COMMAND_REQUIRED')
-    const descriptor = adapterDescriptorForId(profile.id)
-    const resolved = resolveCommandAliases(
-      [profile.command, ...(descriptor?.commandAliases ?? [])],
-      this.commandResolutionOptions(env),
-    )
+    const resolved = resolveCommandAliases([profile.command], this.commandResolutionOptions(env))
     if (!resolved)
       throw new Error(
         `${profile.backend === 'acp' ? 'ACP_SERVER_NOT_FOUND' : 'AGENT_CLI_NOT_FOUND'}:${profile.command}`,
@@ -856,7 +868,7 @@ export class RuntimeManager {
             clientInfo: { name: 'CFlow', version: ADAPTER_BUILD },
             clientCapabilities: { plan: {}, session: {} },
           })
-          if (profile.id === 'claude-code')
+          if (profile.assistantCommand)
             await ctx.request(methods.agent.session.new, {
               cwd: profile.workingDirectory ?? process.cwd(),
               mcpServers: [],
@@ -881,7 +893,7 @@ export class RuntimeManager {
         ? [response.agentInfo.name, response.agentInfo.version].filter(Boolean).join(' ')
         : undefined
       return {
-        authentication: profile.id === 'claude-code' ? ('verified' as const) : ('unknown' as const),
+        authentication: profile.assistantCommand ? ('verified' as const) : ('unknown' as const),
         version: [
           `ACP ${response.protocolVersion}`,
           agent,
@@ -891,9 +903,9 @@ export class RuntimeManager {
           .join(' · '),
       }
     } catch (error) {
-      if (profile.id === 'claude-code' && isAuthenticationRequired(error))
+      if (isAuthenticationRequired(error))
         throw new Error(
-          `${CLAUDE_AUTH_REQUIRED} [launch=${describeResolvedCommand(spec.resolved)}]`,
+          `${authenticationRequiredMessage(profile)} [launch=${describeResolvedCommand(spec.resolved)}]`,
         )
       const detail = stderrDetail(stderr.toString('utf8'))
       if (error instanceof Error)
@@ -987,6 +999,19 @@ export class RuntimeManager {
       if (value !== undefined) env[key] = value
     }
     const descriptor = adapterDescriptorForId(profile.id)
+    const hostEnvironment = this.discoveryOptions.env ?? process.env
+    const override = descriptor?.nativeCommand
+      ? hostEnvironment[descriptor.nativeCommand.overrideEnvironment]
+      : undefined
+    const assistantCommand = override ?? profile.assistantCommand
+    let resolvedAssistant = assistantCommand
+      ? resolveCommandAliases([assistantCommand], {
+          ...this.commandResolutionOptions(hostEnvironment),
+          excludedSources: ['bundled-bin'],
+        })
+      : undefined
+    if (assistantCommand && !resolvedAssistant)
+      throw new Error(`ASSISTANT_CLI_NOT_FOUND:${assistantCommand}`)
     if (descriptor) {
       Object.assign(env, descriptor.staticEnvironment)
       if (profile.model && descriptor.modelEnvironment)
@@ -995,21 +1020,20 @@ export class RuntimeManager {
         env[descriptor.permissionMode.environment] = canChangeWorkspace(effects)
           ? descriptor.permissionMode.workspaceWrite
           : descriptor.permissionMode.readOnly
-      if (descriptor.nativeCommand) {
-        const hostEnvironment = this.discoveryOptions.env ?? process.env
-        const override = hostEnvironment[descriptor.nativeCommand.overrideEnvironment]
-        const command = override ?? descriptor.nativeCommand.command
-        const resolved = resolveCommandAliases([command], {
-          ...this.commandResolutionOptions(hostEnvironment),
-          excludedSources: ['bundled-bin'],
-        })
-        if (!resolved)
-          throw new Error(
-            `${profile.id === 'codex' ? 'CODEX_CLI_NOT_FOUND' : 'CLAUDE_CODE_CLI_NOT_FOUND'}:${command}`,
-          )
-        env[descriptor.nativeCommand.adapterEnvironment] = resolved.executable
+      if (descriptor.nativeCommand && resolvedAssistant) {
+        if (
+          descriptor.nativeCommand.resolveWindowsShim &&
+          (this.discoveryOptions.platform ?? process.platform) === 'win32' &&
+          resolvedAssistant.launchType === 'windows-command'
+        ) {
+          const target = resolveWindowsCommandShimTarget(resolvedAssistant)
+          if (!target) throw new Error(`ASSISTANT_CLI_WINDOWS_SHIM_UNSUPPORTED:${assistantCommand}`)
+          resolvedAssistant = target
+        }
       }
     }
+    if (profile.assistantPathEnvironment && resolvedAssistant)
+      env[profile.assistantPathEnvironment] = resolvedAssistant.executable
     return env
   }
   private cliPermissionArgs(
@@ -1229,11 +1253,11 @@ export class RuntimeManager {
               ? 'unknown'
               : 'none',
           })
-        if (profile.id === 'claude-code' && isAuthenticationRequired(error))
+        if (isAuthenticationRequired(error))
           throw new RuntimeExecutionException({
             layer: 'adapter',
             code: 'AUTHENTICATION_REQUIRED',
-            message: CLAUDE_AUTH_REQUIRED.slice('CLAUDE_AUTH_REQUIRED:'.length),
+            message: authenticationRequiredMessage(profile).replace(/^[A-Z_]+:/, ''),
             retryable: false,
             effectState: 'none',
           })

@@ -3,7 +3,11 @@ import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import { discoverAcpCommands, resolveCommand } from './runtime-process.js'
+import {
+  discoverAcpCommands,
+  resolveCommand,
+  resolveWindowsCommandShimTarget,
+} from './runtime-process.js'
 
 const temporaryRoot = () => join('/tmp', `cflow-runtime-process-${randomUUID()}`)
 
@@ -103,6 +107,50 @@ test('explicit executables support spaces, .bat files and extension inference', 
     assert.equal(resolveCommand(executable, options)?.executable, executable)
     assert.equal(resolveCommand(executable.slice(0, -4), options)?.executable, executable)
     assert.equal(resolveCommand(executable, options)?.launchType, 'windows-command')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resolves a Windows npm command shim to its installed native executable', () => {
+  const root = temporaryRoot()
+  const bin = join(root, 'Agent Tools')
+  const shim = join(bin, 'claude.cmd')
+  const executable = join(bin, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')
+  executableFile(executable, 'binary')
+  writeFileSync(
+    shim,
+    '@ECHO off\r\n"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %*\r\n',
+  )
+  try {
+    const resolved = resolveCommand(shim, {
+      platform: 'win32',
+      env: { PATH: '', PATHEXT: '.EXE;.BAT;.CMD;.COM' },
+    })!
+    assert.equal(resolveWindowsCommandShimTarget(resolved)?.executable, executable)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('resolves a legacy Windows npm command shim to its user-installed JavaScript entry', () => {
+  const root = temporaryRoot()
+  const bin = join(root, 'Agent Tools')
+  const shim = join(bin, 'claude.cmd')
+  const executable = join(bin, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js')
+  executableFile(executable, '#!/usr/bin/env node\n')
+  writeFileSync(
+    shim,
+    '@ECHO off\r\n"%_prog%" "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n',
+  )
+  try {
+    const resolved = resolveCommand(shim, {
+      platform: 'win32',
+      env: { PATH: '', PATHEXT: '.EXE;.BAT;.CMD;.COM' },
+    })!
+    const target = resolveWindowsCommandShimTarget(resolved)
+    assert.equal(target?.executable, executable)
+    assert.equal(target?.launchType, 'windows-command')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

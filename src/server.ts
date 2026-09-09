@@ -14,6 +14,7 @@ import { Engine, builtins, newRunId } from './engine.js'
 import { RuntimeManager } from './runtime.js'
 import {
   deleteProjectAgentConfig,
+  isPresetProjectAgentId,
   listProjectAgentConfigs,
   normalizeProjectAgentConfig,
   saveProjectAgentConfig,
@@ -320,7 +321,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     return reply.code(status).send({ error: message })
   }
   const refreshProjectAgents = async (removedId?: string) => {
-    if (removedId) executorRegistry.unregister(removedId)
+    if (removedId && !isPresetProjectAgentId(removedId)) executorRegistry.unregister(removedId)
     for (const profile of runtimes.discover()) runtimes.register(executorRegistry, profile)
     return {
       projectAgents: listProjectAgentConfigs(workspaceRoot),
@@ -353,7 +354,10 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   )
   app.delete<{ Params: { id: string } }>('/api/project-agents/:id', async (req, reply) => {
     try {
-      if (runtimes.settings().defaultRuntimeId === req.params.id)
+      if (
+        !isPresetProjectAgentId(req.params.id) &&
+        runtimes.settings().defaultRuntimeId === req.params.id
+      )
         return reply.code(409).send({ error: 'PROJECT_AGENT_IS_DEFAULT' })
       deleteProjectAgentConfig(workspaceRoot, req.params.id)
       return await refreshProjectAgents(req.params.id)

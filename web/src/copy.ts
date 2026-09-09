@@ -58,8 +58,12 @@ export function runtimeDiscoveryLabel(source?: string) {
 
 export function runtimeHealthErrorSummary(error?: string) {
   if (!error) return '连接握手没有完成，请展开技术详情查看原因。'
-  if (/CLAUDE_AUTH_REQUIRED/.test(error))
-    return 'Claude Code 尚未通过当前 CFlow 进程完成认证，请在同一系统用户下检查登录和服务地址配置。'
+  if (/(?:CLAUDE|AGENT)_AUTH_REQUIRED/.test(error))
+    return '助手尚未通过当前 CFlow 进程完成认证，请在同一系统用户下检查登录和服务地址配置。'
+  if (/ASSISTANT_CLI_WINDOWS_SHIM_UNSUPPORTED/.test(error))
+    return '找到的是旧式 Windows 命令代理，无法定位助手程序。请更新 CLI，或在配置中填写原生可执行文件路径。'
+  if (/ASSISTANT_CLI_NOT_FOUND/.test(error))
+    return '当前用户环境中没有找到助手 CLI，请检查安装位置或填写绝对路径。'
   if (/BUNDLED_.*NOT_FOUND/.test(error)) return '随 CFlow 安装的助手组件不完整，请重新安装 CFlow。'
   if (/NOT_FOUND|ENOENT/.test(error)) return '没有找到可启动的程序，请确认助手已经正确安装。'
   if (/HANDSHAKE_TIMEOUT/.test(error)) return '助手已经启动，但没有在限定时间内回应。'
@@ -94,8 +98,7 @@ export function runStatusLabel(status: string) {
 }
 
 export function runtimeBlurb(runtime: { id: string; description?: string }) {
-  if (runtime.id === 'codex')
-    return '通过 CFlow 随附的 ACP 组件连接本机安装的 Codex。默认只读，不会改你的文件。'
-  if (runtime.id === 'claude-code') return '通过 CFlow 随附的 ACP 组件连接本机安装的 Claude Code。'
+  if (runtime.id === 'codex') return '连接当前用户环境中安装的 Codex。默认只读，不会改你的文件。'
+  if (runtime.id === 'claude-code') return '连接当前用户环境中安装的 Claude Code。'
   return runtime.description || '使用本机当前配置'
 }

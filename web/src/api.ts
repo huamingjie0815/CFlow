@@ -301,6 +301,8 @@ export function readableError(error: unknown) {
     ID_INVALID: '英文配置标识需为 2–64 位小写字母、数字、点、横线或下划线。',
     NAME_REQUIRED: '请填写助手名称。',
     COMMAND_REQUIRED: '请填写启动命令。',
+    ASSISTANT_COMMAND_INVALID: '助手 CLI 命令无效，请填写命令名称或绝对路径。',
+    ASSISTANT_PATH_ENVIRONMENT_INVALID: 'CLI 路径变量名格式不正确。',
     OUTPUT_MODE_INVALID: '返回格式无效，请重新选择。',
     TIMEOUT_INVALID: '超时时间需在 1 到 3600 秒之间。',
     OUTPUT_LIMIT_INVALID: '最大输出大小需在 1 KB 到 16 MB 之间。',

@@ -31,6 +31,8 @@ export type AgentManifest = {
   description?: string
   backend: Exclude<RuntimeBackendKind, 'builtin'>
   command: string
+  assistantCommand?: string
+  assistantPathEnvironment?: string
   args?: string[]
   versionArgs?: string[]
   promptTransport?: RuntimePromptTransport
@@ -56,9 +58,8 @@ export type AdapterDescriptor = {
   bundled: boolean
   modelEnvironment?: string
   nativeCommand?: {
-    adapterEnvironment: string
-    command: string
     overrideEnvironment: string
+    resolveWindowsShim?: boolean
   }
   permissionMode?: {
     environment: string
@@ -82,11 +83,12 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
       schemaVersion: 1,
       id: 'codex',
       name: 'Codex',
-      description:
-        '通过 CFlow 随包提供的 ACP adapter 连接本机安装的 Codex。默认只读；能力声明 workspace 写入后可修改工作区文件。',
+      description: '连接当前用户环境中安装的 Codex。默认只读；能力声明工作区写入后可修改项目文件。',
       backend: 'acp',
       command: 'codex-acp',
-      envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'CODEX_HOME', 'OPENAI_API_KEY'],
+      assistantCommand: 'codex',
+      assistantPathEnvironment: 'CODEX_PATH',
+      envAllowlist: ['HOME', 'LANG', 'LC_ALL', 'CODEX_HOME', 'CODEX_API_KEY', 'OPENAI_API_KEY'],
       capabilities: ['reasoning', 'code', 'structured-output', 'workspace-read'],
       traits: { tokenAccounting: 'approximate' },
     },
@@ -94,8 +96,6 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
     bundled: true,
     modelEnvironment: 'CODEX_CONFIG',
     nativeCommand: {
-      adapterEnvironment: 'CODEX_PATH',
-      command: 'codex',
       overrideEnvironment: 'CFLOW_CODEX_PATH',
     },
     permissionMode: {
@@ -110,9 +110,11 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
       schemaVersion: 1,
       id: 'claude-code',
       name: 'Claude Code',
-      description: '通过 CFlow 随包提供的 ACP adapter 连接本机安装的 Claude Code。',
+      description: '连接当前用户环境中安装的 Claude Code。',
       backend: 'acp',
       command: 'claude-agent-acp',
+      assistantCommand: 'claude',
+      assistantPathEnvironment: 'CLAUDE_CODE_EXECUTABLE',
       envAllowlist: [
         'HOME',
         'LANG',
@@ -141,9 +143,8 @@ export const builtinAdapterDescriptors: AdapterDescriptor[] = [
     bundled: true,
     modelEnvironment: 'CLAUDE_MODEL_CONFIG',
     nativeCommand: {
-      adapterEnvironment: 'CLAUDE_CODE_EXECUTABLE',
-      command: 'claude',
       overrideEnvironment: 'CFLOW_CLAUDE_PATH',
+      resolveWindowsShim: true,
     },
   },
 ]
@@ -291,6 +292,23 @@ export const normalizeManifest = (value: unknown, baseDirectory?: string): Agent
     (rawCommand.startsWith('./') || rawCommand.startsWith('../'))
       ? resolve(baseDirectory, rawCommand)
       : rawCommand
+  const rawAssistantCommand =
+    input.assistantCommand === undefined
+      ? undefined
+      : stringValue(input.assistantCommand, 'ASSISTANT_COMMAND', 500)
+  const assistantCommand =
+    baseDirectory &&
+    rawAssistantCommand &&
+    !isAbsolute(rawAssistantCommand) &&
+    (rawAssistantCommand.startsWith('./') || rawAssistantCommand.startsWith('../'))
+      ? resolve(baseDirectory, rawAssistantCommand)
+      : rawAssistantCommand
+  const assistantPathEnvironment =
+    input.assistantPathEnvironment === undefined
+      ? undefined
+      : stringValue(input.assistantPathEnvironment, 'ASSISTANT_PATH_ENVIRONMENT', 100)
+  if (assistantPathEnvironment && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(assistantPathEnvironment))
+    throw new Error('ASSISTANT_PATH_ENVIRONMENT_INVALID')
   const promptTransport = input.promptTransport
   if (
     promptTransport !== undefined &&
@@ -314,6 +332,8 @@ export const normalizeManifest = (value: unknown, baseDirectory?: string): Agent
         : stringValue(input.description, 'DESCRIPTION', 400),
     backend,
     command,
+    assistantCommand,
+    assistantPathEnvironment,
     args: stringList(input.args, 'ARGS', 40),
     versionArgs: stringList(input.versionArgs, 'VERSION_ARGS', 10),
     promptTransport,
@@ -332,6 +352,8 @@ const projectAgentConfig = (manifest: AgentManifest): ProjectAgentConfig => ({
   name: manifest.name,
   description: manifest.description,
   command: manifest.command,
+  assistantCommand: manifest.assistantCommand,
+  assistantPathEnvironment: manifest.assistantPathEnvironment,
   args: manifest.args ?? [],
   outputMode: manifest.outputMode ?? 'json',
   envAllowlist: manifest.envAllowlist ?? [],
@@ -365,8 +387,32 @@ const safeProjectManifestPath = (projectRoot: string, manifestPath: string) => {
   return manifestPath
 }
 
-export const listProjectAgentConfigs = (projectRoot: string) =>
-  projectRecords(projectRoot).map((item) => projectAgentConfig(item.manifest))
+export const isPresetProjectAgentId = (id: string) =>
+  builtinAdapterDescriptors.some((descriptor) => descriptor.manifest.id === id)
+
+export const listProjectAgentConfigs = (projectRoot: string) => {
+  const projects = projectRecords(projectRoot)
+  const projectById = new Map(projects.map((item) => [item.manifest.id, item]))
+  const presets = builtinAdapterDescriptors.map((descriptor) => {
+    const override = projectById.get(descriptor.manifest.id)
+    projectById.delete(descriptor.manifest.id)
+    return {
+      ...projectAgentConfig(
+        override ? { ...descriptor.manifest, ...override.manifest } : descriptor.manifest,
+      ),
+      preset: true,
+      overridden: Boolean(override),
+    }
+  })
+  return [
+    ...presets,
+    ...[...projectById.values()].map((item) => ({
+      ...projectAgentConfig(item.manifest),
+      preset: false,
+      overridden: false,
+    })),
+  ]
+}
 
 export const normalizeProjectAgentConfig = (value: unknown): ProjectAgentConfig => {
   if (!value || typeof value !== 'object' || Array.isArray(value))
@@ -379,6 +425,8 @@ export const normalizeProjectAgentConfig = (value: unknown): ProjectAgentConfig 
     description: input.description,
     backend: 'acp',
     command: input.command,
+    assistantCommand: input.assistantCommand,
+    assistantPathEnvironment: input.assistantPathEnvironment,
     args: input.args,
     outputMode: input.outputMode,
     envAllowlist: input.envAllowlist,
@@ -396,13 +444,15 @@ export const saveProjectAgentConfig = (
   const config = normalizeProjectAgentConfig(value)
   if (originalId && config.id !== originalId) throw new Error('PROJECT_AGENT_ID_IMMUTABLE')
   const existing = projectRecords(projectRoot).find((item) => item.manifest.id === config.id)
-  if (originalId && !existing) throw new Error('PROJECT_AGENT_NOT_FOUND')
+  if (originalId && !existing && !isPresetProjectAgentId(config.id))
+    throw new Error('PROJECT_AGENT_NOT_FOUND')
   if (!originalId && existing) throw new Error('PROJECT_AGENT_ID_CONFLICT')
   const directory = projectManifestDirectory(projectRoot, true)
   const target = existing?.manifestPath
     ? safeProjectManifestPath(projectRoot, existing.manifestPath)
     : join(directory, `${config.id}.json`)
   if (!originalId && existsSync(target)) throw new Error('PROJECT_AGENT_ID_CONFLICT')
+  if (originalId && !existing && existsSync(target)) safeProjectManifestPath(projectRoot, target)
   const manifest: AgentManifest = { schemaVersion: 1, backend: 'acp', ...config }
   const temporary = join(directory, `.${config.id}-${randomUUID()}.tmp`)
   try {
