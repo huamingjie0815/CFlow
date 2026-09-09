@@ -58,6 +58,8 @@ export function runtimeDiscoveryLabel(source?: string) {
 
 export function runtimeHealthErrorSummary(error?: string) {
   if (!error) return '连接握手没有完成，请展开技术详情查看原因。'
+  if (/CLAUDE_AUTH_REQUIRED/.test(error))
+    return 'Claude Code 尚未通过当前 CFlow 进程完成认证，请在同一系统用户下检查登录和服务地址配置。'
   if (/BUNDLED_.*NOT_FOUND/.test(error)) return '随 CFlow 安装的助手组件不完整，请重新安装 CFlow。'
   if (/NOT_FOUND|ENOENT/.test(error)) return '没有找到可启动的程序，请确认助手已经正确安装。'
   if (/HANDSHAKE_TIMEOUT/.test(error)) return '助手已经启动，但没有在限定时间内回应。'

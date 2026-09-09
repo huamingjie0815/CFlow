@@ -404,6 +404,156 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
+test('Claude ACP health verifies a session with the configured provider environment', async () => {
+  const root = join('/tmp', `cf-claude-acp-health-${randomUUID()}`)
+  const adapter = join(root, 'claude-agent-acp')
+  const claude = join(root, 'claude')
+  const previousClaude = process.env.CFLOW_CLAUDE_PATH
+  const previousBaseUrl = process.env.ANTHROPIC_BASE_URL
+  const previousModel = process.env.ANTHROPIC_MODEL
+  mkdirSync(root, { recursive: true })
+  writeFileSync(claude, '#!/bin/sh\nexit 0\n')
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        protocolVersion: request.params.protocolVersion,
+        agentCapabilities: {},
+        authMethods: [{ id: 'claude-ai-login', name: 'Claude Subscription', type: 'terminal', args: [] }]
+      } }) + '\\n')
+    } else if (request.method === 'session/new') {
+      const configured = process.env.ANTHROPIC_BASE_URL === 'https://provider.example' &&
+        process.env.ANTHROPIC_MODEL === 'saas-deepseek-v4-pro'
+      process.stdout.write(JSON.stringify(configured
+        ? { jsonrpc: '2.0', id: request.id, result: { sessionId: 'health-session' } }
+        : { jsonrpc: '2.0', id: request.id, error: {
+            code: -32000,
+            message: 'Authentication required: Configure an API key or log in with an OAuth provider.'
+          } }) + '\\n')
+    }
+  }
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
+  chmodSync(claude, 0o755)
+  process.env.CFLOW_CLAUDE_PATH = claude
+  process.env.ANTHROPIC_BASE_URL = 'https://provider.example'
+  process.env.ANTHROPIC_MODEL = 'saas-deepseek-v4-pro'
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    const profile = manager.profile('claude-code')!
+    store.saveRuntimeProfile({
+      ...profile,
+      profileVersion: store.nextRuntimeProfileVersion('claude-code'),
+      command: adapter,
+    })
+
+    const health = await manager.health('claude-code')
+    assert.equal(health.status, 'available', health.error)
+    assert.equal(health.authentication, 'verified')
+  } finally {
+    store.close()
+    if (previousClaude === undefined) delete process.env.CFLOW_CLAUDE_PATH
+    else process.env.CFLOW_CLAUDE_PATH = previousClaude
+    if (previousBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL
+    else process.env.ANTHROPIC_BASE_URL = previousBaseUrl
+    if (previousModel === undefined) delete process.env.ANTHROPIC_MODEL
+    else process.env.ANTHROPIC_MODEL = previousModel
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('Claude ACP health reports authentication failures before the runtime is selected', async () => {
+  const root = join('/tmp', `cf-claude-acp-auth-${randomUUID()}`)
+  const adapter = join(root, 'claude-agent-acp')
+  const claude = join(root, 'claude')
+  const previousClaude = process.env.CFLOW_CLAUDE_PATH
+  mkdirSync(root, { recursive: true })
+  writeFileSync(claude, '#!/bin/sh\nexit 0\n')
+  writeFileSync(
+    adapter,
+    `#!/usr/bin/env node
+let buffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  buffer += chunk
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    if (request.method === 'initialize') {
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
+        protocolVersion: request.params.protocolVersion,
+        agentCapabilities: {},
+        authMethods: [{ id: 'claude-ai-login', name: 'Claude Subscription', type: 'terminal', args: [] }]
+      } }) + '\\n')
+    } else if (request.method === 'session/new') {
+      console.error('[session/query] sessionId=health-session resume=none apiType=native baseUrl=native')
+      process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, error: {
+        code: -32000,
+        message: 'Authentication required: Configure an API key or log in with an OAuth provider.'
+      } }) + '\\n')
+    }
+  }
+})
+`,
+  )
+  chmodSync(adapter, 0o755)
+  chmodSync(claude, 0o755)
+  process.env.CFLOW_CLAUDE_PATH = claude
+  const store = new Store(join(root, 'runtime.sqlite'))
+  try {
+    const manager = new RuntimeManager(store, {
+      projectRoot: root,
+      userManifestDirectory: false,
+      projectManifestDirectory: false,
+      packageRoot: false,
+    })
+    const profile = manager.profile('claude-code')!
+    store.saveRuntimeProfile({
+      ...profile,
+      profileVersion: store.nextRuntimeProfileVersion('claude-code'),
+      command: adapter,
+    })
+
+    const health = await manager.health('claude-code')
+    assert.equal(health.status, 'unavailable')
+    assert.equal(health.authentication, 'required')
+    assert.match(health.error ?? '', /^CLAUDE_AUTH_REQUIRED:/)
+    assert.doesNotMatch(health.error ?? '', /\[session\/query\]/)
+    await assert.rejects(
+      manager.execute('claude-code', 'hello', {}, AbortSignal.timeout(2_000)),
+      (error) => {
+        assert.ok(error instanceof RuntimeExecutionException)
+        assert.equal(error.details.code, 'AUTHENTICATION_REQUIRED')
+        assert.match(error.message, /认证不可用/)
+        return true
+      },
+    )
+  } finally {
+    store.close()
+    if (previousClaude === undefined) delete process.env.CFLOW_CLAUDE_PATH
+    else process.env.CFLOW_CLAUDE_PATH = previousClaude
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('retries a bundled ACP runtime after a transient cold-start failure', async () => {
   const root = join('/tmp', `cf-acp-cold-start-${randomUUID()}`)
   const executable = join(root, 'cold-start-acp')
@@ -525,13 +675,18 @@ let buffer = ''
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk) => {
   buffer += chunk
-  const newline = buffer.indexOf('\\n')
-  if (newline < 0) return
-  const request = JSON.parse(buffer.slice(0, newline))
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: {
-    protocolVersion: request.params.protocolVersion,
-    agentCapabilities: {}, authMethods: []
-  } }) + '\\n')
+  while (buffer.includes('\\n')) {
+    const newline = buffer.indexOf('\\n')
+    const request = JSON.parse(buffer.slice(0, newline))
+    buffer = buffer.slice(newline + 1)
+    const result = request.method === 'session/new'
+      ? { sessionId: 'health-session' }
+      : {
+          protocolVersion: request.params.protocolVersion,
+          agentCapabilities: {}, authMethods: []
+        }
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\\n')
+  }
 })
 `,
   )

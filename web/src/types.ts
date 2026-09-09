@@ -39,7 +39,7 @@ export type RuntimeWithHealth = RuntimeProfile & {
     version?: string
     error?: string
     stage?: 'installed' | 'adapter-ready' | 'protocol-ready'
-    authentication?: 'unknown' | 'verified'
+    authentication?: 'unknown' | 'verified' | 'required'
   }
 }
 

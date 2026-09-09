@@ -45,6 +45,22 @@ import {
 } from './runtime-process.js'
 
 const ADAPTER_BUILD = 'cf-runtime-adapter/4'
+const CLAUDE_AUTH_REQUIRED =
+  'CLAUDE_AUTH_REQUIRED:Claude Code 认证不可用。请在启动 CFlow 的同一系统用户下登录 Claude，或检查 Anthropic 服务地址和认证环境变量，然后重启 CFlow。'
+
+const isAuthenticationRequired = (error: unknown) =>
+  /authentication required|not logged in|please run \/login|log in with an oauth provider/i.test(
+    error instanceof Error ? error.message : String(error),
+  )
+
+const stderrDetail = (value: string) =>
+  value
+    .split(/\r?\n/)
+    .filter((line) => !/^\[session\/query\]\s/.test(line.trim()))
+    .join('\n')
+    .trim()
+    .slice(-800)
+
 export class RuntimeExecutionException extends Error {
   readonly details: import('./types.js').RuntimeExecutionError
   constructor(details: import('./types.js').RuntimeExecutionError) {
@@ -590,7 +606,7 @@ export class RuntimeManager {
     if (profile.backend === 'acp') {
       const started = Date.now()
       try {
-        const version = await this.probeHealthWithRetry(profile, () => this.probeAcp(profile))
+        const probe = await this.probeHealthWithRetry(profile, () => this.probeAcp(profile))
         return {
           runtimeId: id,
           profileVersion: profile.profileVersion,
@@ -598,8 +614,8 @@ export class RuntimeManager {
           checkedAt: new Date().toISOString(),
           latencyMs: Date.now() - started,
           stage: 'protocol-ready',
-          authentication: 'unknown',
-          version,
+          authentication: probe.authentication,
+          version: probe.version,
         }
       } catch (error) {
         return {
@@ -609,7 +625,10 @@ export class RuntimeManager {
           checkedAt: new Date().toISOString(),
           latencyMs: Date.now() - started,
           stage: this.commandInstalled(profile) ? 'installed' : undefined,
-          authentication: 'unknown',
+          authentication:
+            error instanceof Error && error.message.startsWith('CLAUDE_AUTH_REQUIRED:')
+              ? 'required'
+              : 'unknown',
           error: error instanceof Error ? error.message : String(error),
         }
       }
@@ -643,7 +662,7 @@ export class RuntimeManager {
     }
     throw new Error(`RUNTIME_BACKEND_UNSUPPORTED:${profile.backend}`)
   }
-  private async probeHealthWithRetry(profile: RuntimeProfile, probe: () => Promise<string>) {
+  private async probeHealthWithRetry<T>(profile: RuntimeProfile, probe: () => Promise<T>) {
     const bundled = Boolean(adapterDescriptorForId(profile.id)?.bundled)
     const attempts = bundled ? 2 : 1
     let lastError: unknown
@@ -653,7 +672,10 @@ export class RuntimeManager {
       } catch (error) {
         lastError = error
         const message = error instanceof Error ? error.message : String(error)
-        if (attempt === attempts || /NOT_FOUND|CLI_NOT_FOUND|BUNDLED_.*NOT_FOUND/.test(message))
+        if (
+          attempt === attempts ||
+          /NOT_FOUND|CLI_NOT_FOUND|BUNDLED_.*NOT_FOUND|AUTH_REQUIRED/.test(message)
+        )
           break
         await new Promise((resolve) => setTimeout(resolve, 150))
       }
@@ -828,12 +850,19 @@ export class RuntimeManager {
       )
       const initialize = acpClient({ name: 'CFlow Health Check' }).connectWith(
         stream,
-        async (ctx) =>
-          ctx.request(methods.agent.initialize, {
+        async (ctx) => {
+          const response = await ctx.request(methods.agent.initialize, {
             protocolVersion: PROTOCOL_VERSION,
             clientInfo: { name: 'CFlow', version: ADAPTER_BUILD },
             clientCapabilities: { plan: {}, session: {} },
-          }),
+          })
+          if (profile.id === 'claude-code')
+            await ctx.request(methods.agent.session.new, {
+              cwd: profile.workingDirectory ?? process.cwd(),
+              mcpServers: [],
+            })
+          return response
+        },
       )
       const childError = new Promise<never>((_, reject) => child.once('error', reject))
       const childExit = new Promise<never>((_, reject) =>
@@ -851,15 +880,22 @@ export class RuntimeManager {
       const agent = response.agentInfo
         ? [response.agentInfo.name, response.agentInfo.version].filter(Boolean).join(' ')
         : undefined
-      return [
-        `ACP ${response.protocolVersion}`,
-        agent,
-        `via ${describeResolvedCommand(spec.resolved)}`,
-      ]
-        .filter(Boolean)
-        .join(' · ')
+      return {
+        authentication: profile.id === 'claude-code' ? ('verified' as const) : ('unknown' as const),
+        version: [
+          `ACP ${response.protocolVersion}`,
+          agent,
+          `via ${describeResolvedCommand(spec.resolved)}`,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      }
     } catch (error) {
-      const detail = stderr.toString('utf8').trim().slice(-800)
+      if (profile.id === 'claude-code' && isAuthenticationRequired(error))
+        throw new Error(
+          `${CLAUDE_AUTH_REQUIRED} [launch=${describeResolvedCommand(spec.resolved)}]`,
+        )
+      const detail = stderrDetail(stderr.toString('utf8'))
       if (error instanceof Error)
         throw new Error(
           `${error.message}${detail ? `:${detail}` : ''} [launch=${describeResolvedCommand(spec.resolved)}]`,
@@ -1179,7 +1215,7 @@ export class RuntimeManager {
           })
         })
     } catch (error) {
-      const detail = stderrText.trim().slice(-800)
+      const detail = stderrDetail(stderrText)
       if (error instanceof Error) {
         if (signal.aborted)
           throw new RuntimeExecutionException({
@@ -1192,6 +1228,14 @@ export class RuntimeManager {
             )
               ? 'unknown'
               : 'none',
+          })
+        if (profile.id === 'claude-code' && isAuthenticationRequired(error))
+          throw new RuntimeExecutionException({
+            layer: 'adapter',
+            code: 'AUTHENTICATION_REQUIRED',
+            message: CLAUDE_AUTH_REQUIRED.slice('CLAUDE_AUTH_REQUIRED:'.length),
+            retryable: false,
+            effectState: 'none',
           })
         throw new Error(detail ? `${error.message}:${detail}` : error.message)
       }

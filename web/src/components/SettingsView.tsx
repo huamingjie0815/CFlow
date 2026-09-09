@@ -183,9 +183,11 @@ export function SettingsView(props: SettingsViewProps) {
                     <small
                       title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
                     >
-                      {runtime.health?.authentication === 'unknown'
-                        ? '登录状态会在真正使用时确认'
-                        : '已确认可用'}
+                      {runtime.health?.authentication === 'required'
+                        ? '需要重新登录或检查认证配置'
+                        : runtime.health?.authentication === 'unknown'
+                          ? '登录状态会在真正使用时确认'
+                          : '已确认可用'}
                     </small>
                     {runtime.health?.status === 'unavailable' && (
                       <>

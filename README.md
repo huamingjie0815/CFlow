@@ -90,6 +90,8 @@ SQLite 使用 WAL 模式。主要数据包括能力和流程草稿、不可变�
 
 CFlow 随包提供 Codex 和 Claude Code 的 ACP 连接组件，但对应的 `codex` 或 `claude` CLI 仍须在本机安装；未找到 CLI 时，助手会显示为不可用。其他 ACP 或 CLI Agent 可通过 manifest 接入，配置可以来自 PATH、npm 包、用户目录或项目目录，项目配置优先。
 
+Claude Code 的连接检查会创建一个不发送提示词的临时 ACP 会话，以同时验证 CLI 登录状态和模型服务配置。使用自定义 Anthropic 兼容服务时，请在启动 CFlow 前设置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等所需系统环境变量，并在变量变更后完全重启 CFlow。CFlow 也会传递 Claude 官方使用的 OAuth、代理、Bedrock 和 Vertex 路由变量，但不会把变量值写入项目文件或浏览器存储。未认证时，Claude Code 会显示为不可用，并提示在启动 CFlow 的同一系统用户下完成登录。
+
 在「工作台设置 → 本机助手」中选择「接入项目助手」，可以为当前项目创建或编辑外部 ACP 助手。填写助手名称、配置标识、启动命令和参数后，CFlow 会把配置写入 `.cflow/agents.d/`，立即重新识别并测试连接。新建时可套用 Pi Agent 示例；Pi 本身不直接支持 ACP，该示例通过社区 `pi-acp` 适配器连接，因此需先安装并登录 Pi。项目助手可以在同一处编辑或删除；当前默认助手需要先切换默认项才能删除。删除只影响新流程，已发布流程和历史运行仍保留固定的 Runtime Profile 版本。
 
 用户级 manifest 位于 `~/.config/cflow/agents.d/`，项目级 manifest 位于 `.cflow/agents.d/`。Runtime Profile 按版本保存，发布流程引用具体版本。项目助手配置只保存允许传入的环境变量名称，不接收也不落盘密钥值；密钥必须由启动 CFlow 的环境提供。

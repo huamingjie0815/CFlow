@@ -296,7 +296,7 @@ export interface RuntimeHealth {
   checkedAt: string
   latencyMs: number
   stage?: 'installed' | 'adapter-ready' | 'protocol-ready'
-  authentication?: 'unknown' | 'verified'
+  authentication?: 'unknown' | 'verified' | 'required'
   version?: string
   error?: string
 }
