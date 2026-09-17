@@ -1,18 +1,165 @@
+<p align="center">
+  <img src="web/public/cflow-mark.svg" alt="CFlow" width="72">
+</p>
+
 # CFlow
 
-CFlow 是一个以 Flow 为核心的本机多 Agent 编排工作台。用户用自然语言描述目标，由助手生成流程草案，在桌面画布中调整、检查、测试、发布和运行，并通过运行记录追踪结果。
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-面向 HR、财务、运营等业务人员，CFlow 使用业务语言呈现步骤、条件和执行状态。支持 1280px 及以上的桌面浏览器，左右侧栏可调整宽度或收起。
+[![npm](https://img.shields.io/npm/v/@hmj-ai/cflow)](https://www.npmjs.com/package/@hmj-ai/cflow)
+[![Node.js](https://img.shields.io/node/v/@hmj-ai/cflow)](https://nodejs.org)
+[![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](LICENSE)
 
-## 安装与运行
+A **local workbench for inspectable multi-agent workflow graphs**. Describe an objective in plain language, review the generated DAG on a desktop canvas, then check, test, publish, and run — with an auditable event ledger instead of a chat log.
 
-需要 Node.js 22.13.0 或更高版本。在目标工作目录运行：
+CFlow is for desktop browsers at **1280px and wider**. Sidebars resize or collapse in place; there is no mobile or touch layout.
+
+![CFlow workbench](docs/images/workbench.png)
 
 ```bash
 npx @hmj-ai/cflow
 ```
 
-也可以全局安装：
+The workbench opens at `http://127.0.0.1:3000`. Add the Hello World example to check and test without configuring an assistant.
+
+---
+
+## What it is
+
+CFlow belongs with **agent graphs** and visual **workflow** tools: reusable steps on a DAG, routed by branches and joins, executed by a scheduler.
+
+In this codebase that graph is named a **Flow** — a compiled, versioned DAG of capabilities. Treat it as a domain term, not a new category. The interesting design is not the name; it is that **assistants never own the graph**.
+
+It is **not RAG**. CFlow does not index a corpus or retrieve chunks as its core loop. The builtin file extractor is one node you can place on the graph so later agent steps can read documents.
+
+| If you know                   | In CFlow                                                                                              |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Agent graph (LangGraph-style) | A DAG of `cf-call`, `branch`, `join`, `output`. The compiler, not the agent, owns edges.              |
+| Visual workflow               | Desktop canvas plus check / test / publish. Steps are contracted capabilities, not opaque HTTP nodes. |
+| RAG / GraphRAG                | Not the model. Documents can feed a node; there is no retriever or vector index.                      |
+
+---
+
+## Core design
+
+CFlow separates **what a step does** from **how the graph routes**. Assistants propose an ordered stage list; the server builds and validates the DAG.
+
+### Capability (CF)
+
+A CF is one reusable unit of work. It declares:
+
+- a name and a `does` description
+- optional input, output, and process guidance
+- JSON Schema **input/output contracts**
+- workspace-scoped **effects**: `file-read`, `file-write`, or `command`
+
+Execution is either:
+
+| Program | Meaning                                                        |
+| ------- | -------------------------------------------------------------- |
+| `v0.2`  | An Agent task compiled from the draft. No nested control flow. |
+| `v0.3`  | A versioned builtin tool identity. Today: `file.extract-text`. |
+
+A CF program is a task (or a tool id), not a nested graph. Branching, joining, retry, and termination live on the DAG.
+
+### Workflow graph
+
+A workflow graph (a **Flow** in CFlow types) is a **directed acyclic graph** of:
+
+| Node      | Role                                                 |
+| --------- | ---------------------------------------------------- |
+| `cf-call` | Invoke a CF, optionally with retry (`onError`)       |
+| `branch`  | Route by a natural-language condition to named cases |
+| `join`    | Wait for `all` or `any` upstream paths               |
+| `output`  | Terminal result                                      |
+
+Edges start from `$entry` and carry an outcome: `completed`, `failed`, or `branch-case`. The compiler — not the canvas, not the assistant — is the source of a runnable plan.
+
+### Assistants propose stages; the server owns the graph
+
+When you describe a goal or ask the workbench assistant to revise a draft, the runtime may return an **ordered stage list**: capability steps and top-level branches. It must not emit raw edges, joins, hashes, or published versions.
+
+The server then:
+
+1. Builds nodes, edges, and joins **deterministically** from that list.
+2. Compiles contracts and graph structure.
+3. Saves a draft you can still edit.
+
+That split is intentional: an assistant can suggest _what should happen_; it cannot hand CFlow an unvalidated graph.
+
+### Draft, snapshot, published version
+
+| Artifact                  | Mutable | Version number                      | Role                                                                    |
+| ------------------------- | ------- | ----------------------------------- | ----------------------------------------------------------------------- |
+| **Draft**                 | Yes     | `revision` (optimistic concurrency) | What you edit on the canvas                                             |
+| **Check / test snapshot** | No      | None                                | Temporary compiled plan; does not consume a publish number              |
+| **Published `FlowPlan`**  | No      | `1.0.0`, then `2.0.0`, …            | Pinned CF versions, Runtime Profile versions, workspace, and `planHash` |
+
+Editing, checking, and testing never bump the publish number. The first publish of a graph is `1.0.0`; later publishes increment from existing published versions. A published plan is immutable: later draft edits do not rewrite history or in-flight runs.
+
+### Runs are ledger-driven
+
+A **Run** is one test or production execution. The engine:
+
+1. Verifies `planHash` before dispatch.
+2. Reconstructs node state from the ordered **event ledger**.
+3. Admits ready nodes under `maxConcurrency` and `maxNodeDispatches`.
+4. Retries a CF only when the error is retryable **and** the effect state is known (`none` / `started` / `committed`).
+5. Marks the run `needs-reconciliation` if a node was started but not finished, or if effect state is `unknown` — it does **not** blindly replay a side-effecting step.
+
+The workbench reads that ledger over HTTP and SSE and shows business-language status; technical facts stay available on demand.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    UI[Desktop workbench] -->|HTTP JSON / SSE| Server[Fastify]
+    Server --> Proposal[Proposal builder]
+    Server --> Compiler[Compiler]
+    Server --> Engine[Engine]
+    Server --> Runtime[RuntimeManager]
+    Server --> DB[(SQLite WAL)]
+    Proposal -->|"stage list only"| Compiler
+    Compiler -->|"hashed FlowPlan"| Engine
+    Engine --> DB
+    Engine --> Runtime
+    Engine --> Tools[Builtin tools]
+    Runtime --> Adapters[ACP adapter processes]
+    Adapters --> Agents[Assistant CLIs in the user environment]
+```
+
+| Module            | Path                                   | Responsibility                                                            |
+| ----------------- | -------------------------------------- | ------------------------------------------------------------------------- |
+| Desktop workbench | `web/src/`                             | Canvas, capability library, assistant, check, run log                     |
+| HTTP server       | `src/server.ts`                        | Workspace boundary, drafts, compile, publish, SSE                         |
+| Proposal          | `src/proposal.ts`, `src/flow-agent.ts` | Turn a stage list into a FlowDraft; assistant may answer or revise stages |
+| Compiler          | `src/compiler.ts`                      | Contracts, DAG rules, hashed `FlowPlan`                                   |
+| Engine            | `src/engine.ts`                        | Dispatch, concurrency, retry, cancel, recovery                            |
+| Runtime           | `src/runtime.ts`                       | Agent discovery, health, ACP, output validation                           |
+| Process layer     | `src/runtime-process.ts`               | Command resolution, cwd, env allowlist, timeout, termination              |
+| Store             | `src/db.ts`                            | Drafts, versions, snapshots, runs, ledger, job leases, profiles           |
+| Domain types      | `src/types.ts`                         | CF, Flow, Run, Runtime, resources                                         |
+
+### Compile → bind → execute
+
+1. **Compile.** Validate CF contracts and effects; require a workspace root, an entry, full reachability, no cycles, complete branch cases, and at least one terminal `output`. Emit `FlowPlan` v0.6 plus `planHash`.
+2. **Bind.** Check and test store a snapshot. Publish inserts an immutable version and **pins** each `cf-call` to a Runtime Profile version (builtin tools have no executor pin).
+3. **Execute.** The engine claims a job lease, restores state from the ledger, and dispatches ready nodes. Agent CFs start a controlled ACP child process; builtin tools run locally. Outputs are checked against the CF contract.
+4. **Observe.** The workbench tails run events. Recovery uses leases and the ledger so a restart does not replay committed work.
+
+---
+
+## Install
+
+Requires **Node.js 22.13.0** or later.
+
+```bash
+npx @hmj-ai/cflow
+```
+
+Or install globally:
 
 ```bash
 npm install -g @hmj-ai/cflow
@@ -20,95 +167,89 @@ cd /path/to/your/workspace
 cflow
 ```
 
-正式 `cflow` 命令会在服务监听成功后自动打开浏览器，默认地址为 `http://127.0.0.1:3000`。设置 `CFLOW_NO_OPEN=1` 可以只启动服务而不打开页面。服务启动目录就是工作区，流程数据保存在该目录的 `.cflow/` 中。`PORT` 可设置端口；服务默认只监听回环地址，通过 `HOST` 对外提供访问前应配置认证和网络访问控制。
+The directory you start in **is** the workspace. Graph data is stored in `.cflow/` under that directory.
 
-打开工作台后可以添加 Hello World 示例，使用内置演示执行器完成检查和测试，无需先配置 Agent。
+| Variable        | Default     | Purpose                                                               |
+| --------------- | ----------- | --------------------------------------------------------------------- |
+| `PORT`          | `3000`      | Listen port                                                           |
+| `HOST`          | `127.0.0.1` | Bind address. The process listens on loopback unless you change this. |
+| `CFLOW_NO_OPEN` | unset       | Set to `1` to start the server without opening a browser              |
 
-## 核心模型
+The packaged `cflow` command opens the browser after listen succeeds. Before binding `HOST` to a non-loopback address, put authentication and network access control in front of the process — CFlow does not ship a remote auth layer.
 
-- **CF**：单个可复用能力，定义输入、输出和允许的操作，由 Agent 或内置工具执行。
-- **Flow**：由能力调用、分支、汇合和输出节点组成的有向无环图，负责条件路由、并发和重试。
-- **草稿**：可编辑的流程和能力配置。编辑修订号用于保存与并发校验。
-- **发布版本**：固定流程计划、能力版本、运行时配置及哈希。每个流程首次发布为 `1.0.0`，后续基于已有发布版本递增，编辑、检查和测试不占用发布号。
-- **Run**：一次测试或正式运行，记录输入、步骤状态、输出及执行事件。
+---
 
-典型工作流：描述目标 → 调整流程 → 检查 → 测试 → 发布 → 运行 → 查看结果。
+## Usage
 
-内置文件内容提取能力可在本机读取 DOCX、XLSX、PPTX、文本型 PDF、CSV、Markdown、HTML、TXT、JSON 和 XML，供后续节点使用。它不调用 Agent，不执行宏，不进行 OCR 或修改源文件。
+Typical path:
 
-## 架构
+**Describe an objective → adjust the graph → check → test → publish → run → inspect the ledger.**
 
-```mermaid
-flowchart TD
-    UI[React 桌面工作台] -->|HTTP JSON / SSE| Server[Fastify 服务]
-    Server --> Compiler[Compiler：契约与流程图校验]
-    Server --> Engine[Engine：调度、重试与恢复]
-    Server --> Runtime[RuntimeManager：Agent 发现与配置]
-    Server --> DB[(SQLite)]
-    Engine --> DB
-    Engine --> Runtime
-    Engine --> Tools[本机内置工具]
-    Runtime --> Adapters[ACP 连接进程]
-    Adapters --> Agents[用户环境中的助手 CLI]
-```
+1. Start CFlow in the project directory that should own the files.
+2. Open the workbench and either add **Hello World** (uses the builtin demo executor) or describe a real objective to the workbench assistant.
+3. Edit steps, branches, and joins on the canvas. Capability copy is business language; contracts and effects stay inspectable.
+4. **Check** compiles the current draft and reports graph/contract problems. It does not run agents.
+5. **Test** compiles a snapshot, pins currently available runtimes, and executes a Run without publishing.
+6. **Publish** freezes a `FlowPlan`. **Run** executes that published plan.
+7. Open the run log for step status, outputs, and failure detail.
 
-### 模块职责
+### Builtin file extraction
 
-| 模块         | 位置                     | 职责                                               |
-| ------------ | ------------------------ | -------------------------------------------------- |
-| 桌面工作台   | `web/src/`               | 流程画布、能力配置、助手、检查与运行记录           |
-| HTTP 服务    | `src/server.ts`          | API、工作区边界、草稿保存、编译与发布              |
-| 编译器       | `src/compiler.ts`        | 输入输出契约、图结构与分支校验，生成执行计划和哈希 |
-| 执行引擎     | `src/engine.ts`          | 节点调度、并发、重试、取消与恢复                   |
-| Runtime 管理 | `src/runtime.ts`         | Agent 发现、健康检查、协议适配与输出校验           |
-| 进程管理     | `src/runtime-process.ts` | 命令解析、工作目录、环境变量、超时与进程终止       |
-| 数据存储     | `src/db.ts`              | 草稿、发布版本、运行状态、事件与任务队列           |
-| 领域模型     | `src/types.ts`           | CF、Flow、Run、Runtime 和资源类型                  |
+`builtin:file.extract-text` reads workspace files locally and returns text plus source structure (pages, sheets, slides). Supported formats: **DOCX, XLSX, PPTX, text PDF, CSV, Markdown, HTML, TXT, JSON, XML**.
 
-### 执行流程
+It does not call an assistant, does not execute macros, does not OCR, and does not modify source files. Input is configured **per graph node** (explicit paths, graph input, or a direct upstream output). Paths must be workspace-relative regular files; symlinks are rejected.
 
-1. 编译器校验能力契约、入口、可达性、环路、分支与终点，生成执行计划。
-2. 服务绑定具体能力和 Runtime Profile 版本；检查和测试保存临时快照，发布保存独立版本。
-3. 引擎创建运行任务，根据依赖和分支条件调度节点，将状态与结果写入有序事件记录。
-4. Runtime 启动受控 Agent 子进程，内置工具直接在本机执行；结果按输出契约校验。
-5. 工作台读取运行状态和事件，呈现结果及失败原因。恢复过程通过任务租约和事件记录避免盲目重放已发生的操作。
+---
 
-## 数据与工作区
+## Agents and execution boundary
+
+CFlow talks to assistants through **ACP** ([Agent Client Protocol](https://agentclientprotocol.com)). The npm package bundles Codex and Claude Code **protocol adapters**. Those adapters are not the assistants. The real `codex`, `claude`, and other CLIs must already exist in the environment that launched CFlow.
+
+If the configured CLI is missing, the assistant shows as unavailable.
+
+| Default assistant | ACP adapter command | User CLI | Path variable passed to the adapter |
+| ----------------- | ------------------- | -------- | ----------------------------------- |
+| Codex             | `codex-acp`         | `codex`  | `CODEX_PATH`                        |
+| Claude Code       | `claude-agent-acp`  | `claude` | `CLAUDE_CODE_EXECUTABLE`            |
+
+The adapter command starts an ACP server. The user CLI is what CFlow probes for a real install. The path variable hands that absolute path to the adapter. Assistants that speak ACP natively only need the adapter command.
+
+Codex and Claude Code health checks open a temporary ACP session **without sending a prompt**, so they verify the CLI, login, and model endpoint together.
+
+Set provider credentials in the **same** environment that starts CFlow, then fully restart after changing them. CFlow forwards, but never writes into project files or browser storage:
+
+- Claude / Anthropic: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, plus the official OAuth, proxy, Bedrock, and Vertex variables
+- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`
+
+Unauthenticated assistants are marked unavailable, with a prompt to sign in as the same OS user that started CFlow.
+
+**Workbench → Local assistants** lists the bundled Codex and Claude Code presets. You can override command, user CLI, args, and the environment-variable **allowlist** per project, or restore defaults. **Connect a project assistant** adds other ACP agents (a Pi Agent example is included; Pi itself is not ACP-native, so install and log into the community `pi-acp` adapter first).
+
+Discovery order, later wins: PATH, npm package, `~/.config/cflow/agents.d/`, `.cflow/agents.d/`. Runtime Profiles are versioned; a published graph pins a specific profile version. Deleting an assistant config affects new graphs only.
+
+Manifests store **names** of allowed environment variables, never secret values. Child processes start from an argv array, a bounded working directory, an allowlisted environment, timeouts, output-size limits, and cancellation. What an Agent may do follows the CF's declared effects and the workspace root. Filesystem and network isolation then depend on the adapter.
+
+Windows: CFlow follows npm `.cmd` shims. Codex is launched through the system shell at `codex.cmd`. Claude Code shims are resolved to `cli.js` or `claude.exe` in the user install; unresolved shims stay unavailable. CFlow will not fall back to an executable bundled inside the adapter.
+
+---
+
+## Workspace data
 
 ```text
 <workspace>/.cflow/
-├── cflow.sqlite       # 工作区数据库
-├── flows/             # 流程附件
-├── agents.d/          # 项目级 Agent manifest
-└── .gitignore         # 本机数据忽略规则
+├── cflow.sqlite       # drafts, versions, snapshots, runs, ledger, jobs, profiles
+├── flows/             # graph attachments
+├── agents.d/          # project-level Agent manifests
+└── .gitignore         # managed ignore rules for local data
 ```
 
-SQLite 使用 WAL 模式。主要数据包括能力和流程草稿、不可变发布版本、编译快照、运行记录、事件日志、任务队列、Runtime Profile 和资源配置。
+SQLite runs in WAL mode. One workspace can hold many graphs. A published plan freezes workspace root, capability versions, and runtime versions for that run history.
 
-一个工作区可管理多个流程。发布计划固定工作区、能力与运行时版本，后续编辑不会改变已有发布计划和运行历史。
+Do not set `CF_DB`; the database path is derived from the workspace directory.
 
-## Agent 与执行边界
+---
 
-CFlow 使用统一的 ACP 机制连接助手。安装包中的 Codex 和 Claude Code 组件只负责协议转换，不把组件依赖中的执行文件当作用户助手；真正执行任务的 `codex`、`claude` 等 CLI 必须存在于启动 CFlow 的用户环境中。未找到配置指定的 CLI 时，助手会显示为不可用。其他助手也通过 ACP 接入，配置可以来自 PATH、npm 包、用户目录或项目目录，项目配置优先。
-
-| 默认助手    | ACP 连接命令       | 用户 CLI 命令 | CLI 路径变量             |
-| ----------- | ------------------ | ------------- | ------------------------ |
-| Codex       | `codex-acp`        | `codex`       | `CODEX_PATH`             |
-| Claude Code | `claude-agent-acp` | `claude`      | `CLAUDE_CODE_EXECUTABLE` |
-
-“连接命令”启动 ACP Server；“助手 CLI 命令”用于检测当前用户环境中的真实助手；“CLI 路径变量”把检测到的绝对路径交给 ACP Server。对于原生支持 ACP 的助手，可以只填写连接命令，不需要额外填写助手 CLI 命令和路径变量。
-
-Codex 和 Claude Code 的连接检查都会创建一个不发送提示词的临时 ACP 会话，以同时验证用户 CLI、登录状态和模型服务配置。使用自定义 Anthropic 兼容服务时，请在启动 CFlow 前设置 `ANTHROPIC_API_KEY`、`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL` 等所需系统环境变量，并在变量变更后完全重启 CFlow。CFlow 也会传递 Claude 官方使用的 OAuth、代理、Bedrock 和 Vertex 路由变量，以及 Codex 使用的 `CODEX_API_KEY` 或 `OPENAI_API_KEY`，但不会把变量值写入项目文件或浏览器存储。未认证时，助手会显示为不可用，并提示在启动 CFlow 的同一系统用户下完成登录。
-
-Windows 支持 npm 生成的 `.cmd` 命令代理。Codex 的连接组件会通过系统 shell 调用用户的 `codex.cmd`；CFlow 会从 Claude Code 的 npm shim 中解析用户安装目录下的 `cli.js` 或 `claude.exe` 并传给连接组件。无法解析的非标准 shim 会显示为不可用，用户可以更新 Claude Code，或在助手配置中填写实际入口的绝对路径。CFlow 不会在这种情况下改用连接组件随附的 Claude 执行文件。
-
-「工作台设置 → 本机助手」会显示预先配置的 Codex 和 Claude Code，二者都可以针对当前项目编辑连接命令、助手 CLI 命令、参数和环境变量白名单；项目覆盖可以随时恢复为默认配置。选择「接入项目助手」还可以创建其他 ACP 助手。保存后配置写入 `.cflow/agents.d/`，并立即重新识别、检查 CLI 和测试连接。新建时可套用 Pi Agent 示例；Pi 本身不直接支持 ACP，该示例通过社区 `pi-acp` 适配器连接，因此需先安装并登录 Pi。普通项目助手可以在同一处编辑或删除；当前默认助手需要先切换默认项才能删除。删除只影响新流程，已发布流程和历史运行仍保留固定的 Runtime Profile 版本。
-
-用户级 manifest 位于 `~/.config/cflow/agents.d/`，项目级 manifest 位于 `.cflow/agents.d/`。Runtime Profile 按版本保存，发布流程引用具体版本。项目助手配置只保存允许传入的环境变量名称，不接收也不落盘密钥值；密钥必须由启动 CFlow 的环境提供。
-
-子进程通过参数数组启动，使用限定的工作目录和环境变量，并受超时、输出大小与取消机制约束。操作权限依据能力声明和工作区范围决定；文件系统与网络隔离能力取决于具体适配器。
-
-## 开发
+## Development
 
 ```bash
 pnpm install
@@ -116,16 +257,12 @@ pnpm run build
 pnpm start
 ```
 
-`pnpm start` 和 `pnpm run dev` 只启动服务，不会自动打开浏览器；自动开页仅用于安装包提供的 `cflow` 命令。
-
-开发时分别启动后端和前端：
+`pnpm start` and `pnpm run dev` start the server only. Auto-opening the browser is limited to the packaged `cflow` command.
 
 ```bash
-pnpm run dev       # 后端，默认 127.0.0.1:3000
-pnpm run dev:web   # 前端，默认 127.0.0.1:5173，/api 代理到后端
+pnpm run dev       # API, 127.0.0.1:3000
+pnpm run dev:web   # Vite, 127.0.0.1:5173, /api proxied to the backend
 ```
-
-验证命令：
 
 ```bash
 pnpm test
@@ -134,6 +271,18 @@ pnpm run format:check
 pnpm run build
 ```
 
-技术栈：TypeScript、React、XYFlow、Fastify、SQLite、Vite 和 Agent Client Protocol。生产构建输出到 `dist/`。
+Stack: TypeScript, React, XYFlow, Fastify, SQLite, Vite, [Agent Client Protocol](https://agentclientprotocol.com). Production output is `dist/`.
 
-产品定位见 [PRODUCT.md](./PRODUCT.md)，视觉规范见 [DESIGN.md](./DESIGN.md)。
+Product intent: [PRODUCT.md](./PRODUCT.md). Visual rules: [DESIGN.md](./DESIGN.md).
+
+---
+
+## Scope
+
+- Desktop browser workbench only (1280px+). No mobile, touch, or narrow-layout support.
+- Local process. Not a hosted multi-tenant service.
+- Assistants run as subprocesses of the user who started CFlow, with workspace-scoped effects.
+
+## License
+
+[ISC](LICENSE)
