@@ -1,11 +1,13 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { parseDocument } from './file-extraction-parser.js'
 import { EXTRACTION_LIMITS } from './file-extraction-config.js'
+import { normalizeLocale, parserCopy } from './locale.js'
 
+const locale = normalizeLocale(workerData.options?.locale)
 try {
   const result = await parseDocument(workerData.bytes, workerData.format, workerData.options)
   if (Buffer.byteLength(JSON.stringify(result)) > EXTRACTION_LIMITS.outputBytes - 1024)
-    throw Object.assign(new Error('提取结果超过 16 MiB，请设置每文件字符上限。'), {
+    throw Object.assign(new Error(parserCopy[locale].workerOutputLimit), {
       code: 'OUTPUT_LIMIT',
     })
   parentPort!.postMessage({ result })
@@ -14,7 +16,7 @@ try {
   parentPort!.postMessage({
     error: {
       code: item.code ?? item.officeIssue?.code ?? 'PARSE_FAILED',
-      message: item.message ?? '文件解析失败。',
+      message: item.message ?? parserCopy[locale].parseFailed,
     },
   })
 }

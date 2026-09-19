@@ -311,7 +311,7 @@ export interface WorkspaceSettings {
   defaultResourceProfileId?: string
   autoSaveDrafts: boolean
   testTimeoutMs: number
-  locale: string
+  locale: import('./locale.js').Locale
   updatedAt: string
 }
 

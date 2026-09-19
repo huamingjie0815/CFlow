@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { FlowSwitcher } from './FlowSwitcher'
 import { testStateLabel } from '../copy'
+import { format, type Locale } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { FlowListRow } from '../flow-list'
 import type { TestState } from '../workbench-ui'
 import type { FlowDraft, FlowPlan } from '../types'
@@ -39,6 +41,8 @@ type TopBarProps = {
   onSettings: () => void
   onToggleLeft: () => void
   onToggleRight: () => void
+  locale: Locale
+  onLocaleChange: (locale: Locale) => void
 }
 
 /**
@@ -46,6 +50,7 @@ type TopBarProps = {
  * workbench-wide utilities. Everything about editing lives below.
  */
 export function TopBar(props: TopBarProps) {
+  const { m, locale } = useLocale()
   return (
     <header className="top-bar">
       <img className="brand-mark" src="/cflow-mark.svg" alt="CFlow" draggable={false} />
@@ -62,20 +67,21 @@ export function TopBar(props: TopBarProps) {
       <button
         className="button top-bar-demo-button"
         type="button"
-        title="添加示例流程"
+        title={m.topBar.addDemoTitle}
         disabled={props.isDemoDisabled}
         onClick={props.onAddDemo}
       >
         {props.isAddingDemo ? <LoaderCircle className="spin" size={14} /> : <Workflow size={14} />}
-        {props.isAddingDemo ? '正在添加' : '添加示例'}
+        {props.isAddingDemo ? m.topBar.addingDemo : m.topBar.addDemo}
       </button>
       {props.draft && (
         <span className="top-bar-meta">
           <span className={`route-state is-${props.testState}`} />
-          {testStateLabel(props.testState)}
-          <span className="top-bar-dot">·</span>测试 {props.testCount} 次
+          {testStateLabel(props.testState, locale)}
           <span className="top-bar-dot">·</span>
-          {props.draft.nodes.length} 个步骤
+          {format(m.topBar.tests, { count: props.testCount })}
+          <span className="top-bar-dot">·</span>
+          {format(m.topBar.steps, { count: props.draft.nodes.length })}
         </span>
       )}
       {props.saveStatus && (
@@ -85,15 +91,31 @@ export function TopBar(props: TopBarProps) {
         </span>
       )}
       <span className="toolbar-spacer" />
-      <span className="service-health" title="本地服务已连接">
+      <div className="locale-switch" role="group" aria-label={m.language.group}>
+        <button
+          type="button"
+          aria-pressed={locale === 'zh-CN'}
+          onClick={() => props.onLocaleChange('zh-CN')}
+        >
+          {m.language.zh}
+        </button>
+        <button
+          type="button"
+          aria-pressed={locale === 'en'}
+          onClick={() => props.onLocaleChange('en')}
+        >
+          {m.language.en}
+        </button>
+      </div>
+      <span className="service-health" title={m.topBar.localServiceTitle}>
         <span className="status-lamp is-completed" />
-        本地服务
+        {m.topBar.localService}
       </span>
       <button
         className="icon-button"
         type="button"
-        title="刷新工作台"
-        aria-label="刷新工作台"
+        title={m.topBar.refresh}
+        aria-label={m.topBar.refresh}
         onClick={props.onRefresh}
       >
         <RefreshCw className={props.isRefreshing ? 'spin' : ''} size={15} />
@@ -101,8 +123,8 @@ export function TopBar(props: TopBarProps) {
       <button
         className="icon-button"
         type="button"
-        title="工作台设置"
-        aria-label="工作台设置"
+        title={m.topBar.settings}
+        aria-label={m.topBar.settings}
         onClick={props.onSettings}
       >
         <Settings2 size={15} />
@@ -111,8 +133,8 @@ export function TopBar(props: TopBarProps) {
       <button
         className="icon-button"
         type="button"
-        title={props.leftCollapsed ? '展开详情' : '收起详情'}
-        aria-label={props.leftCollapsed ? '展开详情' : '收起详情'}
+        title={props.leftCollapsed ? m.topBar.expandDetail : m.topBar.collapseDetail}
+        aria-label={props.leftCollapsed ? m.topBar.expandDetail : m.topBar.collapseDetail}
         onClick={props.onToggleLeft}
       >
         {props.leftCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
@@ -120,8 +142,8 @@ export function TopBar(props: TopBarProps) {
       <button
         className="icon-button"
         type="button"
-        title={props.rightCollapsed ? '展开助手' : '收起助手'}
-        aria-label={props.rightCollapsed ? '展开助手' : '收起助手'}
+        title={props.rightCollapsed ? m.topBar.expandAgent : m.topBar.collapseAgent}
+        aria-label={props.rightCollapsed ? m.topBar.expandAgent : m.topBar.collapseAgent}
         onClick={props.onToggleRight}
       >
         {props.rightCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}

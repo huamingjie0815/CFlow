@@ -1,8 +1,11 @@
 import { Check, Copy, Download } from 'lucide-react'
 import { useState } from 'react'
 import type { FileExtractionResult as Result } from '../../../src/types'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 
 export function FileExtractionResult({ result }: { result: Result }) {
+  const { m } = useLocale()
   const [index, setIndex] = useState(0)
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(false)
@@ -24,13 +27,14 @@ export function FileExtractionResult({ result }: { result: Result }) {
       onToggle={(event) => setOpened(event.currentTarget.open)}
     >
       <summary>
-        提取内容 · {result.succeeded} 个成功{result.failed ? ` · ${result.failed} 个失败` : ''}
+        {format(m.extraction.heading, { succeeded: result.succeeded })}
+        {result.failed ? format(m.extraction.failedCount, { count: result.failed }) : ''}
       </summary>
       {opened && (
         <>
           <div className="extraction-result-toolbar">
             <select
-              aria-label="查看文件提取结果"
+              aria-label={m.extraction.view}
               value={index}
               onChange={(event) => {
                 setIndex(Number(event.target.value))
@@ -42,15 +46,19 @@ export function FileExtractionResult({ result }: { result: Result }) {
               {result.documents.map((item, i) => (
                 <option key={item.path} value={i}>
                   {item.path}
-                  {item.status === 'failed' ? ' · 失败' : item.truncated ? ' · 已截断' : ''}
+                  {item.status === 'failed'
+                    ? m.extraction.failed
+                    : item.truncated
+                      ? m.extraction.truncated
+                      : ''}
                 </option>
               ))}
             </select>
             <button
               type="button"
               className="icon-button"
-              title={copied ? '已复制' : '复制正文'}
-              aria-label={copied ? '已复制' : '复制正文'}
+              title={copied ? m.extraction.copied : m.extraction.copy}
+              aria-label={copied ? m.extraction.copied : m.extraction.copy}
               disabled={doc.status === 'failed'}
               onClick={async () => {
                 try {
@@ -67,15 +75,15 @@ export function FileExtractionResult({ result }: { result: Result }) {
             <button
               type="button"
               className="icon-button"
-              title="下载正文"
-              aria-label="下载正文"
+              title={m.extraction.download}
+              aria-label={m.extraction.download}
               disabled={doc.status === 'failed'}
               onClick={download}
             >
               <Download size={14} />
             </button>
           </div>
-          {copyError && <p role="alert">无法访问剪贴板，请下载正文。</p>}
+          {copyError && <p role="alert">{m.extraction.clipboard}</p>}
           {doc.error ? (
             <p className="effect-warning" role="status">
               {doc.error.message}
@@ -83,8 +91,12 @@ export function FileExtractionResult({ result }: { result: Result }) {
           ) : (
             <>
               <p className="extraction-count">
-                {doc.text.length.toLocaleString()} 字符
-                {doc.truncated ? ` / 共 ${doc.originalChars.toLocaleString()} 字符 · 已截断` : ''}
+                {format(m.extraction.chars, { count: doc.text.length.toLocaleString() })}
+                {doc.truncated
+                  ? format(m.extraction.charsTruncated, {
+                      total: doc.originalChars.toLocaleString(),
+                    })
+                  : ''}
               </p>
               {doc.warnings.length > 0 && (
                 <div className="extraction-warnings" role="status">
@@ -93,13 +105,13 @@ export function FileExtractionResult({ result }: { result: Result }) {
                   ))}
                 </div>
               )}
-              <pre className="extracted-text">{doc.text || '（空文件）'}</pre>
+              <pre className="extracted-text">{doc.text || m.extraction.emptyText}</pre>
               <details
                 className="extraction-structure"
                 open={structureOpen}
                 onToggle={(event) => setStructureOpen(event.currentTarget.open)}
               >
-                <summary>来源与表格 · {doc.blocks.length} 个内容块</summary>
+                <summary>{format(m.extraction.blocks, { count: doc.blocks.length })}</summary>
                 {structureOpen &&
                   doc.blocks.map((block, i) => {
                     let occupied: { start: number; end: number; until: number }[] = []
@@ -107,11 +119,14 @@ export function FileExtractionResult({ result }: { result: Result }) {
                       <div className="extraction-block" key={i}>
                         <small>
                           {[
-                            block.page ? `第 ${block.page} 页` : '',
-                            block.slide ? `第 ${block.slide} 张幻灯片` : '',
-                            block.sheet ? `工作表 ${block.sheet}` : '',
-                            block.kind === 'note' ? '备注' : '',
-                            `字符 ${block.start + 1}–${block.end}`,
+                            block.page ? format(m.extraction.page, { n: block.page }) : '',
+                            block.slide ? format(m.extraction.slide, { n: block.slide }) : '',
+                            block.sheet ? format(m.extraction.sheet, { name: block.sheet }) : '',
+                            block.kind === 'note' ? m.extraction.note : '',
+                            format(m.extraction.charsRange, {
+                              start: block.start + 1,
+                              end: block.end,
+                            }),
                           ]
                             .filter(Boolean)
                             .join(' · ')}
@@ -157,7 +172,10 @@ export function FileExtractionResult({ result }: { result: Result }) {
                                           gap > 0 ? <td key={`gap-${c}`} colSpan={gap} /> : null,
                                           <td
                                             key={c}
-                                            title={`行 ${cell.row + 1}，列 ${cell.column + 1}`}
+                                            title={format(m.extraction.cell, {
+                                              row: cell.row + 1,
+                                              column: cell.column + 1,
+                                            })}
                                             colSpan={cell.colSpan}
                                             rowSpan={cell.rowSpan}
                                           >

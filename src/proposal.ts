@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { compileCF, compileFlow } from './compiler.js'
+import { format, normalizeLocale, proposalCopy, type Locale } from './locale.js'
 import type {
   CapabilityEffect,
   CFDraft,
@@ -198,7 +199,11 @@ const flattenStages = (proposal: unknown): any[] => {
     stages.push(stage)
     for (const route of Array.isArray(stage?.routes) ? stage.routes : []) {
       stages.push({
-        name: route?.condition ? `分支条件：${String(route.condition)}` : '分支条件',
+        name: route?.condition
+          ? format(proposalCopy['zh-CN'].branchConditionNamed, {
+              condition: String(route.condition),
+            })
+          : proposalCopy['zh-CN'].branchCondition,
         sourceQuote: route?.sourceQuote,
       })
       if (Array.isArray(route?.stages)) stages.push(...route.stages)
@@ -245,7 +250,8 @@ export function collectGroundingFailures(
   const failures: GroundingFailure[] = []
   flattenStages(proposal).forEach((stage, position) => {
     const index = position + 1
-    const stageName = String(stage?.name ?? '').trim() || `第 ${index} 个步骤`
+    const stageName =
+      String(stage?.name ?? '').trim() || format(proposalCopy['zh-CN'].stageFallback, { index })
     const raw = typeof stage?.sourceQuote === 'string' ? stage.sourceQuote.trim() : ''
     if (!raw) {
       failures.push({ index, stageName, reason: 'missing', quote: '' })
@@ -292,11 +298,12 @@ export type ProposalGraph = { nodes: FlowNode[]; edges: FlowEdge[]; cfDrafts: CF
  */
 export function buildProposalGraph(
   rawStages: unknown,
-  options: { catalog: CFVersion[]; runtimeId?: string },
+  options: { catalog: CFVersion[]; runtimeId?: string; locale?: Locale },
 ): ProposalGraph {
   const stages = (Array.isArray(rawStages) ? rawStages : []).slice(0, MAX_STAGES)
   if (!stages.length) throw new Error('RUNTIME_PROPOSAL_EMPTY')
   const { catalog, runtimeId } = options
+  const copy = proposalCopy[normalizeLocale(options.locale)]
   const token = Date.now().toString(36)
   const nodes: FlowNode[] = []
   const edges: FlowEdge[] = []
@@ -335,8 +342,8 @@ export function buildProposalGraph(
       revision: 1,
       name,
       does,
-      input: String(stage?.input ?? '来自 Flow 输入或上游 CF 的结构化输入').slice(0, 500),
-      output: String(stage?.output ?? '供下游 CF 使用的结构化结果').slice(0, 500),
+      input: String(stage?.input ?? copy.defaultInput).slice(0, 500),
+      output: String(stage?.output ?? copy.defaultOutput).slice(0, 500),
       process: String(stage?.process ?? '').slice(0, 2000) || undefined,
       effects: normalizeEffects(stage?.effects),
       inputContract: { type: 'object' },
@@ -434,11 +441,12 @@ export function applyFlowRevision(
   current: FlowDraft,
   currentCfDrafts: CFDraft[],
   rawStages: unknown,
-  options: { catalog: CFVersion[]; runtimeId?: string },
+  options: { catalog: CFVersion[]; runtimeId?: string; locale?: Locale },
 ): { flowDraft: FlowDraft; cfDrafts: CFDraft[] } {
   const stages = (Array.isArray(rawStages) ? rawStages : []).slice(0, MAX_STAGES)
   if (!stages.length) throw new Error('RUNTIME_REVISION_EMPTY')
   const { catalog, runtimeId } = options
+  const copy = proposalCopy[normalizeLocale(options.locale)]
   const allowedIds = new Set([
     ...catalog.map((item) => item.cfId),
     ...currentCfDrafts.map((item) => item.cfId),
@@ -532,8 +540,8 @@ export function applyFlowRevision(
       revision: 1,
       name,
       does,
-      input: textOf(stage?.input, '来自 Flow 输入或上游 CF 的结构化输入', 500),
-      output: textOf(stage?.output, '供下游 CF 使用的结构化结果', 500),
+      input: textOf(stage?.input, copy.defaultInput, 500),
+      output: textOf(stage?.output, copy.defaultOutput, 500),
       process: textOf(stage?.process, undefined, 2000),
       effects: normalizeEffects(stage?.effects),
       inputContract: { type: 'object' },
@@ -746,9 +754,10 @@ export async function prepareSkillAttachments(request: {
 }
 
 /** Instructions handed to the runtime. Attachment mode adds grounding rules. */
-export function flowProposalPrompt(withAttachments: boolean) {
+export function flowProposalPrompt(withAttachments: boolean, locale: Locale = 'zh-CN') {
   return [
     'Design a concise, reviewable Flow for the supplied objective.',
+    proposalCopy[normalizeLocale(locale)].languageRule,
     'Return JSON with this exact shape. In attachment mode, each stage must also include sourceQuote:',
     '{"flowName":"...","summary":"...","stages":[{"kind":"cf-call","name":"...","does":"...","input":"...","output":"...","process":"...","effects":[],"cfId":null,"cond":null,"routes":[]}]}',
     `Use 2-${MAX_STAGES} stages. A cfId may only be copied exactly from the supplied catalog. Use null when no published capability fits.`,

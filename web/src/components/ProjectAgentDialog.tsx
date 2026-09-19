@@ -1,6 +1,7 @@
 import { CheckCircle2, ChevronDown, FileInput, RefreshCw, X } from 'lucide-react'
 import { useState } from 'react'
 import { readableError } from '../api'
+import { useLocale } from '../locale-context'
 import {
   emptyProjectAgentForm,
   piProjectAgentExample,
@@ -18,6 +19,7 @@ type ProjectAgentDialogProps = {
 }
 
 export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
+  const { m, locale } = useLocale()
   const editing = Boolean(props.initial)
   const [form, setForm] = useState<ProjectAgentFormValues>(() =>
     props.initial ? projectAgentToForm(props.initial) : emptyProjectAgentForm(),
@@ -48,18 +50,21 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
           <div>
             <h3 id="project-agent-title">
               {props.initial?.preset
-                ? '编辑默认助手配置'
+                ? m.projectAgent.editPreset
                 : editing
-                  ? '编辑项目助手'
-                  : '接入项目助手'}
+                  ? m.projectAgent.edit
+                  : m.projectAgent.add}
             </h3>
             <p id="project-agent-description">
-              {props.initial?.preset
-                ? '修改只作用于当前项目，随时可以恢复默认配置。'
-                : '配置只保存在当前项目。密钥请由启动 CFlow 的环境提供，这里只填写变量名。'}
+              {props.initial?.preset ? m.projectAgent.presetHint : m.projectAgent.addHint}
             </p>
           </div>
-          <button className="icon-button" type="button" onClick={props.onClose} aria-label="关闭">
+          <button
+            className="icon-button"
+            type="button"
+            onClick={props.onClose}
+            aria-label={m.projectAgent.close}
+          >
             <X size={16} />
           </button>
         </header>
@@ -71,15 +76,15 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
               await props.onSave(projectAgentFromForm(form))
               props.onClose()
             } catch (saveError) {
-              setError(readableError(saveError))
+              setError(readableError(saveError, locale))
             }
           }}
         >
           {!editing && (
             <div className="project-agent-example">
               <div>
-                <strong>Pi Agent 示例</strong>
-                <span>Pi 本身不直接支持 ACP，示例使用社区 pi-acp 适配器。</span>
+                <strong>{m.projectAgent.piTitle}</strong>
+                <span>{m.projectAgent.piHint}</span>
               </div>
               <button
                 className="button"
@@ -90,24 +95,24 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
                 }}
               >
                 <FileInput size={14} />
-                套用示例
+                {m.projectAgent.applyExample}
               </button>
             </div>
           )}
           <div className="project-agent-fields">
             <label className="field">
-              <span>助手名称</span>
+              <span>{m.projectAgent.name}</span>
               <input
                 autoFocus
                 required
                 maxLength={80}
                 value={form.name}
                 onChange={(event) => update('name', event.target.value)}
-                placeholder="例如：团队代码助手"
+                placeholder={m.projectAgent.namePlaceholder}
               />
             </label>
             <label className="field">
-              <span>英文配置标识</span>
+              <span>{m.projectAgent.id}</span>
               <input
                 required
                 minLength={2}
@@ -115,44 +120,46 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
                 pattern="[a-z0-9][a-z0-9._-]{1,63}"
                 value={form.id}
                 onChange={(event) => update('id', event.target.value)}
-                placeholder="例如：team-coder"
+                placeholder={m.projectAgent.idPlaceholder}
                 disabled={editing}
               />
-              <small>{editing ? '创建后不可修改。' : '用于识别配置，创建后不可修改。'}</small>
+              <small>{editing ? m.projectAgent.idLocked : m.projectAgent.idHint}</small>
             </label>
             <label className="field project-agent-wide-field">
-              <span>说明（可选）</span>
+              <span>{m.projectAgent.description}</span>
               <input
                 maxLength={400}
                 value={form.description}
                 onChange={(event) => update('description', event.target.value)}
-                placeholder="说明这个助手适合处理什么任务"
+                placeholder={m.projectAgent.descriptionPlaceholder}
               />
             </label>
             <label className="field project-agent-wide-field">
-              <span>连接命令</span>
+              <span>{m.projectAgent.command}</span>
               <input
                 required
                 value={form.command}
                 onChange={(event) => update('command', event.target.value)}
-                placeholder="例如：my-agent-acp"
+                placeholder={m.projectAgent.commandPlaceholder}
               />
-              <small>这个命令负责与助手通信，必须能由启动 CFlow 的用户直接运行。</small>
+              <small>{m.projectAgent.commandHint}</small>
             </label>
             <label className="field project-agent-wide-field">
-              <span>助手 CLI 命令{props.initial?.preset ? '' : '（可选）'}</span>
+              <span>
+                {props.initial?.preset
+                  ? m.projectAgent.assistantCommand
+                  : m.projectAgent.assistantCommandOptional}
+              </span>
               <input
                 required={Boolean(props.initial?.preset)}
                 value={form.assistantCommand}
                 onChange={(event) => update('assistantCommand', event.target.value)}
-                placeholder="例如：claude、codex 或 pi"
+                placeholder={m.projectAgent.assistantPlaceholder}
               />
-              <small>
-                填写后，只有在当前用户环境中找到该 CLI 才会启用助手。也可以填写绝对路径。
-              </small>
+              <small>{m.projectAgent.assistantHint}</small>
             </label>
             <label className="field project-agent-wide-field">
-              <span>启动参数（每行一个）</span>
+              <span>{m.projectAgent.args}</span>
               <textarea
                 value={form.args}
                 onChange={(event) => update('args', event.target.value)}
@@ -160,32 +167,29 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
               />
             </label>
             {form.id === 'pi-agent' && (
-              <p className="project-agent-example-note">
-                使用前请先运行 npm install -g @mariozechner/pi-coding-agent 并在 Pi
-                中完成登录；连接适配器会由 npx 启动。
-              </p>
+              <p className="project-agent-example-note">{m.projectAgent.piInstall}</p>
             )}
           </div>
           <details className="project-agent-advanced">
             <summary>
               <ChevronDown size={14} />
-              高级设置
+              {m.projectAgent.advanced}
             </summary>
             <div className="project-agent-fields">
               <label className="field">
-                <span>返回格式</span>
+                <span>{m.projectAgent.outputMode}</span>
                 <select
                   value={form.outputMode}
                   onChange={(event) =>
                     update('outputMode', event.target.value as ProjectAgentConfig['outputMode'])
                   }
                 >
-                  <option value="json">JSON</option>
-                  <option value="text">文本</option>
+                  <option value="json">{m.projectAgent.outputJson}</option>
+                  <option value="text">{m.projectAgent.outputText}</option>
                 </select>
               </label>
               <label className="field">
-                <span>超时时间（秒）</span>
+                <span>{m.projectAgent.timeout}</span>
                 <input
                   type="number"
                   required
@@ -197,7 +201,7 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
                 />
               </label>
               <label className="field">
-                <span>最大输出（KB）</span>
+                <span>{m.projectAgent.outputLimit}</span>
                 <input
                   type="number"
                   required
@@ -209,23 +213,23 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
                 />
               </label>
               <label className="field">
-                <span>CLI 路径变量（可选）</span>
+                <span>{m.projectAgent.pathEnv}</span>
                 <input
                   value={form.assistantPathEnvironment}
                   onChange={(event) => update('assistantPathEnvironment', event.target.value)}
-                  placeholder="例如：MY_AGENT_PATH"
+                  placeholder={m.projectAgent.pathEnvPlaceholder}
                   pattern="[A-Za-z_][A-Za-z0-9_]*"
                 />
-                <small>连接命令通过这个环境变量接收已找到的 CLI 绝对路径。</small>
+                <small>{m.projectAgent.pathEnvHint}</small>
               </label>
               <label className="field">
-                <span>允许传入的环境变量名称</span>
+                <span>{m.projectAgent.envAllow}</span>
                 <textarea
                   value={form.envAllowlist}
                   onChange={(event) => update('envAllowlist', event.target.value)}
                   placeholder={'API_KEY\nHTTP_PROXY'}
                 />
-                <small>每行一个变量名，不要填写变量值或密钥。</small>
+                <small>{m.projectAgent.envAllowHint}</small>
               </label>
             </div>
           </details>
@@ -236,7 +240,7 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
           )}
           <footer>
             <button className="button" type="button" onClick={props.onClose}>
-              取消
+              {m.projectAgent.cancel}
             </button>
             <button className="button signal" type="submit" disabled={props.isSaving}>
               {props.isSaving ? (
@@ -244,7 +248,7 @@ export function ProjectAgentDialog(props: ProjectAgentDialogProps) {
               ) : (
                 <CheckCircle2 size={15} />
               )}
-              {props.isSaving ? '正在保存并测试' : '保存并测试连接'}
+              {props.isSaving ? m.projectAgent.saving : m.projectAgent.save}
             </button>
           </footer>
         </form>

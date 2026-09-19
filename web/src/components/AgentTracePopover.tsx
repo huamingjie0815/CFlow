@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../api'
+import { useLocale } from '../locale-context'
 
 const POPOVER_WIDTH = 320
 const POPOVER_MAX_HEIGHT = 300
@@ -16,6 +17,7 @@ type PopoverPosition = {
 }
 
 export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
+  const { m } = useLocale()
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState<PopoverPosition | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -111,18 +113,18 @@ export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
       ref={popoverRef}
       className="agent-trace-popover"
       role="dialog"
-      aria-label="Agent 处理过程"
+      aria-label={m.trace.aria}
       style={position ? position : { visibility: 'hidden' }}
     >
       <span className="agent-trace-heading">
-        <strong>处理过程</strong>
-        <button type="button" onClick={() => setOpen(false)} aria-label="收起处理过程">
+        <strong>{m.trace.title}</strong>
+        <button type="button" onClick={() => setOpen(false)} aria-label={m.trace.collapse}>
           <ChevronDown size={14} />
         </button>
       </span>
       {!detail ? (
         <span className="agent-trace-loading">
-          <LoaderCircle className="spin" size={13} /> 正在读取…
+          <LoaderCircle className="spin" size={13} /> {m.trace.loading}
         </span>
       ) : (
         <span className="agent-trace-events">
@@ -137,7 +139,7 @@ export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
                   {event.detail && <small>{event.detail}</small>}
                   {event.technical !== undefined && (
                     <details className="agent-trace-technical">
-                      <summary>技术细节</summary>
+                      <summary>{m.trace.technical}</summary>
                       <pre>{JSON.stringify(event.technical, null, 2)}</pre>
                     </details>
                   )}
@@ -145,7 +147,7 @@ export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
               </span>
             ))
           ) : (
-            <span className="agent-trace-empty">该 Agent 未提供更细的过程事件。</span>
+            <span className="agent-trace-empty">{m.trace.empty}</span>
           )}
         </span>
       )}
@@ -159,8 +161,8 @@ export function AgentTracePopover({ invocationId }: { invocationId?: string }) {
         type="button"
         className={`icon-button agent-trace-trigger${open ? ' is-active' : ''}`}
         onClick={() => setOpen((value) => !value)}
-        title="查看处理过程"
-        aria-label="查看处理过程"
+        title={m.trace.view}
+        aria-label={m.trace.view}
         aria-expanded={open}
       >
         <Activity size={14} />

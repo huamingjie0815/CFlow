@@ -1,4 +1,6 @@
 import { useRef, useState } from 'react'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import { clampPanelWidth, PANEL_MAX_WIDTH, PANEL_MIN_WIDTH } from '../workbench-ui'
 
 type PanelResizeHandleProps = {
@@ -11,9 +13,10 @@ type PanelResizeHandleProps = {
 }
 
 export function PanelResizeHandle(props: PanelResizeHandleProps) {
+  const { m } = useLocale()
   const [resizing, setResizing] = useState(false)
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
-  const label = props.side === 'left' ? '调整详情栏宽度' : '调整 AI 助手栏宽度'
+  const label = props.side === 'left' ? m.resize.detail : m.resize.agent
 
   const resizeTo = (requestedWidth: number, target: HTMLDivElement) => {
     const containerWidth = target.parentElement?.getBoundingClientRect().width ?? window.innerWidth
@@ -68,7 +71,7 @@ export function PanelResizeHandle(props: PanelResizeHandleProps) {
       aria-valuemax={PANEL_MAX_WIDTH}
       aria-valuenow={Math.round(props.width)}
       tabIndex={0}
-      title={`${label}，双击恢复默认宽度`}
+      title={format(m.resize.restore, { label })}
       onDoubleClick={(event) => resizeTo(props.defaultWidth, event.currentTarget)}
       onKeyDown={resizeWithKeyboard}
       onPointerDown={beginResize}

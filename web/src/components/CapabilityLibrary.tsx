@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight, Library, Plus, Search } from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
+import { useLocale } from '../locale-context'
 import type { CFDraft, CFVersion } from '../types'
 
 type CapabilityLibraryProps = {
@@ -12,6 +13,7 @@ type CapabilityLibraryProps = {
 }
 
 export function CapabilityLibrary(props: CapabilityLibraryProps) {
+  const { m } = useLocale()
   const [query, setQuery] = useState('')
   const needle = query.trim().toLowerCase()
   const published = useMemo(
@@ -27,20 +29,23 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
   )
 
   return (
-    <aside className={`library-tray${props.open ? '' : ' is-collapsed'}`} aria-label="能力库">
+    <aside
+      className={`library-tray${props.open ? '' : ' is-collapsed'}`}
+      aria-label={m.library.aria}
+    >
       {props.open ? (
         <>
           <header className="library-header">
             <div>
-              <strong>能力库</strong>
-              <span>展开后可直接选用</span>
+              <strong>{m.library.title}</strong>
+              <span>{m.library.hint}</span>
             </div>
             <button
               type="button"
               className="icon-button library-toggle"
               onClick={props.onToggle}
-              aria-label="收起能力库"
-              title="收起能力库"
+              aria-label={m.library.collapse}
+              title={m.library.collapse}
             >
               <ChevronLeft size={16} />
             </button>
@@ -50,17 +55,17 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索能力"
-              aria-label="搜索能力"
+              placeholder={m.library.search}
+              aria-label={m.library.search}
             />
           </label>
           <div className="library-scroll">
-            <LibraryGroup title="现成能力" count={published.length}>
+            <LibraryGroup title={m.library.published} count={published.length}>
               {published.length ? (
                 published.map((version) => (
                   <LibraryCard
                     key={`${version.cfId}@${version.version}`}
-                    badge={version.draft.execution?.kind === 'builtin' ? '内置' : '可用'}
+                    badge={version.draft.execution?.kind === 'builtin' ? 'builtin' : 'available'}
                     name={version.draft.name}
                     summary={version.draft.does}
                     onAdd={() => props.onAddPublished(version)}
@@ -68,18 +73,16 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
                 ))
               ) : (
                 <p className="library-empty">
-                  {needle
-                    ? '没有符合条件的现成能力。'
-                    : '还没有现成能力。先在「目标」里说说你想做什么，系统会给出候选步骤。'}
+                  {needle ? m.library.noPublishedMatch : m.library.noPublished}
                 </p>
               )}
             </LibraryGroup>
-            <LibraryGroup title="这次生成的草稿" count={candidates.length}>
+            <LibraryGroup title={m.library.drafts} count={candidates.length}>
               {candidates.length ? (
                 candidates.map((cf) => (
                   <LibraryCard
                     key={cf.cfId}
-                    badge="草稿"
+                    badge="draft"
                     name={cf.name}
                     summary={cf.does}
                     onAdd={() => props.onAddCandidate(cf)}
@@ -87,7 +90,7 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
                 ))
               ) : (
                 <p className="library-empty">
-                  {needle ? '没有符合条件的草稿能力。' : '这次还没有生成新的能力草稿。'}
+                  {needle ? m.library.noDraftMatch : m.library.noDrafts}
                 </p>
               )}
             </LibraryGroup>
@@ -98,11 +101,11 @@ export function CapabilityLibrary(props: CapabilityLibraryProps) {
           type="button"
           className="library-rail-button"
           onClick={props.onToggle}
-          aria-label="展开能力库"
-          title="展开能力库"
+          aria-label={m.library.expand}
+          title={m.library.expand}
         >
           <Library size={16} />
-          <span>能力库</span>
+          <span>{m.library.title}</span>
           <ChevronRight size={16} />
         </button>
       )}
@@ -122,17 +125,29 @@ function LibraryGroup(props: { title: string; count: number; children: ReactNode
   )
 }
 
-function LibraryCard(props: { badge: string; name: string; summary: string; onAdd: () => void }) {
+function LibraryCard(props: {
+  badge: 'builtin' | 'available' | 'draft'
+  name: string
+  summary: string
+  onAdd: () => void
+}) {
+  const { m } = useLocale()
+  const badgeLabel =
+    props.badge === 'draft'
+      ? m.library.draft
+      : props.badge === 'builtin'
+        ? m.library.builtin
+        : m.library.available
   return (
     <article className="library-card">
       <div className="library-card-row">
         <button type="button" className="library-card-main" onClick={props.onAdd}>
-          <span className={`capability-mark${props.badge === '草稿' ? ' candidate' : ''}`}>
-            {props.badge === '草稿' ? '草稿' : props.badge === '内置' ? '内置' : '能力'}
+          <span className={`capability-mark${props.badge === 'draft' ? ' candidate' : ''}`}>
+            {badgeLabel}
           </span>
           <span>
-            <strong>{props.name.trim() || '空能力节点'}</strong>
-            <small>{props.summary || '还没有说明'}</small>
+            <strong>{props.name.trim() || m.library.emptyName}</strong>
+            <small>{props.summary || m.library.emptySummary}</small>
           </span>
           <Plus size={14} />
         </button>

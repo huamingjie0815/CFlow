@@ -5,11 +5,13 @@ import {
   type SupportedFileType,
 } from 'officeparser'
 import { EXTRACTION_LIMITS } from './file-extraction-config.js'
+import { format, normalizeLocale, parserCopy, type Locale } from './locale.js'
 import type { ExtractedBlock, ExtractedDocument, FileExtractionInput } from './types.js'
 
 export function decodeDocumentText(
   bytes: Uint8Array,
   encoding: FileExtractionInput['encoding'] = 'utf-8',
+  locale: Locale = 'zh-CN',
 ) {
   const bom =
     bytes[0] === 0xff && bytes[1] === 0xfe
@@ -25,7 +27,7 @@ export function decodeDocumentText(
       .replaceAll('\r\n', '\n')
       .replaceAll('\r', '\n')
   } catch {
-    throw Object.assign(new Error('无法按所选编码读取文件，请检查文本编码。'), {
+    throw Object.assign(new Error(parserCopy[normalizeLocale(locale)].invalidEncoding), {
       code: 'INVALID_ENCODING',
     })
   }
@@ -36,6 +38,7 @@ type Location = Pick<ExtractedBlock, 'page' | 'slide' | 'sheet'>
 export function extractAst(
   ast: Pick<OfficeParserAST, 'content' | 'warnings' | 'auxiliary'>,
   maxChars?: number,
+  locale: Locale = 'zh-CN',
 ) {
   let text = ''
   let originalChars = 0
@@ -53,7 +56,7 @@ export function extractAst(
       text += part
     }
     if (maxChars === undefined && originalChars > limit)
-      throw Object.assign(new Error('提取结果过大，请设置每文件字符上限。'), {
+      throw Object.assign(new Error(parserCopy[normalizeLocale(locale)].outputLimit), {
         code: 'OUTPUT_LIMIT',
       })
     return { start, end: text.length }
@@ -192,7 +195,9 @@ export function extractAst(
       annotations(node, location)
     }
     if (node.type === 'page' && originalChars === before)
-      warnings.push(`第 ${location.page ?? '?'} 页没有可提取文本，未进行 OCR。`)
+      warnings.push(
+        format(parserCopy[normalizeLocale(locale)].emptyPage, { page: location.page ?? '?' }),
+      )
   }
   for (const node of ast.content) visit(node)
   for (const node of [...(ast.auxiliary?.headers ?? []), ...(ast.auxiliary?.footers ?? [])])
@@ -204,18 +209,20 @@ export function extractAst(
 export async function parseDocument(
   bytes: Uint8Array,
   format: string,
-  options: Pick<FileExtractionInput, 'encoding' | 'maxChars'>,
+  options: Pick<FileExtractionInput, 'encoding' | 'maxChars'> & { locale?: Locale },
 ): Promise<Omit<ExtractedDocument, 'path'>> {
+  const locale = normalizeLocale(options.locale)
   let parsed: ReturnType<typeof extractAst>
   if (['txt', 'json', 'xml'].includes(format)) {
-    const value = decodeDocumentText(bytes, options.encoding)
+    const value = decodeDocumentText(bytes, options.encoding, locale)
     parsed = extractAst(
       { content: [{ type: 'paragraph', text: value }], warnings: [] },
       options.maxChars,
+      locale,
     )
   } else {
     const buffer = ['csv', 'md', 'html'].includes(format)
-      ? Buffer.from(decodeDocumentText(bytes, options.encoding))
+      ? Buffer.from(decodeDocumentText(bytes, options.encoding, locale))
       : Buffer.from(bytes)
     const ast = await OfficeParser.parseOffice(buffer, {
       fileType: format as SupportedFileType,
@@ -234,17 +241,17 @@ export async function parseDocument(
       },
     })
     if (ast.warnings.some((issue) => String(issue.code).includes('LIMIT_EXCEEDED')))
-      throw Object.assign(new Error('文档结构超过解析限制，无法保证结果完整，请拆分文件。'), {
+      throw Object.assign(new Error(parserCopy[locale].documentLimit), {
         code: 'DOCUMENT_LIMIT',
       })
-    parsed = extractAst(ast, options.maxChars)
+    parsed = extractAst(ast, options.maxChars, locale)
   }
   if (format === 'pdf' && !parsed.hasText)
-    throw Object.assign(new Error('PDF 没有可提取的文本层，可能是扫描件；本工具未启用 OCR。'), {
+    throw Object.assign(new Error(parserCopy[locale].noTextLayer), {
       code: 'NO_TEXT_LAYER',
     })
   const { hasText: _hasText, ...result } = parsed
-  if (result.truncated) result.warnings.push('已按字符上限截断，当前结果不是完整文档。')
-  if (!result.originalChars) result.warnings.push('文件内容为空。')
+  if (result.truncated) result.warnings.push(parserCopy[locale].truncated)
+  if (!result.originalChars) result.warnings.push(parserCopy[locale].emptyFile)
   return { format, status: 'completed', ...result }
 }

@@ -18,6 +18,7 @@ import type {
 } from './types.js'
 import type { ExecutorRegistry } from './engine.js'
 import { Store } from './db.js'
+import { normalizeLocale } from './locale.js'
 import { isWithinDirectory } from './workspace.js'
 import { DEMO_RUNTIME_ID, executeDemoCapability, isBuiltinRuntimeId } from './demo-runtime.js'
 import {
@@ -437,7 +438,7 @@ export class RuntimeManager {
         : undefined,
       autoSaveDrafts: input.autoSaveDrafts ?? previous.autoSaveDrafts,
       testTimeoutMs,
-      locale: String(input.locale ?? previous.locale).slice(0, 32),
+      locale: normalizeLocale(input.locale ?? previous.locale),
       updatedAt: new Date().toISOString(),
     } satisfies WorkspaceSettings
   }

@@ -1,6 +1,8 @@
 import { ChevronDown, LoaderCircle, Plus, Search, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { buildFlowList, currentFlowLabel, filterFlowList, type FlowListRow } from '../flow-list'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { FlowDraft, FlowPlan } from '../types'
 
 type FlowSwitcherProps = {
@@ -23,6 +25,7 @@ type FlowSwitcherProps = {
  * delete button nested inside an `option` would be invalid ARIA.
  */
 export function FlowSwitcher(props: FlowSwitcherProps) {
+  const { m, locale } = useLocale()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -32,11 +35,11 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
   const rowRefs = useRef<(HTMLButtonElement | null)[]>([])
 
   const allRows = useMemo(
-    () => buildFlowList(props.drafts, props.plans, props.currentFlowId, props.testCounts),
-    [props.currentFlowId, props.drafts, props.plans, props.testCounts],
+    () => buildFlowList(props.drafts, props.plans, props.currentFlowId, props.testCounts, locale),
+    [locale, props.currentFlowId, props.drafts, props.plans, props.testCounts],
   )
   const rows = useMemo(() => filterFlowList(allRows, query), [allRows, query])
-  const current = currentFlowLabel(allRows, props.currentFlowId)
+  const current = currentFlowLabel(allRows, props.currentFlowId, locale)
 
   const close = (returnFocus = true) => {
     setOpen(false)
@@ -126,8 +129,8 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
               ref={searchRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索流程"
-              aria-label="搜索流程"
+              placeholder={m.flowSwitcher.search}
+              aria-label={m.flowSwitcher.search}
             />
           </label>
           <ul className="flow-switcher-list">
@@ -159,8 +162,11 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
                 <button
                   className="flow-list-delete"
                   type="button"
-                  title={`删除${row.statusLabel}：${row.name}`}
-                  aria-label={`删除${row.statusLabel}：${row.name}`}
+                  title={format(m.flowSwitcher.delete, { status: row.statusLabel, name: row.name })}
+                  aria-label={format(m.flowSwitcher.delete, {
+                    status: row.statusLabel,
+                    name: row.name,
+                  })}
                   disabled={props.deletingKey === row.key}
                   onClick={() => props.onDelete(row)}
                 >
@@ -175,7 +181,7 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
           </ul>
           {!rows.length && (
             <p className="flow-switcher-empty">
-              {allRows.length ? '没有符合条件的流程，换个关键词。' : '还没有流程，先新建一条。'}
+              {allRows.length ? m.flowSwitcher.emptyFiltered : m.flowSwitcher.empty}
             </p>
           )}
           <button
@@ -186,7 +192,7 @@ export function FlowSwitcher(props: FlowSwitcherProps) {
               props.onNew()
             }}
           >
-            <Plus size={15} /> 新建流程
+            <Plus size={15} /> {m.flowSwitcher.newFlow}
           </button>
         </div>
       )}

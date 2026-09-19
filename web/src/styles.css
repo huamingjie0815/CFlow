@@ -2719,6 +2719,27 @@ pre {
   min-width: 92px;
   flex: 0 0 auto;
 }
+.locale-switch {
+  display: inline-flex;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+}
+.locale-switch button {
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.locale-switch button[aria-pressed='true'] {
+  background: var(--inset);
+  color: var(--text);
+}
 .toolbar-spacer {
   min-width: 12px;
   flex: 1;

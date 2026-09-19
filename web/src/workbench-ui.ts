@@ -1,3 +1,4 @@
+import { messagesFor, type Locale } from './i18n'
 import type { FlowDraft, FlowEdge } from './types'
 
 type CanvasConnection = { source: string | null; target: string | null }
@@ -234,25 +235,30 @@ export function runtimeStatus(runtime: { enabled: boolean; health?: { status?: s
   return runtime.health?.status ?? 'checking'
 }
 
-export function runStopControl(runMode: RunMode, runId: string | null) {
+export function runStopControl(runMode: RunMode, runId: string | null, locale: Locale = 'zh-CN') {
+  const copy = messagesFor(locale).stop
   if (!runMode) return null
   if (!runId) {
     return {
-      label: runMode === 'test' ? '正在启动测试' : '正在启动运行',
+      label: runMode === 'test' ? copy.startingTest : copy.startingRun,
       disabled: true,
     }
   }
   return {
-    label: runMode === 'test' ? '停止测试' : '停止运行',
+    label: runMode === 'test' ? copy.stopTest : copy.stopRun,
     disabled: false,
   }
 }
 
-export function draftSaveStatus(input: { isPending: boolean; isError: boolean; dirty: boolean }) {
+export function draftSaveStatus(
+  input: { isPending: boolean; isError: boolean; dirty: boolean },
+  locale: Locale = 'zh-CN',
+) {
+  const copy = messagesFor(locale).save
   if (!input.dirty) return null
-  if (input.isPending) return '保存中'
-  if (input.isError) return '保存失败'
-  return '待保存'
+  if (input.isPending) return copy.saving
+  if (input.isError) return copy.failed
+  return copy.pending
 }
 
 export function persistedDraftRevision(flowId: string, drafts: readonly FlowDraft[]) {

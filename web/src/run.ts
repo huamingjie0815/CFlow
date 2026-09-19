@@ -1,21 +1,11 @@
+import { messagesFor, type Locale } from './i18n'
 import type { FlowDraft, RunDetail } from './types'
 
 export type NodeRunState =
   'draft' | 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'inactive' | 'published'
 
-const statusLabels: Record<NodeRunState, string> = {
-  draft: '草稿',
-  pending: '待执行',
-  running: '运行中',
-  completed: '已完成',
-  failed: '失败',
-  blocked: '被阻塞',
-  inactive: '未启用',
-  published: '已发布',
-}
-
-export function nodeRunStateLabel(state: NodeRunState) {
-  return statusLabels[state]
+export function nodeRunStateLabel(state: NodeRunState, locale: Locale = 'zh-CN') {
+  return messagesFor(locale).runState[state]
 }
 
 export function nodeRunStateTone(state: NodeRunState) {

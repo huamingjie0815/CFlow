@@ -7,6 +7,8 @@ import {
   runtimeStatus,
   snapshotFileList,
 } from '../workbench-ui'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { AgentChatMessage, RuntimeWithHealth } from '../types'
 import { AgentTracePopover } from './AgentTracePopover'
 
@@ -39,6 +41,7 @@ type GoalComposerProps = {
  * conversation continues in the right-hand assistant panel.
  */
 export function GoalComposer(props: GoalComposerProps) {
+  const { m } = useLocale()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const selected = props.runtimes.find((runtime) => runtime.id === props.runtimeId)
   const take = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -48,16 +51,16 @@ export function GoalComposer(props: GoalComposerProps) {
   }
 
   return (
-    <section className="goal-view" aria-label="描述目标">
+    <section className="goal-view" aria-label={m.goal.aria}>
       <div className="goal-scroll">
         {!props.messages.length && (
           <div className="goal-intro">
             <div className="signal-emblem">
               <Split size={24} />
             </div>
-            <span className="view-kicker">从一句话开始</span>
-            <h2>先说你想完成什么</h2>
-            <p>助手会把目标拆成一串可以调整的步骤。你确认无误后，依次检查、试运行，最后发布。</p>
+            <span className="view-kicker">{m.goal.kicker}</span>
+            <h2>{m.goal.title}</h2>
+            <p>{m.goal.body}</p>
             {props.onAddDemo && (
               <div className="goal-demo">
                 <button
@@ -71,9 +74,9 @@ export function GoalComposer(props: GoalComposerProps) {
                   ) : (
                     <Workflow size={14} />
                   )}
-                  添加示例流程
+                  {m.goal.addDemo}
                 </button>
-                <span>不需要本机助手，可直接检查和测试</span>
+                <span>{m.goal.addDemoHint}</span>
                 {props.onCreateBlank && (
                   <button
                     type="button"
@@ -82,7 +85,7 @@ export function GoalComposer(props: GoalComposerProps) {
                     disabled={props.isPending}
                   >
                     <FileText size={14} />
-                    空白流程
+                    {m.goal.blank}
                   </button>
                 )}
               </div>
@@ -94,14 +97,14 @@ export function GoalComposer(props: GoalComposerProps) {
             <article className={`message is-${message.role}`} key={message.id}>
               <span className="message-avatar">
                 {message.role === 'user' ? (
-                  '你'
+                  m.goal.you
                 ) : (
                   <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
                 )}
               </span>
               <div>
                 <span className="agent-message-heading">
-                  <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+                  <strong>{message.role === 'user' ? m.goal.you : m.goal.assistant}</strong>
                   {message.invocationId && (
                     <AgentTracePopover invocationId={message.invocationId} />
                   )}
@@ -111,7 +114,7 @@ export function GoalComposer(props: GoalComposerProps) {
                 {message.id === props.retryMessageId && (
                   <button type="button" className="retry-button" onClick={props.onRetry}>
                     <RotateCcw size={13} />
-                    重试
+                    {m.goal.retry}
                   </button>
                 )}
               </div>
@@ -124,12 +127,12 @@ export function GoalComposer(props: GoalComposerProps) {
               </span>
               <div>
                 <span className="agent-message-heading">
-                  <strong>流程助手</strong>
+                  <strong>{m.goal.assistant}</strong>
                   <AgentTracePopover invocationId={props.pendingInvocationId} />
                 </span>
                 <p className="thinking">
                   <LoaderCircle className="spin" size={14} />
-                  正在根据你的目标挑选步骤…
+                  {m.goal.thinking}
                 </p>
               </div>
             </article>
@@ -153,8 +156,8 @@ export function GoalComposer(props: GoalComposerProps) {
               event.currentTarget.form?.requestSubmit()
             }
           }}
-          placeholder="例如：收到报销单后核对发票，金额超过 2000 元的标记为异常，其他录入台账并回复申请人"
-          aria-label="你想完成的目标"
+          placeholder={m.goal.placeholder}
+          aria-label={m.goal.goalAria}
         />
         <input
           ref={fileInputRef}
@@ -165,15 +168,15 @@ export function GoalComposer(props: GoalComposerProps) {
           onChange={take}
         />
         {!!props.attachments.length && (
-          <div className="skill-attachments" aria-label="已选择的 Skill">
+          <div className="skill-attachments" aria-label={m.goal.attachmentsAria}>
             <div className="attachment-summary" role="status" aria-live="polite">
               <div>
                 <strong>
                   {props.isPending
-                    ? `正在提交 ${props.attachments.length} 个 Skill 文件`
-                    : `已选择 ${props.attachments.length} 个 Skill 文件`}
+                    ? format(m.goal.submittingFiles, { count: props.attachments.length })
+                    : format(m.goal.selectedFiles, { count: props.attachments.length })}
                 </strong>
-                <span>{props.isPending ? '正在上传并分析' : '发送目标时上传'}</span>
+                <span>{props.isPending ? m.goal.uploading : m.goal.uploadOnSend}</span>
               </div>
               <button
                 type="button"
@@ -181,7 +184,7 @@ export function GoalComposer(props: GoalComposerProps) {
                 onClick={() => props.onAttachmentsChange([])}
                 disabled={props.isPending}
               >
-                清空
+                {m.goal.clear}
               </button>
             </div>
             <ul className="attachment-list">
@@ -192,8 +195,8 @@ export function GoalComposer(props: GoalComposerProps) {
                   <small>{attachmentSize(file)}</small>
                   <button
                     type="button"
-                    aria-label={`移除 ${attachmentName(file)}`}
-                    title={`移除 ${attachmentName(file)}`}
+                    aria-label={format(m.goal.remove, { name: attachmentName(file) })}
+                    title={format(m.goal.remove, { name: attachmentName(file) })}
                     onClick={() =>
                       props.onAttachmentsChange(
                         props.attachments.filter(
@@ -210,7 +213,7 @@ export function GoalComposer(props: GoalComposerProps) {
             </ul>
             {props.attachments.length > 4 && (
               <p className="attachment-overflow">
-                另有 {props.attachments.length - 4} 个文件已选择
+                {format(m.goal.moreFiles, { count: props.attachments.length - 4 })}
               </p>
             )}
           </div>
@@ -221,16 +224,16 @@ export function GoalComposer(props: GoalComposerProps) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={props.isPending}
-            title="选择 Skill 文件"
+            title={m.goal.pickSkill}
           >
-            <Wrench size={14} /> 选择 Skill
+            <Wrench size={14} /> {m.goal.pickSkillLabel}
           </button>
           <label className={`runtime-select is-${selected ? runtimeStatus(selected) : 'checking'}`}>
             <span className="status-lamp" />
             <select
               value={props.runtimeId}
               onChange={(event) => props.onRuntimeChange(event.target.value)}
-              aria-label="用哪个助手生成"
+              aria-label={m.goal.runtimeAria}
             >
               {props.runtimes.map((runtime) => (
                 <option
@@ -245,14 +248,14 @@ export function GoalComposer(props: GoalComposerProps) {
           </label>
           <span>
             {selected?.health?.status === 'available'
-              ? `${selected.name} 可以使用`
-              : '请选择一个可用的助手'}
+              ? format(m.goal.runtimeReady, { name: selected.name })
+              : m.goal.pickRuntime}
           </span>
           <button
             className="send-button"
             type="submit"
             disabled={!props.canSubmit || props.isPending}
-            aria-label="根据目标生成流程"
+            aria-label={m.goal.sendAria}
           >
             <Send size={16} />
           </button>

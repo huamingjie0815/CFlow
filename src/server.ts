@@ -45,6 +45,7 @@ import {
   normalizeAgentResponse,
   type AgentRequest,
 } from './flow-agent.js'
+import { cliCopy, detectCliLocale, format, normalizeLocale, proposalCopy } from './locale.js'
 import type {
   CFDraft,
   CFVersion,
@@ -62,7 +63,8 @@ import type {
 
 export function createApp(store = new Store(), requestedWorkspaceRoot = process.cwd()) {
   const workspaceRoot = validateWorkspaceRoot(requestedWorkspaceRoot, 'WORKSPACE_UNAVAILABLE')
-  const versions = () => capabilityCatalog(store.list<CFVersion>('cf_versions'))
+  const workspaceLocale = () => normalizeLocale(runtimes.settings().locale)
+  const versions = () => capabilityCatalog(store.list<CFVersion>('cf_versions'), workspaceLocale())
   const nextFlowVersion = (flowId: string) => {
     const published = store.list<FlowPlan>('flow_versions').filter((plan) => plan.flowId === flowId)
     const latest = published.reduce(
@@ -385,7 +387,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
   app.get('/api/flows', async () => store.list<FlowPlan>('flow_versions'))
   app.get('/api/flow-drafts', async () => store.list<FlowDraft>('flow_drafts'))
   app.post('/api/flow-drafts/demo', async () => {
-    const { flowDraft, cfDrafts } = createHelloWorldDemoFlow(workspaceRoot)
+    const { flowDraft, cfDrafts } = createHelloWorldDemoFlow(workspaceRoot, workspaceLocale())
     store.db.transaction(() => {
       store.save('flow_drafts', flowDraft.flowId, flowDraft)
       for (const cfDraft of cfDrafts) store.save('cf_drafts', cfDraft.cfId, cfDraft)
@@ -607,7 +609,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
         if (!profile) throw await failing('RUNTIME_NOT_FOUND')
         const health = await runtimes.health(runtimeId!)
         if (health.status !== 'available') throw await failing(`RUNTIME_UNAVAILABLE:${runtimeId}`)
-        const prompt = flowProposalPrompt(Boolean(multipart))
+        const prompt = flowProposalPrompt(Boolean(multipart), workspaceLocale())
         const input = {
           objective,
           ...(multipart
@@ -688,11 +690,18 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
             throw error
           }
         }
-        const graph = buildProposalGraph(proposal.stages, { catalog, runtimeId })
+        const graph = buildProposalGraph(proposal.stages, {
+          catalog,
+          runtimeId,
+          locale: workspaceLocale(),
+        })
         const result = await asProposal(
           graph,
           String(proposal.flowName ?? objective),
-          String(proposal.summary ?? 'Runtime 已生成可审阅的 Flow 草案。').slice(0, 1000),
+          String(proposal.summary ?? proposalCopy[workspaceLocale()].generatedSummary).slice(
+            0,
+            1000,
+          ),
           invocationId ? { invocationId } : {},
         )
         if (invocationId)
@@ -713,7 +722,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
           does: version.draft.does,
           cfId: version.cfId,
         })),
-        { catalog },
+        { catalog, locale: workspaceLocale() },
       )
       return asProposal(graph, objective)
     },
@@ -726,7 +735,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       flowDraft: req.body.flowDraft ? scopeFlowDraft(req.body.flowDraft) : null,
     }
     const catalog = versions()
-    const fallback = flowAgentFallback({ ...request, message }, catalog)
+    const fallback = flowAgentFallback({ ...request, message }, catalog, workspaceLocale())
     const runtimeId = request.runtimeId?.trim() || runtimes.settings().defaultRuntimeId
     const profile = runtimeId ? runtimes.profile(runtimeId) : undefined
     if (!profile || profile.backend === 'builtin') return { ...fallback, fallback: true }
@@ -752,7 +761,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
     try {
       response = await runtimes.execute(
         runtimeId,
-        flowAgentPrompt(message, grounded),
+        flowAgentPrompt(message, grounded, workspaceLocale()),
         flowAgentContext({ ...request, message }, availableRuntimes, catalog),
         AbortSignal.timeout(runtimes.settings().testTimeoutMs),
         [],
@@ -792,6 +801,7 @@ export function createApp(store = new Store(), requestedWorkspaceRoot = process.
       revised = applyFlowRevision(request.flowDraft, request.cfDrafts ?? [], normalized.stages, {
         catalog,
         runtimeId,
+        locale: workspaceLocale(),
       })
     } catch (error) {
       store.setAgentInvocation(
@@ -1030,9 +1040,14 @@ export async function startCFlow(options: StartCFlowOptions = {}) {
 if (isDirectExecution()) {
   try {
     const { address } = await startCFlow()
-    console.log(`CFlow 已启动：${address}`)
+    const locale = detectCliLocale()
+    console.log(format(cliCopy[locale].started, { url: address }))
   } catch (error) {
-    console.error(`CFlow 启动失败：${error instanceof Error ? error.message : String(error)}`)
+    console.error(
+      format(cliCopy[detectCliLocale()].startFailed, {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
     process.exitCode = 1
   }
 }

@@ -23,6 +23,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { nodeKindLabel } from '../copy'
 import { describeNode, edgeLabel, nodeConfigNote } from '../flow-labels'
+import { useLocale } from '../locale-context'
 import { nodeRunStateLabel, nodeRunStateTone, type NodeRunState } from '../run'
 import type { CanvasPosition, CFDraft, CFVersion, FlowDraft, FlowNode } from '../types'
 import {
@@ -60,13 +61,14 @@ type CardData = {
 }
 
 function FlowCard({ data, selected }: NodeProps<Node<CardData>>) {
+  const { locale } = useLocale()
   return (
     <article
       className={`flow-card flow-card-${data.kind} is-${data.state}${selected ? ' is-selected' : ''}`}
     >
       <Handle type="target" position={Position.Top} className="flow-handle" />
       <div className="flow-card-head">
-        <span className="node-kind">{nodeKindLabel(data.kind)}</span>
+        <span className="node-kind">{nodeKindLabel(data.kind, locale)}</span>
         {data.index != null && (
           <span className="node-index">{String(data.index).padStart(2, '0')}</span>
         )}
@@ -76,7 +78,7 @@ function FlowCard({ data, selected }: NodeProps<Node<CardData>>) {
       {data.configNote && <div className="flow-card-config">{data.configNote}</div>}
       <div className="flow-card-foot">
         <span className={`status-lamp is-${nodeRunStateTone(data.state)}`} />
-        <span>{nodeRunStateLabel(data.state)}</span>
+        <span>{nodeRunStateLabel(data.state, locale)}</span>
       </div>
       <Handle type="source" position={Position.Bottom} className="flow-handle" />
     </article>
@@ -84,10 +86,11 @@ function FlowCard({ data, selected }: NodeProps<Node<CardData>>) {
 }
 
 function EntryCard() {
+  const { m } = useLocale()
   return (
     <div className="entry-card">
       <span className="entry-signal" />
-      <span>开始</span>
+      <span>{m.canvas.start}</span>
       <Handle type="source" position={Position.Bottom} className="flow-handle" />
     </div>
   )
@@ -96,6 +99,7 @@ function EntryCard() {
 const nodeTypes = { flowCard: FlowCard, entry: EntryCard }
 
 function FlowCanvasInner(props: FlowCanvasProps) {
+  const { m, locale } = useLocale()
   const {
     draft,
     positions,
@@ -119,7 +123,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
       draft.edges,
     )
     const cards: Node<CardData>[] = draft.nodes.map((node, index) => {
-      const copy = describeNode(node, cfs, candidateCfs)
+      const copy = describeNode(node, cfs, candidateCfs, locale)
       return {
         id: node.id,
         type: 'flowCard',
@@ -131,7 +135,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
           subtitle: copy.subtitle,
           state: nodeRunStates[node.id] ?? flowState,
           index: index + 1,
-          configNote: nodeConfigNote(node),
+          configNote: nodeConfigNote(node, locale),
         },
       }
     })
@@ -140,7 +144,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         id: '$entry',
         type: 'entry',
         position: positions.$entry ?? arrangedPositions.$entry,
-        data: { kind: 'entry', label: '开始', subtitle: '', state: flowState },
+        data: { kind: 'entry', label: m.canvas.start, subtitle: '', state: flowState },
         draggable: true,
         deletable: false,
         selectable: false,
@@ -155,6 +159,8 @@ function FlowCanvasInner(props: FlowCanvasProps) {
     flowState,
     nodeRunStates,
     positions,
+    locale,
+    m.canvas.start,
     selectedNodeId,
   ])
   const mappedEdges = useMemo<Edge[]>(
@@ -163,13 +169,13 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         id: edge.id,
         source: edge.from,
         target: edge.to,
-        label: edgeLabel(edge, draft.nodes),
+        label: edgeLabel(edge, draft.nodes, locale),
         selected: selectedEdgeId === edge.id,
         reconnectable: edge.from === '$entry' ? 'target' : true,
         markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
         className: 'route-edge',
       })),
-    [draft.edges, draft.nodes, selectedEdgeId],
+    [draft.edges, draft.nodes, locale, selectedEdgeId],
   )
   const [nodes, setNodes, onNodesChange] = useNodesState(mappedNodes)
   const [edges, setEdges, onEdgesChange] = useEdgesState(mappedEdges)
@@ -285,7 +291,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         nodesConnectable
         edgesReconnectable
         proOptions={{ hideAttribution: true }}
-        aria-label="流程画布"
+        aria-label={m.canvas.canvasAria}
       >
         <Background color="#d8d3c5" gap={28} size={1} variant={BackgroundVariant.Dots} />
         <Controls position="bottom-left" showInteractive={false} />
@@ -300,7 +306,7 @@ function FlowCanvasInner(props: FlowCanvasProps) {
         )}
         <Panel position="top-right" className="canvas-readout">
           <strong>{Math.round(viewportZoom * 100)}%</strong>
-          <span>滚轮缩放，拖空白处移动画布，Delete 删除</span>
+          <span>{m.canvas.hint}</span>
         </Panel>
       </ReactFlow>
     </div>

@@ -3,6 +3,7 @@ import open from 'open'
 import { fileURLToPath } from 'node:url'
 import { realpathSync } from 'node:fs'
 import { startCFlow, type StartCFlowOptions } from './server.js'
+import { cliCopy, detectCliLocale, format } from './locale.js'
 
 type Opener = (url: string) => Promise<unknown>
 
@@ -26,7 +27,10 @@ export async function openCFlowBrowser(
     return true
   } catch (error) {
     warn(
-      `CFlow 无法自动打开浏览器，请手动访问 ${url}：${error instanceof Error ? error.message : String(error)}`,
+      format(cliCopy[detectCliLocale(environment)].openFailed, {
+        url,
+        error: error instanceof Error ? error.message : String(error),
+      }),
     )
     return false
   }
@@ -41,7 +45,9 @@ export async function runCFlowCli(
 ) {
   const result = await startCFlow(options)
   const url = browserAddress(result.address)
-  ;(options.log ?? console.log)(`CFlow 已启动：${url}`)
+  ;(options.log ?? console.log)(
+    format(cliCopy[detectCliLocale(options.environment)].started, { url }),
+  )
   await openCFlowBrowser(result.address, options.environment, options.opener, options.warn)
   return result
 }
@@ -59,7 +65,11 @@ if (isDirectExecution()) {
   try {
     await runCFlowCli()
   } catch (error) {
-    console.error(`CFlow 启动失败：${error instanceof Error ? error.message : String(error)}`)
+    console.error(
+      format(cliCopy[detectCliLocale()].startFailed, {
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    )
     process.exitCode = 1
   }
 }

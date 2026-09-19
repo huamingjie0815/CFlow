@@ -1,6 +1,7 @@
 import { describeNode, nodeConfigNote } from './flow-labels'
 import { foldNodeEventState, nodeIdByIndex, type NodeRunState } from './run'
 import { nodeKindLabel } from './copy'
+import { format, messagesFor, type Locale } from './i18n'
 import type { CFDraft, CFVersion, FlowDraft, LedgerEvent, RunDetail } from './types'
 import type { FileExtractionResult } from '../../src/types'
 
@@ -70,27 +71,15 @@ const resourceCount = (event: LedgerEvent) => {
 }
 
 /** Engine failure codes, in business language. */
-const runFailureCopy: Record<string, { title: string; detail: string }> = {
-  PLAN_HASH_MISMATCH: {
-    title: '运行没有开始',
-    detail: '流程在启动前被改过了，请重新检查并测试。',
-  },
-  RESOURCE_BINDING_MISSING: {
-    title: '运行没有开始',
-    detail: '缺少这次运行需要的资料，请在设置里补全。',
-  },
-  STEP_LIMIT_EXCEEDED: {
-    title: '运行已停止',
-    detail: '执行的步骤数超过了这条流程的上限，可能有来回绕圈的连线。',
-  },
-  NO_TERMINAL_OUTPUT: {
-    title: '运行没有结果',
-    detail: '流程走完了，但没有到达「流程结果」这一步。',
-  },
-  FLOW_STALLED: {
-    title: '运行卡住了',
-    detail: '没有步骤可以继续，请检查连线和分支条件。',
-  },
+function runFailureCopy(locale: Locale): Record<string, { title: string; detail: string }> {
+  const copy = messagesFor(locale).ledger
+  return {
+    PLAN_HASH_MISMATCH: copy.noStartHash,
+    RESOURCE_BINDING_MISSING: copy.noStartResource,
+    STEP_LIMIT_EXCEEDED: copy.stoppedLimit,
+    NO_TERMINAL_OUTPUT: copy.noResult,
+    FLOW_STALLED: copy.stalled,
+  }
 }
 
 /**
@@ -100,112 +89,129 @@ const runFailureCopy: Record<string, { title: string; detail: string }> = {
 export function describeLedgerEvent(
   event: LedgerEvent,
   nodeLabel?: string | null,
+  locale: Locale = 'zh-CN',
 ): { title: string; detail: string; technical?: string } {
+  const copy = messagesFor(locale).ledger
   const named = (suffix: string, fallback: string) =>
     nodeLabel ? `${nodeLabel} ${suffix}` : fallback
 
   switch (event.type) {
     case 'tool.file.started':
-      return { title: '正在提取文件', detail: String(readField(event, 'path') ?? '') }
+      return { title: copy.extracting, detail: String(readField(event, 'path') ?? '') }
     case 'tool.file.completed':
       return {
-        title: readField(event, 'truncated') ? '文件已提取（已截断）' : '文件已提取',
-        detail: `${readField(event, 'path')} · ${readField(event, 'chars')} 字符`,
+        title: readField(event, 'truncated') ? copy.extractedTruncated : copy.extracted,
+        detail: format(copy.chars, {
+          path: String(readField(event, 'path') ?? ''),
+          chars: String(readField(event, 'chars') ?? ''),
+        }),
         technical: formatJson(event.data),
       }
     case 'tool.file.failed':
       return {
-        title: '文件提取失败',
-        detail: `${readField(event, 'path')}：${(readField(event, 'error') as { message?: string })?.message ?? '解析失败'}`,
+        title: copy.extractFailed,
+        detail: format(copy.extractFailedDetail, {
+          path: String(readField(event, 'path') ?? ''),
+          error: String(
+            (readField(event, 'error') as { message?: string })?.message ?? copy.parseFailed,
+          ),
+        }),
         technical: formatJson(event.data),
       }
     case 'tool.result':
-      return { title: '文件提取结果', detail: '逐文件结果已保留。' }
+      return { title: copy.extractResult.title, detail: copy.extractResult.detail }
     case 'run.started':
-      return { title: '运行开始', detail: '已经开始执行这次运行。' }
+      return { title: copy.runStarted.title, detail: copy.runStarted.detail }
     case 'run.completed': {
       const output = readField(event, 'outputId')
       return {
-        title: '运行完成',
-        detail: output === undefined ? '运行已完成。' : `结果：${String(output)}`,
+        title: copy.runCompleted,
+        detail:
+          output === undefined
+            ? copy.runCompletedPlain
+            : format(copy.result, { value: String(output) }),
       }
     }
     case 'run.failed': {
       const code = readField(event, 'code')
-      const known = typeof code === 'string' ? runFailureCopy[code] : undefined
+      const known = typeof code === 'string' ? runFailureCopy(locale)[code] : undefined
       if (known) return { ...known, technical: String(code) }
-      return { title: '运行失败', detail: '运行没有走完。' }
+      return { title: copy.runFailed.title, detail: copy.runFailed.detail }
     }
     case 'run.cancelled':
-      return { title: '运行已取消', detail: '这次运行被手动停止。' }
+      return { title: copy.cancelled.title, detail: copy.cancelled.detail }
     case 'run.needs-reconciliation': {
       const nodes = readField(event, 'nodes')
       const error = readField(event, 'error')
       if (Array.isArray(nodes))
         return {
-          title: '需要人工核对',
-          detail: `有 ${nodes.length} 个步骤的结果无法确认，请人工核对后再继续。`,
+          title: copy.reconcile,
+          detail: format(copy.reconcileMany, { count: nodes.length }),
           technical: formatJson(event.data),
         }
       return {
-        title: named('需要人工核对', '需要人工核对'),
-        detail: '这一步可能已经产生了影响，但结果没有确认。请人工核对后再继续。',
+        title: named(copy.reconcile, copy.reconcile),
+        detail: copy.reconcileOne,
         technical: error === undefined ? undefined : formatJson(error),
       }
     }
     case 'resources.bound': {
       const count = resourceCount(event)
       return {
-        title: '已绑定运行资料',
-        detail: count ? `这次运行可以使用 ${count} 项资料。` : '这次运行不需要额外资料。',
+        title: copy.bound,
+        detail: count ? format(copy.boundSome, { count }) : copy.boundNone,
         technical: formatJson(event.data),
       }
     }
     case 'resource.access': {
       const count = resourceCount(event)
       return {
-        title: named('使用了资料', '使用了资料'),
-        detail: count ? `这一步用到了 ${count} 项已授权资料。` : '这一步用到了已授权资料。',
+        title: named(copy.used, copy.used),
+        detail: count ? format(copy.usedSome, { count }) : copy.usedNone,
         technical: formatJson(event.data),
       }
     }
     case 'node.started':
-      return { title: named('开始', '步骤开始'), detail: '这一步开始执行。' }
+      return { title: named(copy.started, copy.stepStarted), detail: copy.startedDetail }
     case 'node.completed': {
       const value = readField(event, 'value')
       return {
-        title: named('完成', '步骤完成'),
+        title: named(copy.completed, copy.stepCompleted),
         detail:
-          value === undefined || value === null ? '这一步已完成。' : '这一步已完成，产出了结果。',
+          value === undefined || value === null ? copy.completedPlain : copy.completedWithResult,
         technical: value === undefined ? undefined : formatJson(value),
       }
     }
     case 'node.failed': {
       const error = readField(event, 'error')
       if (error === 'UPSTREAM_FAILURE')
-        return { title: named('没有执行', '步骤没有执行'), detail: '上一步失败了，这一步被跳过。' }
+        return { title: named(copy.skipped, copy.stepSkipped), detail: copy.skippedDetail }
       return {
-        title: named('失败', '步骤失败'),
-        detail: error === undefined ? '这一步执行失败。' : `错误：${String(error)}`,
+        title: named(copy.failed, copy.stepFailed),
+        detail:
+          error === undefined
+            ? copy.failedPlain
+            : format(copy.failedDetail, { error: String(error) }),
         technical: formatJson(event.data),
       }
     }
     case 'node.inactive':
-      return { title: named('未走到', '未走到'), detail: '这次运行没有选中这条路径。' }
+      return { title: named(copy.inactive, copy.inactive), detail: copy.inactiveDetail }
     case 'node.blocked':
-      return { title: named('走不下去', '走不下去'), detail: '它依赖的上一步没有成功。' }
+      return { title: named(copy.blocked, copy.blocked), detail: copy.blockedDetail }
     case 'node.retry': {
       const attempt = readField(event, 'attempt')
       return {
-        title: named('重试', '步骤重试'),
-        detail: attempt === undefined ? '正在重试这一步。' : `第 ${String(attempt)} 次尝试。`,
+        title: named(copy.retry, copy.stepRetry),
+        detail:
+          attempt === undefined ? copy.retrying : format(copy.attempt, { n: String(attempt) }),
       }
     }
     default:
       // Never surface a raw event type; say only what we honestly know.
       return {
-        title: '运行记录',
-        detail: '记录了一条运行事实，详情见技术细节。',
+        title: copy.record.title,
+        detail: copy.record.detail,
         technical: formatJson({ type: event.type, data: event.data }),
       }
   }
@@ -236,13 +242,15 @@ export function buildRunLog(
   run: RunDetail | null,
   cfs: CFVersion[] = [],
   candidateCfs: CFDraft[] = [],
+  locale: Locale = 'zh-CN',
 ): RunLog | null {
   if (!draft || !run) return null
   const idByIndex = nodeIdByIndex(draft)
+  const copy = messagesFor(locale).ledger
   const runGroup: RunLogGroup = {
     key: 'run',
     kind: 'run',
-    title: '整条流程',
+    title: copy.wholeFlow,
     firstSeq: Number.POSITIVE_INFINITY,
     lastAt: '',
     entries: [],
@@ -268,10 +276,10 @@ export function buildRunLog(
               nodeIndex: index,
               nodeId,
               title: node
-                ? describeNode(node, cfs, candidateCfs).label
-                : `已改动的步骤（第 ${index + 1} 步）`,
-              kindLabel: node ? nodeKindLabel(node.kind) : undefined,
-              configNote: node ? nodeConfigNote(node) : undefined,
+                ? describeNode(node, cfs, candidateCfs, locale).label
+                : format(copy.staleStep, { n: index + 1 }),
+              kindLabel: node ? nodeKindLabel(node.kind, locale) : undefined,
+              configNote: node ? nodeConfigNote(node, locale) : undefined,
               firstSeq: event.seq,
               lastAt: event.at,
               ...(stale ? { stale: true } : {}),
@@ -283,6 +291,7 @@ export function buildRunLog(
     const described = describeLedgerEvent(
       event,
       target.kind === 'node' && !stale ? target.title : null,
+      locale,
     )
     target.entries.push({
       seq: event.seq,

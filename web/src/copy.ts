@@ -1,104 +1,115 @@
-export function nodeKindLabel(kind: string) {
+import { format, messagesFor, type Locale } from './i18n'
+
+const localeOf = (locale?: Locale) => messagesFor(locale)
+
+export function nodeKindLabel(kind: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).nodeKind
+  return copy[kind as keyof typeof copy] ?? kind
+}
+
+export function joinModeLabel(mode: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).joinMode
+  return mode === 'any' ? copy.any : copy.all
+}
+
+export function testStateLabel(state: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).testState
   return (
     {
-      'cf-call': '能力',
-      branch: '分支',
-      join: '汇合',
-      output: '输出',
-    }[kind] ?? kind
+      idle: copy.idle,
+      running: copy.running,
+      passed: copy.passed,
+      failed: copy.failed,
+      cancelled: copy.cancelled,
+      published: copy.published,
+    }[state] ?? state
   )
 }
 
-export function joinModeLabel(mode: string) {
-  return mode === 'any' ? '任一步完成后继续' : '等所有上一步都完成'
-}
-
-export function testStateLabel(state: string) {
-  return (
-    (
-      {
-        idle: '还没测试',
-        running: '正在测试',
-        passed: '测试通过',
-        failed: '测试未通过',
-        cancelled: '测试已停止',
-        published: '已发布',
-      } as const
-    )[state] ?? state
-  )
-}
-
-export function runtimeHealthLabel(runtime: {
-  enabled: boolean
-  health?: { status?: string; stage?: string }
-}) {
-  if (!runtime.enabled || runtime.health?.status === 'disabled') return '已停用'
+export function runtimeHealthLabel(
+  runtime: {
+    enabled: boolean
+    health?: { status?: string; stage?: string }
+  },
+  locale: Locale = 'zh-CN',
+) {
+  const copy = localeOf(locale).runtimeHealth
+  if (!runtime.enabled || runtime.health?.status === 'disabled') return copy.disabled
   if (runtime.health?.status === 'available') {
-    if (runtime.health.stage === 'protocol-ready') return '已连接'
-    if (runtime.health.stage === 'adapter-ready') return '已就绪'
-    return '可用'
+    if (runtime.health.stage === 'protocol-ready') return copy.connected
+    if (runtime.health.stage === 'adapter-ready') return copy.ready
+    return copy.available
   }
-  if (runtime.health?.status === 'checking') return '正在检查'
-  if (runtime.health?.stage === 'installed') return '已安装，但连不上'
-  return '本机没有找到'
+  if (runtime.health?.status === 'checking') return copy.checking
+  if (runtime.health?.stage === 'installed') return copy.installed
+  return copy.missing
 }
 
-export function runtimeDiscoveryLabel(source?: string) {
+export function runtimeDiscoveryLabel(source?: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).discovery
   return (
     {
-      builtin: '内置支持',
-      'path-acp': '系统路径中发现',
-      'package-manifest': '安装包自带配置',
-      'user-manifest': '你的个人配置',
-      'project-manifest': '项目配置',
-      manual: '手动配置',
-    }[source ?? ''] ?? '本机配置'
+      builtin: copy.builtin,
+      'path-acp': copy['path-acp'],
+      'package-manifest': copy['package-manifest'],
+      'user-manifest': copy['user-manifest'],
+      'project-manifest': copy['project-manifest'],
+      manual: copy.manual,
+    }[source ?? ''] ?? copy.fallback
   )
 }
 
-export function runtimeHealthErrorSummary(error?: string) {
-  if (!error) return '连接握手没有完成，请展开技术详情查看原因。'
-  if (/(?:CLAUDE|AGENT)_AUTH_REQUIRED/.test(error))
-    return '助手尚未通过当前 CFlow 进程完成认证，请在同一系统用户下检查登录和服务地址配置。'
-  if (/ASSISTANT_CLI_WINDOWS_SHIM_UNSUPPORTED/.test(error))
-    return '找到的是旧式 Windows 命令代理，无法定位助手程序。请更新 CLI，或在配置中填写原生可执行文件路径。'
-  if (/ASSISTANT_CLI_NOT_FOUND/.test(error))
-    return '当前用户环境中没有找到助手 CLI，请检查安装位置或填写绝对路径。'
-  if (/BUNDLED_.*NOT_FOUND/.test(error)) return '随 CFlow 安装的助手组件不完整，请重新安装 CFlow。'
-  if (/NOT_FOUND|ENOENT/.test(error)) return '没有找到可启动的程序，请确认助手已经正确安装。'
-  if (/HANDSHAKE_TIMEOUT/.test(error)) return '助手已经启动，但没有在限定时间内回应。'
-  if (/HEALTHCHECK_TIMEOUT/.test(error)) return '助手启动检查超时，请稍后重试。'
-  if (/EXITED/.test(error)) return '助手启动后立即退出，可能需要先完成登录或本机配置。'
-  return '助手没有完成连接握手，请查看技术详情。'
+export function runtimeHealthErrorSummary(error?: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).runtimeError
+  if (!error) return copy.handshake
+  if (/(?:CLAUDE|AGENT)_AUTH_REQUIRED/.test(error)) return copy.auth
+  if (/ASSISTANT_CLI_WINDOWS_SHIM_UNSUPPORTED/.test(error)) return copy.windowsShim
+  if (/ASSISTANT_CLI_NOT_FOUND/.test(error)) return copy.cliMissing
+  if (/BUNDLED_.*NOT_FOUND/.test(error)) return copy.bundledMissing
+  if (/NOT_FOUND|ENOENT/.test(error)) return copy.notFound
+  if (/HANDSHAKE_TIMEOUT/.test(error)) return copy.handshakeTimeout
+  if (/HEALTHCHECK_TIMEOUT/.test(error)) return copy.healthTimeout
+  if (/EXITED/.test(error)) return copy.exited
+  return copy.fallback
 }
 
-export function runtimeLaunchDetail(runtime: {
-  command?: string
-  args?: string[]
-  health?: { error?: string; version?: string }
-}) {
+export function runtimeLaunchDetail(
+  runtime: {
+    command?: string
+    args?: string[]
+    health?: { error?: string; version?: string }
+  },
+  locale: Locale = 'zh-CN',
+) {
   const failed = runtime.health?.error?.match(/\[launch=([^\]]+)\]/)?.[1]
   if (failed) return failed
   const ready = runtime.health?.version?.match(/(?:^| · )via (.+)$/)?.[1]
   if (ready) return ready
-  return `尚未解析 · ${[runtime.command, ...(runtime.args ?? [])].filter(Boolean).join(' ')}`
+  return format(localeOf(locale).launchUnresolved, {
+    command: [runtime.command, ...(runtime.args ?? [])].filter(Boolean).join(' '),
+  })
 }
 
-export function runStatusLabel(status: string) {
+export function runStatusLabel(status: string, locale: Locale = 'zh-CN') {
+  const copy = localeOf(locale).runStatus
   return (
     {
-      queued: '排队中',
-      running: '运行中',
-      completed: '已完成',
-      failed: '未完成',
-      cancelled: '已取消',
-      'needs-reconciliation': '待处理',
+      queued: copy.queued,
+      running: copy.running,
+      completed: copy.completed,
+      failed: copy.failed,
+      cancelled: copy.cancelled,
+      'needs-reconciliation': copy['needs-reconciliation'],
     }[status] ?? status
   )
 }
 
-export function runtimeBlurb(runtime: { id: string; description?: string }) {
-  if (runtime.id === 'codex') return '连接当前用户环境中安装的 Codex。默认只读，不会改你的文件。'
-  if (runtime.id === 'claude-code') return '连接当前用户环境中安装的 Claude Code。'
-  return runtime.description || '使用本机当前配置'
+export function runtimeBlurb(
+  runtime: { id: string; description?: string },
+  locale: Locale = 'zh-CN',
+) {
+  const copy = localeOf(locale).runtimeBlurb
+  if (runtime.id === 'codex') return copy.codex
+  if (runtime.id === 'claude-code') return copy.claude
+  return runtime.description || copy.fallback
 }

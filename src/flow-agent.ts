@@ -1,5 +1,6 @@
 import type { CFDraft, CFVersion, FlowDraft, FlowNode, Json } from './types.js'
 import { flowRevisionOutputSchema } from './proposal.js'
+import { agentCopy, format, normalizeLocale, type Locale } from './locale.js'
 
 /**
  * Flow assistant: answers from the workbench snapshot sent this turn, and may
@@ -66,10 +67,10 @@ export const flowAgentOutputSchema = flowRevisionOutputSchema
 export const MAX_CONVERSATION_TURNS = 8
 const MAX_TURN_CHARS = 1000
 
-export const flowAgentPrompt = (message: string, grounded = false) =>
+export const flowAgentPrompt = (message: string, grounded = false, locale: Locale = 'zh-CN') =>
   [
     'You are revising the current Flow draft inside a visual workflow editor.',
-    'Reply in concise Chinese.',
+    agentCopy[normalizeLocale(locale)].replyLanguage,
     "Trust only this turn's input JSON for the Flow, steps, conversation, run evidence, selection, and check error. Do not rely on memory of earlier turns.",
     'If the user is asking a question, explaining a failure, or inspecting the graph, set intent to "answer" and return stages as [].',
     'If the user wants to change the current Flow (add, remove, rewrite, reorder, retarget, branch, or regenerate it), set intent to "revise" and return the complete resulting top-level stage list. Unchanged capabilities must keep their current name and cfId.',
@@ -94,11 +95,12 @@ const capabilityBody = (
   candidates.find((item) => item.cfId === cfId) ??
   catalog.find((item) => item.cfId === cfId && item.version === version)?.draft
 
-const stepName = (node: FlowNode, body?: CFDraft) => {
+const stepName = (node: FlowNode, body?: CFDraft, locale: Locale = 'zh-CN') => {
+  const copy = agentCopy[normalizeLocale(locale)]
   if (node.kind === 'cf-call') return node.name?.trim() || body?.name?.trim() || node.id
-  if (node.kind === 'branch') return '条件分支'
-  if (node.kind === 'join') return '汇合'
-  return '流程结果'
+  if (node.kind === 'branch') return copy.branch
+  if (node.kind === 'join') return copy.join
+  return copy.output
 }
 
 function stepView(node: FlowNode, candidates: CFDraft[], catalog: CFVersion[]) {
@@ -173,9 +175,11 @@ export function flowAgentContext(
 }
 
 const looksLikeRevision = (message: string) =>
-  /改|加一?步|删|去掉|调整|重写|换成|修改|重排|增加|移除/.test(message)
+  /改|加一?步|删|去掉|调整|重写|换成|修改|重排|增加|移除|rewrite|adjust|remove|delete|add (a )?step|change|replace|insert|modify/i.test(
+    message,
+  )
 
-function failedStepLabel(body: AgentRequest, catalog: CFVersion[]) {
+function failedStepLabel(body: AgentRequest, catalog: CFVersion[], locale: Locale = 'zh-CN') {
   const draft = body.flowDraft
   const events = body.runDetail?.events ?? []
   const failedEvent = [...events]
@@ -195,39 +199,45 @@ function failedStepLabel(body: AgentRequest, catalog: CFVersion[]) {
   const error =
     failedEvent.data && typeof failedEvent.data === 'object' && 'error' in failedEvent.data
       ? String(failedEvent.data.error)
-      : '运行没有完成。'
+      : agentCopy[normalizeLocale(locale)].runIncomplete
   return {
-    name: failedNode ? stepName(failedNode, bodyCf) : '未知步骤',
+    name: failedNode
+      ? stepName(failedNode, bodyCf, locale)
+      : agentCopy[normalizeLocale(locale)].unknownStep,
     error,
   }
 }
 
 /** Deterministic local answer used when no runtime is available. Never revises. */
-export function flowAgentFallback(body: AgentRequest, catalog: CFVersion[] = []): AgentResponse {
+export function flowAgentFallback(
+  body: AgentRequest,
+  catalog: CFVersion[] = [],
+  locale: Locale = 'zh-CN',
+): AgentResponse {
+  const copy = agentCopy[normalizeLocale(locale)]
   const draft = body.flowDraft
   if (!draft)
     return {
-      message:
-        '目前还没有可分析的流程。先在中间区域描述目标，生成一份 Flow 草案后，我就能检查步骤和运行证据。',
+      message: copy.noDraft,
       intent: 'answer',
       stages: [],
     }
-  const failure = failedStepLabel(body, catalog)
+  const failure = failedStepLabel(body, catalog, locale)
   if (failure)
     return {
-      message: `我定位到最近一次运行在「${failure.name}」失败。记录里的原因是：${failure.error}。当前没有可用的流程助手，我只能根据这份草稿说明问题，不能直接改图。请在设置里选一个可用 Runtime，再说一次要怎么改。`,
+      message: format(copy.failedRun, { name: failure.name, error: failure.error }),
       intent: 'answer',
       stages: [],
     }
   if (looksLikeRevision(body.message))
     return {
-      message: `我已经加载「${draft.name}」当前草稿，但当前没有可用的流程助手，不能直接改图。请在设置里选一个可用 Runtime 后再说一次要改的地方。`,
+      message: format(copy.noRuntimeRevise, { name: draft.name }),
       intent: 'answer',
       stages: [],
     }
   const stepCount = draft.nodes.filter((node) => node.kind === 'cf-call').length
   return {
-    message: `我已经加载「${draft.name}」当前草稿，当前有 ${stepCount} 个能力步骤。你可以问某一步在做什么，或在助手可用时直接说要怎么改。`,
+    message: format(copy.loaded, { name: draft.name, count: stepCount }),
     intent: 'answer',
     stages: [],
   }

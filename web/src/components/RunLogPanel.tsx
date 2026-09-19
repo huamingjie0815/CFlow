@@ -9,6 +9,8 @@ import {
   type RunLogGroup,
 } from '../run-log'
 import { runStatusLabel } from '../copy'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { CFDraft, CFVersion, FlowDraft, RunDetail, RunSummary } from '../types'
 import { AgentTracePopover } from './AgentTracePopover'
 import { FileExtractionResult } from './FileExtractionResult'
@@ -26,8 +28,8 @@ type RunLogPanelProps = {
   onSelectNode: (id: string | null) => void
 }
 
-const runKind = (flowVersionId: unknown) =>
-  String(flowVersionId).startsWith('test:') ? '测试运行' : '正式运行'
+const runKind = (flowVersionId: unknown, testLabel: string, liveLabel: string) =>
+  String(flowVersionId).startsWith('test:') ? testLabel : liveLabel
 
 function EntryRow({ entry }: { entry: RunLogEntry }) {
   return (
@@ -44,11 +46,12 @@ function EntryRow({ entry }: { entry: RunLogEntry }) {
 }
 
 function TechnicalDetails({ entries }: { entries: RunLogEntry[] }) {
+  const { m } = useLocale()
   const withPayload = entries.filter((entry) => entry.technical)
   if (!withPayload.length) return null
   return (
     <details className="tech-disclosure">
-      <summary>技术细节</summary>
+      <summary>{m.log.technical}</summary>
       {withPayload.map((entry) => (
         <div className="code-section" key={`${entry.seq}-tech`}>
           <header>
@@ -75,6 +78,7 @@ function StepGroup({
   onSelectNode: (id: string | null) => void
   invocationId?: string
 }) {
+  const { m } = useLocale()
   const clickable = Boolean(group.nodeId) && !group.stale
   return (
     <section className="run-log-group">
@@ -84,7 +88,7 @@ function StepGroup({
             type="button"
             className="run-log-select"
             onClick={() => onSelectNode(group.nodeId!)}
-            title="在左侧详情里打开这一步"
+            title={m.log.openStep}
           >
             <RunLogHead group={group} />
           </button>
@@ -106,6 +110,7 @@ function StepGroup({
 }
 
 function RunLogHead({ group }: { group: RunLogGroup }) {
+  const { m, locale } = useLocale()
   return (
     <>
       {group.order != null && (
@@ -114,7 +119,7 @@ function RunLogHead({ group }: { group: RunLogGroup }) {
       <span className="run-log-title">
         <strong>{group.title}</strong>
         <small>
-          {[group.kindLabel, group.configNote, group.stale ? '流程已改动' : null]
+          {[group.kindLabel, group.configNote, group.stale ? m.log.stale : null]
             .filter(Boolean)
             .join(' · ')}
         </small>
@@ -122,7 +127,7 @@ function RunLogHead({ group }: { group: RunLogGroup }) {
       {group.state && (
         <span className="run-log-state">
           <span className={`status-lamp is-${nodeRunStateTone(group.state)}`} />
-          {nodeRunStateLabel(group.state)}
+          {nodeRunStateLabel(group.state, locale)}
         </span>
       )}
       <small className="run-log-time">{group.lastAt}</small>
@@ -135,9 +140,10 @@ function RunLogHead({ group }: { group: RunLogGroup }) {
  * "what happened, step by step" rather than as a flat event stream.
  */
 export function RunLogPanel(props: RunLogPanelProps) {
+  const { m, locale } = useLocale()
   const log = useMemo(
-    () => buildRunLog(props.draft, props.runDetail, props.cfs, props.candidateCfs),
-    [props.candidateCfs, props.cfs, props.draft, props.runDetail],
+    () => buildRunLog(props.draft, props.runDetail, props.cfs, props.candidateCfs, locale),
+    [locale, props.candidateCfs, props.cfs, props.draft, props.runDetail],
   )
   const flowRuns = useMemo(
     () =>
@@ -154,18 +160,22 @@ export function RunLogPanel(props: RunLogPanelProps) {
     <div className="run-log">
       <div className="run-log-main">
         {!log ? (
-          <div className="empty-panel compact">
-            还没有运行记录。测试或正式运行之后，这里会按步骤显示发生了什么。
-          </div>
+          <div className="empty-panel compact">{m.log.empty}</div>
         ) : (
           <>
             <div className="run-log-summary">
               <span className={`status-lamp is-${props.runDetail!.run.status}`} />
               <div>
-                <strong>{runStatusLabel(props.runDetail!.run.status)}</strong>
+                <strong>{runStatusLabel(props.runDetail!.run.status, locale)}</strong>
                 <p>
-                  {runKind(props.runDetail!.run.flow_version_id)} · 共 {log.nodes.length}{' '}
-                  个步骤有记录
+                  {format(m.log.summary, {
+                    kind: runKind(
+                      props.runDetail!.run.flow_version_id,
+                      m.log.testRun,
+                      m.log.liveRun,
+                    ),
+                    count: log.nodes.length,
+                  })}
                 </p>
               </div>
               {runOutput != null && (
@@ -173,7 +183,7 @@ export function RunLogPanel(props: RunLogPanelProps) {
                   <summary>
                     <ChevronRight aria-hidden="true" size={13} />
                     <span className="run-log-output-label">
-                      <strong>运行结果</strong>
+                      <strong>{m.log.result}</strong>
                       <code>{compactJson(runOutput, 320)}</code>
                     </span>
                   </summary>
@@ -187,8 +197,8 @@ export function RunLogPanel(props: RunLogPanelProps) {
               <section className="run-log-group is-run">
                 <div className="run-log-head is-static">
                   <span className="run-log-title">
-                    <strong>整条流程</strong>
-                    <small>运行级记录</small>
+                    <strong>{m.log.wholeFlow}</strong>
+                    <small>{m.log.runLevel}</small>
                   </span>
                 </div>
                 <div className="activity-list">
@@ -210,13 +220,13 @@ export function RunLogPanel(props: RunLogPanelProps) {
               />
             ))}
             {!log.nodes.length && !log.run.entries.length && (
-              <div className="empty-panel compact">这次运行还没有产生记录。</div>
+              <div className="empty-panel compact">{m.log.noEvents}</div>
             )}
           </>
         )}
       </div>
-      <aside className="run-log-runs" aria-label="最近运行">
-        <h3>最近运行</h3>
+      <aside className="run-log-runs" aria-label={m.log.recentAria}>
+        <h3>{m.log.recent}</h3>
         {flowRuns.length ? (
           <div className="activity-list">
             {flowRuns.map((run) => (
@@ -228,15 +238,15 @@ export function RunLogPanel(props: RunLogPanelProps) {
               >
                 <span className={`status-lamp is-${run.status}`} />
                 <div>
-                  <strong>{runStatusLabel(run.status)}</strong>
-                  <p>{runKind(run.flow_version_id)}</p>
+                  <strong>{runStatusLabel(run.status, locale)}</strong>
+                  <p>{runKind(run.flow_version_id, m.log.testRun, m.log.liveRun)}</p>
                   <small>{run.updated_at ?? run.created_at ?? ''}</small>
                 </div>
               </button>
             ))}
           </div>
         ) : (
-          <div className="empty-panel compact">这条流程还没有运行记录。</div>
+          <div className="empty-panel compact">{m.log.noRuns}</div>
         )}
       </aside>
     </div>

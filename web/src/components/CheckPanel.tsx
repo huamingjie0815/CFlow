@@ -2,6 +2,8 @@ import { Check, Clipboard, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
 import { nodeKindLabel } from '../copy'
 import { describeNode } from '../flow-labels'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { CFDraft, CFVersion, CompilationPreview, FlowDraft, RuntimeWithHealth } from '../types'
 
 type CheckPanelProps = {
@@ -25,6 +27,7 @@ type CheckPanelProps = {
  * in a closed disclosure, because a drawer is no place to read JSON.
  */
 export function CheckPanel(props: CheckPanelProps) {
+  const { m, locale } = useLocale()
   const { draft, preview, error, isPending, runtimes, runtimeId, onRuntimeChange, onCompile } =
     props
   const [copied, setCopied] = useState(false)
@@ -43,7 +46,7 @@ export function CheckPanel(props: CheckPanelProps) {
           (node) => node.kind === 'cf-call' && !node.cfRef.cfId.startsWith('builtin:'),
         ) && (
           <label className="check-runtime">
-            <span>用哪个助手检查</span>
+            <span>{m.check.runtime}</span>
             <select value={runtimeId} onChange={(event) => onRuntimeChange(event.target.value)}>
               {runtimes.map((runtime) => (
                 <option
@@ -59,43 +62,50 @@ export function CheckPanel(props: CheckPanelProps) {
         )}
         <span className="check-counts">
           {preview
-            ? `${preview.plan.nodes.length} 个步骤 · ${preview.plan.edges.length} 条连线 · v${preview.plan.flowVersion}`
-            : `${draft.nodes.length} 个步骤 · ${draft.edges.length} 条连线`}
+            ? format(m.check.previewCounts, {
+                nodes: preview.plan.nodes.length,
+                edges: preview.plan.edges.length,
+                version: preview.plan.flowVersion,
+              })
+            : format(m.check.draftCounts, {
+                nodes: draft.nodes.length,
+                edges: draft.edges.length,
+              })}
         </span>
         <span className="toolbar-spacer" />
         {preview && (
           <button className="button" type="button" onClick={copy}>
             {copied ? <Check size={14} /> : <Clipboard size={14} />}
-            {copied ? '已复制' : '复制结果'}
+            {copied ? m.check.copied : m.check.copy}
           </button>
         )}
         <button className="button signal" type="button" onClick={onCompile} disabled={isPending}>
           <RefreshCw className={isPending ? 'spin' : undefined} size={14} />
-          {isPending ? '正在检查' : preview ? '重新检查' : '开始检查'}
+          {isPending ? m.check.checking : preview ? m.check.recheck : m.check.start}
         </button>
       </div>
 
       {error && (
         <div className="inline-alert error" role="alert">
-          <strong>检查未通过</strong>
+          <strong>{m.check.failed}</strong>
           <span>{error}</span>
         </div>
       )}
 
       {!!preview?.warnings.length && (
         <div className="inline-alert warning" role="status">
-          <strong>检查提醒</strong>
+          <strong>{m.check.warning}</strong>
           <span>{preview.warnings.map((warning) => warning.message).join('；')}</span>
         </div>
       )}
 
       <div className="check-body">
         <details className="tech-disclosure run-input-editor">
-          <summary>运行输入</summary>
+          <summary>{m.check.runInput}</summary>
           <label className="field">
-            <span>输入数据（JSON）</span>
+            <span>{m.check.runInputJson}</span>
             <textarea
-              aria-label="运行输入 JSON"
+              aria-label={m.check.runInputAria}
               rows={4}
               value={props.runInput}
               onChange={(event) => props.onRunInputChange(event.target.value)}
@@ -108,17 +118,17 @@ export function CheckPanel(props: CheckPanelProps) {
             <ol className="check-steps">
               {preview.plan.nodes.map((node) => (
                 <li key={node.id}>
-                  <span className="check-step-kind">{nodeKindLabel(node.kind)}</span>
-                  <strong>{describeNode(node, props.cfs, props.candidateCfs).label}</strong>
+                  <span className="check-step-kind">{nodeKindLabel(node.kind, locale)}</span>
+                  <strong>{describeNode(node, props.cfs, props.candidateCfs, locale).label}</strong>
                 </li>
               ))}
             </ol>
             <details className="tech-disclosure">
-              <summary>技术细节（给需要核对的同事）</summary>
+              <summary>{m.check.technical}</summary>
               <div className="code-section">
                 <header>
                   <div>
-                    <h3>流程方案 FlowPlan</h3>
+                    <h3>{m.check.plan}</h3>
                   </div>
                   <code>{preview.plan.planHash}</code>
                 </header>
@@ -145,9 +155,7 @@ export function CheckPanel(props: CheckPanelProps) {
           </>
         ) : (
           <div className="empty-panel compact">
-            {error
-              ? '先按提示改一处，再点「重新检查」。检查通过之后才能测试和发布。'
-              : '点「开始检查」确认步骤和连线能走通。这一步不会真的运行，也不会发布。'}
+            {error ? m.check.fixThenRecheck : m.check.startHint}
           </div>
         )}
       </div>

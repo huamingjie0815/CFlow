@@ -1,4 +1,5 @@
 import type { FileExtractionInput, FlowDraft, FlowNode } from '../../../src/types'
+import { useLocale } from '../locale-context'
 import { FileReferencePicker } from './FileReferencePicker'
 
 export function FileExtractionSettings({
@@ -10,6 +11,7 @@ export function FileExtractionSettings({
   draft: FlowDraft
   onChange: (node: FlowNode) => void
 }) {
+  const { m } = useLocale()
   const config = node.toolInput ?? { source: { kind: 'files' as const, paths: [] } }
   const source = config.source
   const upstream = draft.nodes.filter((item) =>
@@ -21,29 +23,29 @@ export function FileExtractionSettings({
     <div className="extraction-settings">
       <div className="property-list">
         <div>
-          <span>由谁执行</span>
-          <strong>本地解析</strong>
+          <span>{m.extraction.executor}</span>
+          <strong>{m.extraction.local}</strong>
         </div>
         <div>
-          <span>文件权限</span>
-          <strong>只读</strong>
+          <span>{m.extraction.permission}</span>
+          <strong>{m.extraction.readOnly}</strong>
         </div>
       </div>
       <label className="field">
-        <span>步骤名称</span>
+        <span>{m.extraction.stepName}</span>
         <input
-          value={node.name ?? '文件内容提取'}
+          value={node.name ?? m.extraction.defaultName}
           onChange={(event) => onChange({ ...node, name: event.target.value })}
         />
       </label>
       <div className="field">
-        <span>文件来源</span>
-        <div className="extraction-source-modes" role="group" aria-label="文件来源">
+        <span>{m.extraction.source}</span>
+        <div className="extraction-source-modes" role="group" aria-label={m.extraction.source}>
           {(
             [
-              ['files', '选择文件'],
-              ['flow-input', '流程输入'],
-              ['upstream', '上游结果'],
+              ['files', m.extraction.files],
+              ['flow-input', m.extraction.flowInput],
+              ['upstream', m.extraction.upstream],
             ] as const
           ).map(([kind, label]) => (
             <button
@@ -78,21 +80,21 @@ export function FileExtractionSettings({
         <>
           {source.kind === 'upstream' && (
             <label className="field">
-              <span>来源步骤</span>
+              <span>{m.extraction.sourceStep}</span>
               <select
                 value={source.nodeId}
                 onChange={(event) => update({ source: { ...source, nodeId: event.target.value } })}
               >
-                <option value="">选择直接上游步骤</option>
+                <option value="">{m.extraction.pickUpstream}</option>
                 {upstream.map((item) => (
                   <option key={item.id} value={item.id}>
                     {'name' in item && item.name
                       ? item.name
                       : item.kind === 'cf-call'
-                        ? '能力步骤'
+                        ? m.extraction.capabilityStep
                         : item.kind === 'join'
-                          ? '汇合'
-                          : '分支'}{' '}
+                          ? m.extraction.join
+                          : m.extraction.branch}{' '}
                     ({draft.nodes.indexOf(item) + 1})
                   </option>
                 ))}
@@ -100,7 +102,7 @@ export function FileExtractionSettings({
             </label>
           )}
           <label className="field">
-            <span>文件路径字段（JSON Pointer）</span>
+            <span>{m.extraction.pathField}</span>
             <input
               value={source.pointer}
               placeholder="/files"
@@ -110,24 +112,24 @@ export function FileExtractionSettings({
         </>
       )}
       <label className="field">
-        <span>文本编码</span>
+        <span>{m.extraction.encoding}</span>
         <select
           value={config.encoding ?? 'utf-8'}
           onChange={(event) =>
             update({ encoding: event.target.value as FileExtractionInput['encoding'] })
           }
         >
-          <option value="utf-8">UTF-8 / BOM 自动识别</option>
-          <option value="gb18030">GB18030（中文文本）</option>
+          <option value="utf-8">{m.extraction.encodingUtf8}</option>
+          <option value="gb18030">{m.extraction.encodingGb}</option>
         </select>
       </label>
       <label className="field">
-        <span>每文件字符上限</span>
+        <span>{m.extraction.maxChars}</span>
         <input
           type="number"
           min={1}
           step={1}
-          placeholder="不截断"
+          placeholder={m.extraction.noLimit}
           value={config.maxChars ?? ''}
           onChange={(event) =>
             update({ maxChars: event.target.value === '' ? undefined : Number(event.target.value) })

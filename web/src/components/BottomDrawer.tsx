@@ -1,6 +1,7 @@
 import { ListChecks, ScrollText, X } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useRef, useState } from 'react'
+import { useLocale } from '../locale-context'
 import type { DrawerTab } from '../workbench-ui'
 
 type BottomDrawerProps = {
@@ -10,10 +11,10 @@ type BottomDrawerProps = {
   children: ReactNode
 }
 
-const tabs: { id: DrawerTab; label: string; icon: ReactNode }[] = [
-  { id: 'log', label: '日志', icon: <ScrollText size={14} /> },
-  { id: 'check', label: '检查', icon: <ListChecks size={14} /> },
-]
+const tabIcons: Record<DrawerTab, ReactNode> = {
+  log: <ScrollText size={14} />,
+  check: <ListChecks size={14} />,
+}
 
 const MIN_HEIGHT = 180
 const MAX_HEIGHT = 640
@@ -32,6 +33,11 @@ function clampHeight(value: number) {
  * its own — the toolbar is the only way in.
  */
 export function BottomDrawer(props: BottomDrawerProps) {
+  const { m } = useLocale()
+  const tabs: { id: DrawerTab; label: string; icon: ReactNode }[] = [
+    { id: 'log', label: m.drawer.log, icon: tabIcons.log },
+    { id: 'check', label: m.drawer.check, icon: tabIcons.check },
+  ]
   const drawerRef = useRef<HTMLElement>(null)
   const [height, setHeight] = useState<number | null>(null)
   const [isResizing, setIsResizing] = useState(false)
@@ -76,14 +82,14 @@ export function BottomDrawer(props: BottomDrawerProps) {
     <section
       ref={drawerRef}
       className={`bottom-drawer${isResizing ? ' is-resizing' : ''}`}
-      aria-label="运行日志与检查"
+      aria-label={m.drawer.aria}
       style={height ? { height: `${height}px` } : undefined}
     >
       <div
         className="drawer-resize-handle"
         role="separator"
         aria-orientation="horizontal"
-        aria-label="调整日志和检查面板高度"
+        aria-label={m.drawer.resize}
         aria-valuemin={MIN_HEIGHT}
         aria-valuemax={maxDrawerHeight()}
         aria-valuenow={height ?? undefined}
@@ -113,8 +119,8 @@ export function BottomDrawer(props: BottomDrawerProps) {
           type="button"
           className="icon-button drawer-close"
           onClick={props.onClose}
-          title="收起"
-          aria-label="收起日志"
+          title={m.drawer.collapse}
+          aria-label={m.drawer.collapseLog}
         >
           <X size={15} />
         </button>

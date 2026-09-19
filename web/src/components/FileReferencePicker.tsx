@@ -2,6 +2,8 @@ import { AtSign, Check, FileText, LoaderCircle, Search, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { api } from '../api'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 
 type FileReferencePickerProps = {
   mode?: 'reference' | 'extract'
@@ -11,6 +13,7 @@ type FileReferencePickerProps = {
 }
 
 export function FileReferencePicker(props: FileReferencePickerProps) {
+  const { m } = useLocale()
   const extracting = props.mode === 'extract'
   const buttonRef = useRef<HTMLButtonElement>(null)
   const pickerRef = useRef<HTMLDivElement>(null)
@@ -105,12 +108,8 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
     <div className={`file-references${props.active ? '' : ' is-inactive'}`}>
       <div className="file-reference-heading">
         <div>
-          <strong>{extracting ? '待解析文件' : '引用文件'}</strong>
-          {!extracting && (
-            <span>
-              {props.active ? 'Agent 会优先从这些路径查找' : '已保留，启用文件权限后生效'}
-            </span>
-          )}
+          <strong>{extracting ? m.files.pending : m.files.referenced}</strong>
+          {!extracting && <span>{props.active ? m.files.agentHint : m.files.keptHint}</span>}
         </div>
         <button
           ref={buttonRef}
@@ -124,7 +123,7 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
           }}
         >
           {extracting ? <FileText size={13} /> : <AtSign size={13} />}{' '}
-          {extracting ? '选择文件' : '引用文件'}
+          {extracting ? m.files.pick : m.files.reference}
         </button>
       </div>
 
@@ -138,8 +137,8 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
               <button
                 className="icon-button"
                 type="button"
-                title={`移除 ${path}`}
-                aria-label={`移除 ${path}`}
+                title={format(m.files.remove, { path })}
+                aria-label={format(m.files.remove, { path })}
                 onClick={() => props.onChange(props.references.filter((item) => item !== path))}
               >
                 <X size={12} />
@@ -150,7 +149,7 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
       )}
       {missing.length > 0 && (
         <small className="effect-warning" role="status">
-          {missing.length} 个引用文件已不存在，检查时会保留警告。
+          {format(m.files.missing, { count: missing.length })}
         </small>
       )}
 
@@ -160,19 +159,19 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
             ref={pickerRef}
             className="file-picker-popover"
             role="dialog"
-            aria-label="选择工作区文件"
+            aria-label={m.files.pickAria}
             style={position}
           >
             <header>
               <div>
-                <strong>{extracting ? '选择待解析文件' : '引用工作区文件'}</strong>
-                {!extracting && <span>只记录路径，不读取文件内容</span>}
+                <strong>{extracting ? m.files.pickPending : m.files.pickWorkspace}</strong>
+                {!extracting && <span>{m.files.pickHint}</span>}
               </div>
               <button
                 className="icon-button"
                 type="button"
-                title="关闭"
-                aria-label="关闭"
+                title={m.files.close}
+                aria-label={m.files.close}
                 onClick={() => setOpen(false)}
               >
                 <X size={14} />
@@ -184,8 +183,8 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
                 autoFocus
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="搜索文件名或路径"
-                aria-label="搜索工作区文件"
+                placeholder={m.files.search}
+                aria-label={m.files.search}
               />
               {pending && <LoaderCircle className="spin" size={13} />}
             </label>
@@ -201,15 +200,16 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
                   <span title={path}>{path}</span>
                 </label>
               ))}
-              {!pending && !matches.length && <p>没有找到匹配的文件</p>}
-              {error && <p className="is-error">暂时无法读取工作区文件，请重试。</p>}
+              {!pending && !matches.length && <p>{m.files.noMatch}</p>}
+              {error && <p className="is-error">{m.files.loadError}</p>}
             </div>
             <footer>
               <span>
-                已选 {staged.length} 个{truncated ? ' · 继续输入以缩小范围' : ''}
+                {format(m.files.selected, { count: staged.length })}
+                {truncated ? m.files.keepTyping : ''}
               </span>
               <button className="button" type="button" onClick={() => setOpen(false)}>
-                取消
+                {m.files.cancel}
               </button>
               <button
                 className="button signal"
@@ -219,7 +219,7 @@ export function FileReferencePicker(props: FileReferencePickerProps) {
                   setOpen(false)
                 }}
               >
-                <Check size={13} /> 确认
+                <Check size={13} /> {m.files.confirm}
               </button>
             </footer>
           </div>,

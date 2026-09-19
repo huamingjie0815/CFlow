@@ -1,6 +1,8 @@
 import { Link2, ListChecks, Plus, Trash2 } from 'lucide-react'
 import { nodeKindLabel } from '../copy'
 import { describeNode } from '../flow-labels'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import { FileMentionField } from './FileMentionField'
 import { FileReferencePicker } from './FileReferencePicker'
 import { FileExtractionSettings } from './FileExtractionSettings'
@@ -63,6 +65,7 @@ function Field(props: {
  * behind the 技术编号 disclosure.
  */
 export function DetailPanel(props: DetailPanelProps) {
+  const { m, locale } = useLocale()
   const {
     draft,
     selectedNodeId,
@@ -221,12 +224,15 @@ export function DetailPanel(props: DetailPanelProps) {
   }
 
   const heading = selectedEdge
-    ? { title: '连线', hint: '改接两端，或删除这条连线' }
+    ? { title: m.detail.edgeTitle, hint: m.detail.edgeHint }
     : selectedNode
-      ? { title: describeNode(selectedNode, cfs, candidateCfs).label, hint: '修改这一步怎么工作' }
+      ? {
+          title: describeNode(selectedNode, cfs, candidateCfs, locale).label,
+          hint: m.detail.nodeHint,
+        }
       : draft
-        ? { title: '流程说明', hint: '没有选中步骤时，这里显示整条流程' }
-        : { title: '还没有流程', hint: '先在上方选择或新建一条流程' }
+        ? { title: m.detail.flowTitle, hint: m.detail.flowHint }
+        : { title: m.detail.emptyTitle, hint: m.detail.emptyHint }
 
   return (
     <div className="detail-layout">
@@ -236,7 +242,7 @@ export function DetailPanel(props: DetailPanelProps) {
       </header>
       <div className="detail-scroll">
         {!draft ? (
-          <div className="empty-panel">选中一条流程后，可在这里查看和修改步骤说明。</div>
+          <div className="empty-panel">{m.detail.empty}</div>
         ) : selectedEdge ? (
           <section className="inspector-section">
             <div className="section-title-row">
@@ -244,17 +250,17 @@ export function DetailPanel(props: DetailPanelProps) {
                 <span className="section-icon">
                   <Link2 size={15} />
                 </span>
-                <h3>步骤连线</h3>
+                <h3>{m.detail.edgeHeading}</h3>
               </div>
-              <span className="tag">可改接</span>
+              <span className="tag">{m.detail.reconnectable}</span>
             </div>
             <label className="field">
-              <span>从哪一步出发</span>
+              <span>{m.detail.from}</span>
               <select
                 value={selectedEdge.from}
                 onChange={(event) => updateEdge({ ...selectedEdge, from: event.target.value })}
               >
-                <option value="$entry">开始</option>
+                <option value="$entry">{m.canvas.start}</option>
                 {draft.nodes.map((node) => (
                   <option key={node.id} value={node.id}>
                     {describeNode(node, cfs, candidateCfs).label}
@@ -263,7 +269,7 @@ export function DetailPanel(props: DetailPanelProps) {
               </select>
             </label>
             <label className="field">
-              <span>到哪一步</span>
+              <span>{m.detail.to}</span>
               <select
                 value={selectedEdge.to}
                 onChange={(event) => updateEdge({ ...selectedEdge, to: event.target.value })}
@@ -276,7 +282,7 @@ export function DetailPanel(props: DetailPanelProps) {
               </select>
             </label>
             <label className="field">
-              <span>什么时候走这条线</span>
+              <span>{m.detail.when}</span>
               <select
                 value={selectedEdge.when?.outcome ?? ''}
                 onChange={(event) => {
@@ -294,16 +300,16 @@ export function DetailPanel(props: DetailPanelProps) {
                   })
                 }}
               >
-                <option value="">上一步结束后</option>
-                <option value="completed">上一步成功时</option>
-                <option value="failed">上一步失败时</option>
-                <option value="branch-case">走到某一条分支时</option>
+                <option value="">{m.detail.afterPrevious}</option>
+                <option value="completed">{m.detail.onSuccess}</option>
+                <option value="failed">{m.detail.onFailure}</option>
+                <option value="branch-case">{m.detail.onBranch}</option>
               </select>
             </label>
             {selectedEdge.when?.outcome === 'branch-case' &&
               (selectedEdgeSource?.kind === 'branch' ? (
                 <label className="field">
-                  <span>走哪一条路</span>
+                  <span>{m.detail.whichRoute}</span>
                   <select
                     value={selectedEdge.when.caseId ?? ''}
                     onChange={(event) =>
@@ -322,25 +328,25 @@ export function DetailPanel(props: DetailPanelProps) {
                 </label>
               ) : (
                 <Field
-                  label="这条路的名称"
+                  label={m.detail.routeName}
                   value={selectedEdge.when.caseId ?? ''}
                   onChange={(caseId) =>
                     updateEdge({ ...selectedEdge, when: { outcome: 'branch-case', caseId } })
                   }
                 />
               ))}
-            <p className="section-help">也可以拖动连线两端改接到别处，或选中后按 Delete 删除。</p>
+            <p className="section-help">{m.detail.edgeHelp}</p>
             <button className="button danger full" type="button" onClick={deleteEdge}>
-              <Trash2 size={15} /> 删除这条连线
+              <Trash2 size={15} /> {m.detail.deleteEdge}
             </button>
           </section>
         ) : selectedNode ? (
           <section className="inspector-section">
             <div className="section-title-row">
               <div>
-                <h3>步骤设置</h3>
+                <h3>{m.detail.stepHeading}</h3>
               </div>
-              <span className="tag">{nodeKindLabel(selectedNode.kind)}</span>
+              <span className="tag">{nodeKindLabel(selectedNode.kind, locale)}</span>
             </div>
             {selectedNode.kind === 'cf-call' &&
               selectedCapability?.execution?.kind === 'builtin' && (
@@ -359,38 +365,40 @@ export function DetailPanel(props: DetailPanelProps) {
                       {selectedCapability &&
                       (selectedCapability.name.trim() || selectedCapability.does.trim())
                         ? selectedCapabilityIsCandidate
-                          ? '这是草稿能力，还可以改'
-                          : '这是已发布的能力'
-                        : '新步骤'}
+                          ? m.detail.draftCapability
+                          : m.detail.publishedCapability
+                        : m.detail.newStep}
                     </strong>
                     <span>
                       {selectedCapability &&
                       (selectedCapability.name.trim() || selectedCapability.does.trim())
                         ? selectedCapabilityIsCandidate
-                          ? '这里的说明会在下次检查和测试时用到。'
-                          : '改动只会用于当前流程，不会修改已经发布的能力。'
-                        : '先填写能力名称、任务和处理约束。输入与产出会由流程运行时自动处理。'}
+                          ? m.detail.draftHint
+                          : m.detail.publishedHint
+                        : m.detail.newHint}
                     </span>
                   </div>
                   <label className="field">
-                    <span>由谁执行</span>
+                    <span>{m.detail.executor}</span>
                     <select
                       value={selectedNode.executor ?? ''}
                       onChange={(event) =>
                         updateNode({ ...selectedNode, executor: event.target.value || undefined })
                       }
                     >
-                      <option value="">使用这项能力的默认助手</option>
+                      <option value="">{m.detail.defaultExecutor}</option>
                       {selectedNode.executor === 'cflow-demo' &&
                         !runtimes.some((runtime) => runtime.id === 'cflow-demo') && (
-                          <option value="cflow-demo">演示执行 · 不调用本机助手</option>
+                          <option value="cflow-demo">{m.detail.demoExecutor}</option>
                         )}
                       {runtimes.map((runtime) => {
                         const available = runtime.enabled && runtime.health?.status === 'available'
                         return (
                           <option key={runtime.id} value={runtime.id} disabled={!available}>
                             {runtime.name} ·{' '}
-                            {runtime.health?.status === 'available' ? '可用' : '不可用'}
+                            {runtime.health?.status === 'available'
+                              ? m.detail.available
+                              : m.detail.unavailable}
                           </option>
                         )
                       })}
@@ -399,7 +407,7 @@ export function DetailPanel(props: DetailPanelProps) {
                   {selectedCapability && (
                     <>
                       <Field
-                        label="能力名称"
+                        label={m.detail.capabilityName}
                         value={selectedCapability.name}
                         onChange={(name) => updateCapability({ name })}
                       />
@@ -410,43 +418,32 @@ export function DetailPanel(props: DetailPanelProps) {
                         onChange={(does) => updateCapability({ does })}
                       />
                       <div className="field field-auto-context">
-                        <span>数据上下文</span>
+                        <span>{m.detail.context}</span>
                         <div className="auto-context-note">
-                          <strong>自动接收上游结果</strong>
-                          <span>
-                            运行时会把 Flow 输入和所有直接上游节点的完整结果交给
-                            Agent，由任务描述决定如何使用。
-                          </span>
+                          <strong>{m.detail.autoUpstream}</strong>
+                          <span>{m.detail.autoUpstreamHint}</span>
                         </div>
                       </div>
                       <Field
-                        label="处理时要注意什么"
+                        label={m.detail.process}
                         value={selectedCapability.process ?? ''}
                         multiline
                         onChange={(process) => updateCapability({ process })}
                       />
                       <div className="field effects-field">
-                        <span>会产生什么影响</span>
-                        {/(修改|写入|修正|更新).*(文件|文档)/.test(selectedCapability.does) &&
+                        <span>{m.detail.effects}</span>
+                        {/(修改|写入|修正|更新|change|write|update).*(文件|文档|file|document)/i.test(
+                          selectedCapability.does,
+                        ) &&
                           !(selectedCapability.effects ?? []).some(
                             (effect) => effect.type === 'file-write',
-                          ) && (
-                            <small className="effect-warning">
-                              当前任务涉及修改文件，请勾选“会修改工作区内的文件”，否则测试时 Agent
-                              会拒绝执行。
-                            </small>
-                          )}
-                        {/(执行|运行|调用|启动).*(脚本|命令|程序|PowerShell|Python|bash|shell)/i.test(
+                          ) && <small className="effect-warning">{m.detail.fileWriteHint}</small>}
+                        {/(执行|运行|调用|启动|run|execute|launch).*(脚本|命令|程序|script|command|program|PowerShell|Python|bash|shell)/i.test(
                           `${selectedCapability.does} ${selectedCapability.process ?? ''}`,
                         ) &&
                           !(selectedCapability.effects ?? []).some(
                             (effect) => effect.type === 'command',
-                          ) && (
-                            <small className="effect-warning">
-                              当前任务涉及执行命令，请勾选“会执行工作区内的命令”，否则测试时 Agent
-                              会拒绝执行。
-                            </small>
-                          )}
+                          ) && <small className="effect-warning">{m.detail.commandHint}</small>}
                         <label className="checkbox-row">
                           <input
                             type="checkbox"
@@ -461,12 +458,12 @@ export function DetailPanel(props: DetailPanelProps) {
                                 effects.push({
                                   type: 'file-read',
                                   scope: 'workspace',
-                                  description: '读取工作区内的文件',
+                                  description: m.detail.readFilesDesc,
                                 })
                               updateCapability({ effects })
                             }}
                           />
-                          会读取工作区内的文件
+                          {m.detail.readFiles}
                         </label>
                         <label className="checkbox-row">
                           <input
@@ -482,12 +479,12 @@ export function DetailPanel(props: DetailPanelProps) {
                                 effects.push({
                                   type: 'file-write',
                                   scope: 'workspace',
-                                  description: '修改用户工作区内指定文件',
+                                  description: m.detail.writeFilesDesc,
                                 })
                               updateCapability({ effects })
                             }}
                           />
-                          会修改工作区内的文件
+                          {m.detail.writeFiles}
                         </label>
                         <label className="checkbox-row">
                           <input
@@ -503,12 +500,12 @@ export function DetailPanel(props: DetailPanelProps) {
                                 effects.push({
                                   type: 'command',
                                   scope: 'workspace',
-                                  description: '执行工作区内的命令或脚本',
+                                  description: m.detail.runCommandsDesc,
                                 })
                               updateCapability({ effects })
                             }}
                           />
-                          会执行工作区内的命令
+                          {m.detail.runCommands}
                         </label>
                         <FileReferencePicker
                           active={hasFileAccess}
@@ -530,7 +527,7 @@ export function DetailPanel(props: DetailPanelProps) {
             {selectedNode.kind === 'branch' && (
               <>
                 <Field
-                  label="根据哪个结果来判断"
+                  label={m.detail.branchOn}
                   value={
                     selectedNode.cond &&
                     typeof selectedNode.cond === 'object' &&
@@ -544,13 +541,13 @@ export function DetailPanel(props: DetailPanelProps) {
                 <div className="branch-conditions">
                   <div className="branch-conditions-heading">
                     <div>
-                      <strong>走哪条路</strong>
-                      <span>每条说明对应一条往右的路</span>
+                      <strong>{m.detail.routes}</strong>
+                      <span>{m.detail.routesHint}</span>
                     </div>
                     <button
                       className="icon-button"
                       type="button"
-                      title="增加一条路"
+                      title={m.detail.addRoute}
                       onClick={addBranchCase}
                     >
                       <Plus size={14} />
@@ -563,7 +560,7 @@ export function DetailPanel(props: DetailPanelProps) {
                       </div>
                       <div className="branch-condition-fields">
                         <Field
-                          label="这条路的名称"
+                          label={m.detail.routeName}
                           value={caseId}
                           onChange={(value) =>
                             updateBranchCase(
@@ -574,7 +571,7 @@ export function DetailPanel(props: DetailPanelProps) {
                           }
                         />
                         <Field
-                          label="什么情况下走这条路"
+                          label={m.detail.routeCondition}
                           value={selectedNode.caseConditions?.[caseId] ?? ''}
                           multiline
                           onChange={(value) => updateBranchCase(index, caseId, value)}
@@ -583,7 +580,7 @@ export function DetailPanel(props: DetailPanelProps) {
                       <button
                         className="icon-button danger"
                         type="button"
-                        title="删除这条路"
+                        title={m.detail.deleteRoute}
                         onClick={() => removeBranchCase(index)}
                         disabled={selectedNode.cases.length <= 1}
                       >
@@ -596,39 +593,44 @@ export function DetailPanel(props: DetailPanelProps) {
             )}
             {selectedNode.kind === 'join' && (
               <label className="field">
-                <span>什么时候继续</span>
+                <span>{m.detail.joinWhen}</span>
                 <select
                   value={selectedNode.mode}
                   onChange={(event) =>
                     updateNode({ ...selectedNode, mode: event.target.value as 'all' | 'any' })
                   }
                 >
-                  <option value="all">等所有上一步都完成</option>
-                  <option value="any">任一步完成后继续</option>
+                  <option value="all">{m.detail.joinAll}</option>
+                  <option value="any">{m.detail.joinAny}</option>
                 </select>
               </label>
             )}
             {selectedNode.kind === 'output' && (
               <Field
-                label="结果名称"
+                label={m.detail.outputName}
                 value={selectedNode.outputId}
                 onChange={(outputId) => updateNode({ ...selectedNode, outputId })}
               />
             )}
             <details className="tech-disclosure">
-              <summary>技术编号</summary>
-              <Field label="步骤编号" value={selectedNode.id} readOnly onChange={() => undefined} />
+              <summary>{m.detail.technical}</summary>
+              <Field
+                label={m.detail.stepId}
+                value={selectedNode.id}
+                readOnly
+                onChange={() => undefined}
+              />
               {selectedNode.kind === 'cf-call' && (
                 <>
                   <Field
-                    label="能力编号"
+                    label={m.detail.capabilityId}
                     value={selectedNode.cfRef.cfId}
                     onChange={(cfId) =>
                       updateNode({ ...selectedNode, cfRef: { ...selectedNode.cfRef, cfId } })
                     }
                   />
                   <Field
-                    label="版本"
+                    label={m.detail.version}
                     value={selectedNode.cfRef.version}
                     onChange={(version) =>
                       updateNode({ ...selectedNode, cfRef: { ...selectedNode.cfRef, version } })
@@ -638,20 +640,20 @@ export function DetailPanel(props: DetailPanelProps) {
               )}
             </details>
             <button className="button danger full" type="button" onClick={deleteNode}>
-              <Trash2 size={15} /> 删除这个步骤
+              <Trash2 size={15} /> {m.detail.deleteStep}
             </button>
           </section>
         ) : (
           <>
             <section className="inspector-section">
-              <h3>基本信息</h3>
+              <h3>{m.detail.basics}</h3>
               <Field
-                label="流程名称"
+                label={m.detail.flowName}
                 value={draft.name}
                 onChange={(name) => onDraftChange({ ...draft, name, revision: draft.revision + 1 })}
               />
               <Field
-                label="目标"
+                label={m.detail.objective}
                 value={draft.objective}
                 multiline
                 onChange={(objective) =>
@@ -660,42 +662,42 @@ export function DetailPanel(props: DetailPanelProps) {
               />
               <div className="property-list">
                 <div>
-                  <span>测试次数</span>
-                  <strong>{testCount} 次</strong>
+                  <span>{m.detail.testTimes}</span>
+                  <strong>{format(m.detail.testCount, { count: testCount })}</strong>
                 </div>
                 <div>
-                  <span>步骤</span>
+                  <span>{m.detail.stepCountLabel}</span>
                   <strong>{draft.nodes.length}</strong>
                 </div>
                 <div>
-                  <span>连线</span>
+                  <span>{m.detail.edges}</span>
                   <strong>{draft.edges.length}</strong>
                 </div>
                 <div>
-                  <span>数据交接</span>
-                  <strong>自动</strong>
+                  <span>{m.detail.handoff}</span>
+                  <strong>{m.detail.auto}</strong>
                 </div>
               </div>
             </section>
             <section className="inspector-section">
               <div className="section-title-row">
                 <div>
-                  <h3>能不能测试</h3>
+                  <h3>{m.detail.canTest}</h3>
                 </div>
               </div>
               <div className={`compile-status ${preview ? 'ready' : ''}`}>
                 <span className="status-lamp" />
                 <div>
-                  <strong>{preview ? '已经检查过，可以测试' : '还没检查'}</strong>
+                  <strong>{preview ? m.detail.checked : m.detail.notChecked}</strong>
                   <p>
                     {preview
-                      ? `${preview.plan.nodes.length} 个步骤已核对`
-                      : '检查只确认流程是否完整，不会真的运行或发布。'}
+                      ? format(m.detail.checkedSteps, { count: preview.plan.nodes.length })
+                      : m.detail.checkHint}
                   </p>
                 </div>
               </div>
               <button className="button full" type="button" onClick={onOpenCheck}>
-                <ListChecks size={15} /> 去检查
+                <ListChecks size={15} /> {m.detail.openCheck}
               </button>
             </section>
           </>

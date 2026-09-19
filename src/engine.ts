@@ -15,6 +15,7 @@ import { sha256 } from './hash.js'
 import { DEMO_RUNTIME_ID, executeDemoCapability } from './demo-runtime.js'
 import { extractFiles } from './file-extraction.js'
 import { builtinCapabilities } from './builtin-catalog.js'
+import { normalizeLocale } from './locale.js'
 
 export interface Executor {
   id: string
@@ -484,6 +485,7 @@ export class Engine {
             plan.workspaceRoot,
             signal,
             (type, data) => this.store.append(runId, type, node.index, data),
+            normalizeLocale(this.store.settings()?.locale),
           )
           assertContract(
             node.outputContract ?? version.draft.outputContract,

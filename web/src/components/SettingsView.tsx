@@ -17,6 +17,8 @@ import {
   runtimeHealthLabel,
   runtimeLaunchDetail,
 } from '../copy'
+import { format, type Locale } from '../i18n'
+import { useLocale } from '../locale-context'
 import type { ProjectAgentConfig, RuntimeWithHealth, WorkspaceSettings } from '../types'
 import { ProjectAgentDialog } from './ProjectAgentDialog'
 
@@ -37,9 +39,11 @@ type SettingsViewProps = {
   onSaveProjectAgent: (config: ProjectAgentConfig, editing: boolean) => Promise<void>
   onDeleteProjectAgent: (id: string) => Promise<void>
   onClose: () => void
+  onLocaleChange?: (locale: Locale) => void
 }
 
 export function SettingsView(props: SettingsViewProps) {
+  const { m, locale } = useLocale()
   const [draft, setDraft] = useState(props.settings)
   const [projectAgentDialog, setProjectAgentDialog] = useState<ProjectAgentConfig | 'new' | null>(
     null,
@@ -60,29 +64,39 @@ export function SettingsView(props: SettingsViewProps) {
           <Settings2 size={19} />
         </div>
         <div>
-          <h2 id="settings-title">工作台设置</h2>
-          <p>查看当前工作区，并设置默认助手和测试最长等待时间。</p>
+          <h2 id="settings-title">{m.settings.title}</h2>
+          <p>{m.settings.subtitle}</p>
         </div>
         <button className="button" type="button" onClick={props.onClose}>
           <ChevronLeft size={15} />
-          返回工作台
+          {m.settings.back}
         </button>
       </header>
       <div className="settings-scroll">
         <section className="settings-section-main">
           <div className="settings-section-title">
-            <h3>当前工作区</h3>
-            <p>CFlow 只加载这个启动目录中的流程、设置、运行记录和附件。</p>
+            <h3>{m.settings.workspace}</h3>
+            <p>{m.settings.workspaceHint}</p>
           </div>
           <label className="field workspace-field">
-            <span>启动目录</span>
+            <span>{m.settings.root}</span>
             <input className="workspace-path" value={props.workspaceRoot} readOnly />
+          </label>
+          <label className="field">
+            <span>{m.language.field}</span>
+            <select
+              value={locale}
+              onChange={(event) => props.onLocaleChange?.(event.target.value as Locale)}
+            >
+              <option value="zh-CN">{m.language.chinese}</option>
+              <option value="en">{m.language.english}</option>
+            </select>
           </label>
         </section>
         <section className="settings-section-main">
           <div className="settings-section-title">
-            <h3>默认助手</h3>
-            <p>生成和测试流程时都会用这里选的助手。如果它不可用，系统不会自动换成别的。</p>
+            <h3>{m.settings.defaultAssistant}</h3>
+            <p>{m.settings.defaultAssistantHint}</p>
           </div>
           <form
             onSubmit={(event) => {
@@ -92,7 +106,7 @@ export function SettingsView(props: SettingsViewProps) {
           >
             <div className="settings-grid">
               <label className="field">
-                <span>默认助手</span>
+                <span>{m.settings.defaultAssistant}</span>
                 <select
                   value={draft.defaultRuntimeId}
                   onChange={(event) => setDraft({ ...draft, defaultRuntimeId: event.target.value })}
@@ -103,13 +117,13 @@ export function SettingsView(props: SettingsViewProps) {
                       value={runtime.id}
                       disabled={runtime.health?.status !== 'available'}
                     >
-                      {runtime.name} · {runtimeHealthLabel(runtime)}
+                      {runtime.name} · {runtimeHealthLabel(runtime, locale)}
                     </option>
                   ))}
                 </select>
               </label>
               <label className="field">
-                <span>测试最多等待（秒）</span>
+                <span>{m.settings.timeout}</span>
                 <input
                   type="number"
                   min={1}
@@ -132,7 +146,7 @@ export function SettingsView(props: SettingsViewProps) {
                 ) : (
                   <CheckCircle2 size={15} />
                 )}
-                {props.isSaving ? '正在保存' : '保存设置'}
+                {props.isSaving ? m.settings.saving : m.settings.save}
               </button>
             </div>
           </form>
@@ -140,16 +154,13 @@ export function SettingsView(props: SettingsViewProps) {
         <section className="settings-section-main">
           <div className="settings-section-heading">
             <div className="settings-section-title">
-              <h3>本机助手</h3>
-              <p>
-                Codex 和 Claude Code 已预先配置，但只会调用当前用户环境中安装的
-                CLI；其他助手也使用同一套连接配置。新装或修改后请重新识别。
-              </p>
+              <h3>{m.settings.localAssistants}</h3>
+              <p>{m.settings.localAssistantsHint}</p>
             </div>
             <div className="settings-section-actions">
               <button className="button" type="button" onClick={() => setProjectAgentDialog('new')}>
                 <Plus size={14} />
-                接入项目助手
+                {m.settings.addProject}
               </button>
               <button
                 className="button"
@@ -158,7 +169,7 @@ export function SettingsView(props: SettingsViewProps) {
                 disabled={props.isDiscovering}
               >
                 <RefreshCw className={props.isDiscovering ? 'spin' : undefined} size={14} />
-                {props.isDiscovering ? '正在识别' : '重新识别'}
+                {props.isDiscovering ? m.settings.discovering : m.settings.rediscover}
               </button>
             </div>
           </div>
@@ -166,8 +177,10 @@ export function SettingsView(props: SettingsViewProps) {
             <div className="runtime-discovery-warning" role="status">
               <AlertTriangle size={14} />
               <span>
-                有 {props.discoveryWarnings.length} 个助手配置无法读取，已跳过：
-                {props.discoveryWarnings[0]}
+                {format(m.settings.discoveryWarning, {
+                  count: props.discoveryWarnings.length,
+                  first: props.discoveryWarnings[0],
+                })}
               </span>
             </div>
           )}
@@ -180,45 +193,45 @@ export function SettingsView(props: SettingsViewProps) {
                   <span className={`status-lamp is-${runtime.health?.status ?? 'checking'}`} />
                   <div className="runtime-info">
                     <strong>{runtime.name}</strong>
-                    <p>{runtimeBlurb(runtime)}</p>
+                    <p>{runtimeBlurb(runtime, locale)}</p>
                     <small
-                      title={`${runtimeDiscoveryLabel(runtime.discovery?.source)} · 配置版本 ${runtime.profileVersion}`}
+                      title={`${runtimeDiscoveryLabel(runtime.discovery?.source, locale)} · ${format(m.settings.profileVersion, { version: runtime.profileVersion })}`}
                     >
                       {projectAgent?.preset
                         ? projectAgent.overridden
-                          ? '当前项目已修改默认配置 · '
-                          : '使用默认连接配置 · '
+                          ? m.settings.overridden
+                          : m.settings.preset
                         : projectAgent
-                          ? '当前项目配置 · '
+                          ? m.settings.projectConfig
                           : ''}
                       {runtime.health?.authentication === 'required'
-                        ? '需要重新登录或检查认证配置'
+                        ? m.settings.authRequired
                         : runtime.health?.authentication === 'unknown'
-                          ? '登录状态会在真正使用时确认'
-                          : '已确认可用'}
+                          ? m.settings.authUnknown
+                          : m.settings.authOk}
                     </small>
                     {runtime.health?.status === 'unavailable' && (
                       <>
                         <p className="runtime-error-summary" role="alert">
-                          {runtimeHealthErrorSummary(runtime.health.error)}
+                          {runtimeHealthErrorSummary(runtime.health.error, locale)}
                         </p>
                         <details className="runtime-technical-details">
-                          <summary>技术详情</summary>
+                          <summary>{m.settings.technical}</summary>
                           <dl>
                             <div>
-                              <dt>启动方式</dt>
-                              <dd>{runtimeLaunchDetail(runtime)}</dd>
+                              <dt>{m.settings.launch}</dt>
+                              <dd>{runtimeLaunchDetail(runtime, locale)}</dd>
                             </div>
                             <div>
-                              <dt>原始错误</dt>
-                              <dd>{runtime.health.error ?? '未返回错误信息'}</dd>
+                              <dt>{m.settings.rawError}</dt>
+                              <dd>{runtime.health.error ?? m.settings.noError}</dd>
                             </div>
                           </dl>
                         </details>
                       </>
                     )}
                   </div>
-                  <span className="runtime-health">{runtimeHealthLabel(runtime)}</span>
+                  <span className="runtime-health">{runtimeHealthLabel(runtime, locale)}</span>
                   <div className="runtime-actions">
                     {projectAgent && (
                       <>
@@ -226,8 +239,10 @@ export function SettingsView(props: SettingsViewProps) {
                           className="icon-button"
                           type="button"
                           onClick={() => setProjectAgentDialog(projectAgent)}
-                          aria-label={`编辑 ${runtime.name}`}
-                          title={projectAgent.preset ? '编辑默认连接配置' : '编辑项目助手'}
+                          aria-label={format(m.settings.edit, { name: runtime.name })}
+                          title={
+                            projectAgent.preset ? m.settings.editPreset : m.settings.editProject
+                          }
                         >
                           <Pencil size={14} />
                         </button>
@@ -236,8 +251,18 @@ export function SettingsView(props: SettingsViewProps) {
                             className={`icon-button${projectAgent.preset ? '' : ' danger'}`}
                             type="button"
                             onClick={async () => {
-                              const action = projectAgent.preset ? '恢复默认配置' : '删除项目助手'
-                              if (!window.confirm(`确定${action}「${runtime.name}」吗？`)) return
+                              const action = projectAgent.preset
+                                ? m.settings.restorePreset
+                                : m.settings.deleteProject
+                              if (
+                                !window.confirm(
+                                  format(m.settings.confirmAction, {
+                                    action,
+                                    name: runtime.name,
+                                  }),
+                                )
+                              )
+                                return
                               await props.onDeleteProjectAgent(runtime.id).catch(() => undefined)
                             }}
                             disabled={
@@ -246,15 +271,15 @@ export function SettingsView(props: SettingsViewProps) {
                             }
                             aria-label={
                               projectAgent.preset
-                                ? `恢复 ${runtime.name} 的默认配置`
-                                : `删除 ${runtime.name}`
+                                ? format(m.settings.restoreAria, { name: runtime.name })
+                                : format(m.settings.deleteAria, { name: runtime.name })
                             }
                             title={
                               !projectAgent.preset && isDefault
-                                ? '请先切换默认助手'
+                                ? m.settings.switchDefaultFirst
                                 : projectAgent.preset
-                                  ? '恢复默认配置'
-                                  : '删除项目助手'
+                                  ? m.settings.restorePreset
+                                  : m.settings.deleteProject
                             }
                           >
                             {props.deletingProjectAgentId === runtime.id ? (
@@ -277,7 +302,7 @@ export function SettingsView(props: SettingsViewProps) {
                       {props.testingRuntimeId === runtime.id && (
                         <RefreshCw className="spin" size={14} />
                       )}
-                      测试连接
+                      {m.settings.testConnection}
                     </button>
                   </div>
                 </article>

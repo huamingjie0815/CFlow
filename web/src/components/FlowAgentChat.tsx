@@ -13,6 +13,8 @@ import {
 import { useMutation } from '@tanstack/react-query'
 import { api, readableError } from '../api'
 import { runStatusLabel } from '../copy'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 import { AgentTracePopover } from './AgentTracePopover'
 import {
   applyCurrentRuntime,
@@ -74,17 +76,11 @@ type FlowAgentChatProps = {
 
 const TEXT_ACCEPT = '.md,.mdx,.txt,.json,.yaml,.yml,.ts,.tsx,.js,.jsx,.py,.sh'
 
-const starterPrompts = [
-  { label: '优化当前流程', value: '请直接优化当前流程，保留合理步骤并修正最明显的问题。' },
-  { label: '解释最近错误', value: '请定位最近一次运行失败的原因，只解释，不修改流程。' },
-  { label: '检查数据交接', value: '请检查步骤之间的输入输出交接，只指出可能的问题。' },
-]
-
 function idOf(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
 }
 
-function failureContext(runDetail: RunDetail | null, draft: FlowDraft) {
+function failureContext(runDetail: RunDetail | null, draft: FlowDraft, fallback: string) {
   if (!runDetail) return null
   const event = [...runDetail.events]
     .reverse()
@@ -94,11 +90,17 @@ function failureContext(runDetail: RunDetail | null, draft: FlowDraft) {
   const error =
     event.data && typeof event.data === 'object' && 'error' in event.data
       ? String(event.data.error)
-      : '运行没有完成。'
+      : fallback
   return { node, error }
 }
 
 export function FlowAgentChat(props: FlowAgentChatProps) {
+  const { m, locale } = useLocale()
+  const starterPrompts = [
+    { label: m.agent.promptOptimize, value: m.agent.promptOptimizeValue },
+    { label: m.agent.promptExplain, value: m.agent.promptExplainValue },
+    { label: m.agent.promptHandoff, value: m.agent.promptHandoffValue },
+  ]
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [input, setInput] = useState('')
   const [failedRequest, setFailedRequest] = useState<FailedRequest | null>(null)
@@ -126,8 +128,8 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
   }
 
   const failure = useMemo(
-    () => failureContext(props.runDetail, props.draft),
-    [props.draft, props.runDetail],
+    () => failureContext(props.runDetail, props.draft, m.agent.runIncomplete),
+    [m.agent.runIncomplete, props.draft, props.runDetail],
   )
   const selectedRuntime = props.runtimes.find((runtime) => runtime.id === props.runtimeId)
   const mutation = useMutation({
@@ -157,13 +159,17 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           id: messageId,
           role: 'assistant',
           body: conflict
-            ? `${response.message} 请求期间画布已被手工修改，因此没有覆盖当前草稿。`
+            ? format(m.agent.canvasChanged, { message: response.message })
             : response.message,
           meta: response.fallback
-            ? '本地流程分析'
+            ? m.agent.localAnalysis
             : response.runtimeId
-              ? `${props.runtimes.find((item) => item.id === response.runtimeId)?.name ?? response.runtimeId} · 当前草稿`
-              : '当前草稿',
+              ? format(m.agent.runtimeDraft, {
+                  name:
+                    props.runtimes.find((item) => item.id === response.runtimeId)?.name ??
+                    response.runtimeId,
+                })
+              : m.agent.currentDraft,
           invocationId: response.invocationId,
         },
       ])
@@ -177,9 +183,14 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
         {
           id: errorMessageId,
           role: 'assistant',
-          body: `暂时无法处理：${readableError(error)}`,
+          body: format(m.agent.cannotHandle, { detail: readableError(error, locale) }),
           invocationId: variables.snapshot.invocationId,
-          meta: `${props.runtimes.find((item) => item.id === variables.snapshot.runtimeId)?.name ?? variables.snapshot.runtimeId ?? '本地流程分析'} · 当前草稿未修改`,
+          meta: format(m.agent.unchangedMeta, {
+            name:
+              props.runtimes.find((item) => item.id === variables.snapshot.runtimeId)?.name ??
+              variables.snapshot.runtimeId ??
+              m.agent.localAnalysis,
+          }),
         },
       ])
     },
@@ -233,15 +244,19 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             <Bot size={15} />
           </span>
           <div>
-            <strong>流程助手</strong>
-            <span>{selectedRuntime?.name ?? '本地流程分析'} · 会直接更新当前草稿</span>
+            <strong>{m.agent.title}</strong>
+            <span>
+              {format(m.agent.subtitle, { name: selectedRuntime?.name ?? m.agent.localAnalysis })}
+            </span>
           </div>
-          <span className="agent-live-mark" title="发送时读取当前工作台快照" />
+          <span className="agent-live-mark" title={m.agent.liveMark} />
         </div>
         <div className="agent-context-facts">
-          <span>测试 {props.testCount} 次</span>
-          <span>{props.draft.nodes.length} 步骤</span>
-          <span>{props.runDetail ? runStatusLabel(props.runDetail.run.status) : '暂无运行'}</span>
+          <span>{format(m.agent.tests, { count: props.testCount })}</span>
+          <span>{format(m.agent.steps, { count: props.draft.nodes.length })}</span>
+          <span>
+            {props.runDetail ? runStatusLabel(props.runDetail.run.status, locale) : m.agent.noRun}
+          </span>
         </div>
       </div>
 
@@ -249,7 +264,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
         <div className="agent-fault-context">
           <CircleAlert size={15} />
           <div>
-            <strong>{failure.node ? '最近一次运行失败' : '流程运行失败'}</strong>
+            <strong>{failure.node ? m.agent.lastRunFailed : m.agent.flowRunFailed}</strong>
             <p>{failure.node ? `${failure.node.id} · ${failure.error}` : failure.error}</p>
           </div>
         </div>
@@ -261,8 +276,8 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             <span className="agent-empty-mark">
               <Wrench size={16} />
             </span>
-            <strong>从当前草稿开始</strong>
-            <p>可以询问当前步骤和运行结果，也可以直接描述要怎么调整。</p>
+            <strong>{m.agent.startTitle}</strong>
+            <p>{m.agent.startBody}</p>
             <div className="agent-starters">
               {starterPrompts.map((prompt) => (
                 <button key={prompt.label} type="button" onClick={() => setInput(prompt.value)}>
@@ -276,14 +291,14 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           <article className={`agent-message is-${message.role}`} key={message.id}>
             <span className="agent-message-avatar">
               {message.role === 'user' ? (
-                '你'
+                m.agent.you
               ) : (
                 <img src="/cflow-mark.svg" alt="" aria-hidden="true" />
               )}
             </span>
             <div className="agent-message-body">
               <span className="agent-message-heading">
-                <strong>{message.role === 'user' ? '你' : '流程助手'}</strong>
+                <strong>{message.role === 'user' ? m.agent.you : m.agent.title}</strong>
                 {message.invocationId && <AgentTracePopover invocationId={message.invocationId} />}
               </span>
               <p>{message.body}</p>
@@ -292,7 +307,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
                 <button type="button" className="agent-action" onClick={props.onUndoRevision}>
                   <Undo2 size={13} />
                   <span>
-                    <strong>撤销上次助手修改</strong>
+                    <strong>{m.agent.undo}</strong>
                   </span>
                 </button>
               )}
@@ -302,10 +317,10 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
                   className="retry-button"
                   onClick={retryFailedRequest}
                   disabled={mutation.isPending || props.disabled}
-                  title="使用当前选择的 Agent 和失败时的工作台快照重试"
+                  title={m.agent.retryTitle}
                 >
                   <RotateCcw size={13} />
-                  重试
+                  {m.agent.retry}
                 </button>
               )}
             </div>
@@ -318,13 +333,13 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             </span>
             <div className="agent-message-body">
               <span className="agent-message-heading">
-                <strong>流程助手</strong>
+                <strong>{m.agent.title}</strong>
                 <AgentTracePopover
                   invocationId={(mutation.variables as any)?.snapshot?.invocationId}
                 />
               </span>
               <p className="thinking">
-                <LoaderCircle className="spin" size={13} /> 正在读取当前草稿并处理…
+                <LoaderCircle className="spin" size={13} /> {m.agent.thinking}
               </p>
             </div>
           </article>
@@ -338,9 +353,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
           sendMessage(input)
         }}
       >
-        {props.disabled && (
-          <p className="agent-disabled-note">工作目录不可用。恢复原路径后才能继续使用流程助手。</p>
-        )}
+        {props.disabled && <p className="agent-disabled-note">{m.agent.disabled}</p>}
         <textarea
           value={input}
           onChange={(event) => setInput(event.target.value)}
@@ -350,12 +363,12 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
               event.currentTarget.form?.requestSubmit()
             }
           }}
-          placeholder="询问当前流程，或直接描述要怎么改…"
-          aria-label="询问流程助手"
+          placeholder={m.agent.placeholder}
+          aria-label={m.agent.inputAria}
           disabled={props.disabled || mutation.isPending}
         />
         {!!props.attachments.length && (
-          <div className="agent-attachments" aria-label="已选择的 Skill">
+          <div className="agent-attachments" aria-label={m.agent.attachmentsAria}>
             <ul className="attachment-list">
               {props.attachments.slice(0, 3).map((file) => (
                 <li key={attachmentName(file)} className="skill-attachment">
@@ -363,7 +376,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
                   <span title={attachmentName(file)}>{attachmentName(file)}</span>
                   <button
                     type="button"
-                    aria-label={`移除 ${attachmentName(file)}`}
+                    aria-label={format(m.goal.remove, { name: attachmentName(file) })}
                     onClick={() =>
                       props.onAttachmentsChange(
                         props.attachments.filter(
@@ -380,21 +393,21 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             </ul>
             {props.attachments.length > 3 && (
               <p className="attachment-overflow">
-                另有 {props.attachments.length - 3} 个文件已选择
+                {format(m.agent.moreFiles, { count: props.attachments.length - 3 })}
               </p>
             )}
             <button
               className="button signal full"
               type="button"
               disabled={mutation.isPending || props.disabled}
-              onClick={() => sendMessage(input || '请依据这些 skill 附件调整当前流程。')}
+              onClick={() => sendMessage(input || m.agent.defaultAdjust)}
             >
               {mutation.isPending ? (
                 <LoaderCircle className="spin" size={14} />
               ) : (
                 <Wrench size={14} />
               )}
-              调整当前流程
+              {m.agent.adjust}
             </button>
           </div>
         )}
@@ -412,9 +425,9 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={mutation.isPending || props.disabled}
-            title="选择 Skill 文件以调整当前流程"
+            title={m.agent.pickSkillTitle}
           >
-            <Wrench size={13} /> 选择 Skill
+            <Wrench size={13} /> {m.agent.pickSkill}
           </button>
           <label
             className={`runtime-select is-${selectedRuntime ? runtimeStatus(selectedRuntime) : 'checking'}`}
@@ -423,7 +436,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             <select
               value={props.runtimeId}
               onChange={(event) => props.onRuntimeChange(event.target.value)}
-              aria-label="流程助手使用哪个 Runtime"
+              aria-label={m.agent.runtimeAria}
               disabled={mutation.isPending || props.disabled}
             >
               {props.runtimes.map((runtime) => (
@@ -442,7 +455,7 @@ export function FlowAgentChat(props: FlowAgentChatProps) {
             className="send-button"
             type="submit"
             disabled={!input.trim() || mutation.isPending || props.disabled}
-            aria-label="发送消息"
+            aria-label={m.agent.sendAria}
           >
             <Send size={15} />
           </button>

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
+import { useLocale } from '../locale-context'
 
 export type NoticeValue = {
   tone: 'info' | 'success' | 'error'
@@ -13,6 +14,7 @@ type NoticeProps = {
 }
 
 export function Notice({ notice, onClose }: NoticeProps) {
+  const { m } = useLocale()
   const noticeRef = useRef<HTMLDivElement>(null)
   const timeoutRef = useRef<number | null>(null)
   const remainingRef = useRef(0)
@@ -77,7 +79,7 @@ export function Notice({ notice, onClose }: NoticeProps) {
             <strong>{notice.title}</strong>
             <p>{notice.detail}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="关闭提示">
+          <button type="button" onClick={onClose} aria-label={m.notice.close}>
             <X size={14} />
           </button>
         </div>

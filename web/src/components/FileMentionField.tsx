@@ -1,5 +1,7 @@
 import { FileText } from 'lucide-react'
 import { useId, useRef, useState } from 'react'
+import { format } from '../i18n'
+import { useLocale } from '../locale-context'
 
 type FileMentionFieldProps = {
   value: string
@@ -9,6 +11,7 @@ type FileMentionFieldProps = {
 }
 
 export function FileMentionField(props: FileMentionFieldProps) {
+  const { m } = useLocale()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const suggestionsId = useId()
   const [mention, setMention] = useState<{ start: number; end: number; query: string } | null>(null)
@@ -52,10 +55,10 @@ export function FileMentionField(props: FileMentionFieldProps) {
 
   return (
     <div className="field file-mention-field">
-      <span>要做什么</span>
+      <span>{m.files.does}</span>
       <textarea
         ref={textareaRef}
-        aria-label="要做什么"
+        aria-label={m.files.does}
         aria-autocomplete="list"
         aria-controls={mention && suggestions.length > 0 ? suggestionsId : undefined}
         aria-expanded={mention !== null && suggestions.length > 0}
@@ -94,7 +97,7 @@ export function FileMentionField(props: FileMentionFieldProps) {
           id={suggestionsId}
           className="file-mention-suggestions"
           role="listbox"
-          aria-label="引用文件建议"
+          aria-label={m.files.mentionAria}
         >
           {suggestions.map((path, index) => (
             <button
@@ -114,7 +117,7 @@ export function FileMentionField(props: FileMentionFieldProps) {
       )}
       {staleMentions.length > 0 && (
         <small className="effect-warning" role="status">
-          {staleMentions.length} 个 @ 文件未在当前引用列表中，将在工作区继续搜索。
+          {format(m.files.staleMentions, { count: staleMentions.length })}
         </small>
       )}
     </div>
