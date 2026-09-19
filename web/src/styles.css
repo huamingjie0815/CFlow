@@ -317,6 +317,13 @@ pre {
   background: var(--white);
   border-color: var(--border-strong);
 }
+a.icon-button {
+  color: var(--muted);
+  text-decoration: none;
+}
+a.icon-button:hover {
+  color: var(--text);
+}
 .icon-button.on-dark {
   color: var(--muted);
   background: transparent;

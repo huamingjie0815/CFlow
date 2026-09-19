@@ -33,6 +33,7 @@ const zh = define({
     collapseDetail: '收起详情',
     expandAgent: '展开助手',
     collapseAgent: '收起助手',
+    github: 'GitHub 仓库',
   },
   flowSwitcher: {
     search: '搜索流程',
@@ -792,6 +793,7 @@ const en: Messages = {
     collapseDetail: 'Collapse details',
     expandAgent: 'Expand assistant',
     collapseAgent: 'Collapse assistant',
+    github: 'GitHub repository',
   },
   flowSwitcher: {
     search: 'Search Flows',
